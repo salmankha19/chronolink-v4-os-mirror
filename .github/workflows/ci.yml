@@ -1,0 +1,16 @@
+﻿name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with: python-version: '3.10'
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Build single_mcu
+        run: pio run -e single_mcu
+      - name: Build split_mcu_main
+        run: pio run -e split_mcu_main

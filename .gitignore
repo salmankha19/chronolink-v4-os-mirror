@@ -1,0 +1,10 @@
+﻿.pio/
+.pioenvs/
+.pio/build/
+.pio/.cache/
+*.bin
+*.elf
+*.map
+*.hex
+.vscode/
+core_os.bak
