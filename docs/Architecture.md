@@ -1,65 +1,49 @@
-**Optional I2C Sensors HAL**
+```mermaid
+flowchart TB
 
-(Co2, Air Quality etc)
+subgraph APP["Application Layer"]
+    UI_MANAGER["UI Manager (Display Modes, Themes, Animations)"]
+    MENU_CONTROLLER["Menu Controller"]
+    NOTIFY_MANAGER["Notification Manager"]
+end
 
-**Light Sensor HAL**
+subgraph SERVICE["Service / Engine Layer"]
+    STATE_MANAGER["State Manager (Global State + Events)"]
+    EVENT_BUS["Event Bus (FreeRTOS Queue)"]
+    SENSOR_ENGINE["Sensor Engine (Core + Optional I2C Sensors)"]
+    PRAYER_ENGINE["Prayer Engine (Perpetual Table + Astronomical Calc)"]
+    TIME_ENGINE["Time Engine (NTP Sync, RTC Sync, Drift Correction)"]
+end
 
-(Any I2C: VEML7700, BH1750, etc)
+subgraph HAL["HAL / Drivers Layer"]
+    AUDIO_HAL["Audio HAL (I2S → MAX98357A, ESP32‑S3 MP3 Decoding)"]
+    DISPLAY_HAL["Display HAL (MAX7219 / HUB75 / ST7789 / ILI9341)"]
+    TEMP_HAL["Temperature HAL (Any I2C: SHT40, BME280, etc.)"]
+    LIGHT_HAL["Light Sensor HAL (Any I2C: VEML7700, BH1750, etc.)"]
+    OPTIONAL_I2C["Optional I2C Sensors (CO₂, Air Quality, Outside Temp, etc.)"]
+    STORAGE_HAL["Storage HAL (SPIFFS / NVS)"]
+    WIFI_HAL["WiFi HAL (Station + AP)"]
+    RTC_HAL["RTC HAL (DS3231M)"]
+end
 
-**HAL / Driver Layer**
+UI_MANAGER --> STATE_MANAGER
+MENU_CONTROLLER --> STATE_MANAGER
+NOTIFY_MANAGER --> STATE_MANAGER
 
-**State Manger**
+STATE_MANAGER --> EVENT_BUS
+EVENT_BUS --> TIME_ENGINE
+EVENT_BUS --> PRAYER_ENGINE
+EVENT_BUS --> SENSOR_ENGINE
 
-(Global State + Events)
+TIME_ENGINE --> RTC_HAL
+TIME_ENGINE --> WIFI_HAL
 
-**WiFi HAL**
+PRAYER_ENGINE --> STORAGE_HAL
 
-(Station + AP)
+SENSOR_ENGINE --> TEMP_HAL
+SENSOR_ENGINE --> LIGHT_HAL
+SENSOR_ENGINE --> OPTIONAL_I2C
 
-**RTC HAL**
-
-(DS3231M)
-
-**Temperature HAL**
-
-(Any I2C, SHT40, BME280 etc.)
-
-**Display HAL**
-
-(Max7219/ HUB75/ ST7789, ILI9341)
-
-**Audio HAL**
-
-(I2C -> Max98357A, ESP32S3 MP3 Decoding)
-
-**Storage HAL**
-
-(SPIFFS/NVS)
-
-**Time Engine**
-
-(NTP Sync, RTC Sync, Drift Correction)
-
-**Sensor Engine**
-
-(Light, Temp, Health)
-
-**Prayer Engine**
-
-(Perpetual Table + Astronomical Clac)
-
-**Event Bus**
-
-(FreeRTOS Queue)
-
-**Service / Engine Layer**
-
-**Notification Manager**
-
-**Menu Controller**
-
-**UI Manager**
-
-(Display Modes, Themes Animations)
-
-**Application Layer**
+UI_MANAGER --> DISPLAY_HAL
+UI_MANAGER --> AUDIO_HAL
+```
