@@ -6,8 +6,9 @@
 #include "freertos/timers.h"
 #include "event_bus.h"
 #include "state_manager.h"
+#include "boot_events.h" 
+#include <string.h>
 
-/* Later you’ll include state_manager.h, event_bus.h, etc. */
 static const char *TAG = "core_os";
 
 /* Global handles for OS primitives */
@@ -18,11 +19,33 @@ static TimerHandle_t g_heartbeat_timer = NULL;
 /* Cached boot flags */
 static boot_flags_t g_boot_flags = {0};
 
+/* Simple uptime helper (ms) */
+static uint32_t get_uptime_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
 static void heartbeat_timer_cb(TimerHandle_t xTimer)
 {
-    /* Later: post a heartbeat event to State Manager or Event Bus */
     (void)xTimer;
     ESP_LOGD(TAG, "Heartbeat timer tick");
+
+    event_t evt;
+    boot_event_payload_u p;
+     memset(&evt, 0, sizeof(evt));
+    memset(&p, 0, sizeof(p));
+
+    p.health.uptime_ms = get_uptime_ms();
+     p.health.current_stage = (uint8_t)BOOT_STAGE_NONE;
+     p.health.error_count = 0;
+
+     event_init_payload(&evt, EVENT_BOOT_HEALTH, &p, sizeof(p));
+    event_bus_publish(&evt);
+
+    if (g_state_queue) {
+        os_state_msg_t msg = { .id = 0, .value = 0 };
+        (void)xQueueSend(g_state_queue, &msg, 0);
+    }
 }
 
 void core_os_init(const boot_flags_t *boot_flags)
@@ -42,9 +65,7 @@ void core_os_init(const boot_flags_t *boot_flags)
     }
 
     /* 2. Create queues */
-    /* Event queue: use event_t size (defined in event_bus.h) */
     g_event_queue = xQueueCreate(32, sizeof(event_t));
-    /* State queue: use the state manager message type */
     g_state_queue = xQueueCreate(8, sizeof(os_state_msg_t));
 
     if (!g_event_queue || !g_state_queue) {
@@ -108,21 +129,18 @@ void core_os_start(void)
 {
     ESP_LOGI(TAG, "Core OS start");
 
-    /* In safe mode, you might skip creating normal tasks and only start a minimal shell/UI */
     if (g_boot_flags.safe_mode) {
         ESP_LOGW(TAG, "Safe mode: skipping normal service tasks (placeholder)");
-        /* Later: start a minimal diagnostic task instead */
         return;
     }
 
-    /* 5. Create core0 and core1 tasks */
     BaseType_t res0 = xTaskCreatePinnedToCore(core0_task,
                                               "core0_task",
                                               4096,
                                               NULL,
                                               5,
                                               NULL,
-                                              0); /* core 0 */
+                                              0);
 
     BaseType_t res1 = xTaskCreatePinnedToCore(core1_task,
                                               "core1_task",
@@ -130,7 +148,7 @@ void core_os_start(void)
                                               NULL,
                                               5,
                                               NULL,
-                                              1); /* core 1 */
+                                              1);
 
     if (res0 != pdPASS || res1 != pdPASS) {
         ESP_LOGE(TAG, "Failed to create core tasks: res0=%ld res1=%ld",

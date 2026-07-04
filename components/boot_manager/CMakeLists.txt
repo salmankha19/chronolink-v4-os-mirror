@@ -11,5 +11,6 @@ idf_component_register(
     fatfs
     app_update
     core_os
+    event_bus
     display_api
 )
