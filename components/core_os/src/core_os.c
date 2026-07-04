@@ -8,7 +8,6 @@
 #include "state_manager.h"
 
 /* Later you’ll include state_manager.h, event_bus.h, etc. */
-
 static const char *TAG = "core_os";
 
 /* Global handles for OS primitives */
