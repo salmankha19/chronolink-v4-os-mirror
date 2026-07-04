@@ -1,9 +1,6 @@
-# Main component CMakeLists - contains the app_main entry point
+# This file was automatically generated for projects
+# without default 'CMakeLists.txt' file.
 
-FILE(GLOB app_sources ${CMAKE_SOURCE_DIR}/src/*.c)
+FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
 
-idf_component_register(
-    SRCS ${app_sources}
-    INCLUDE_DIRS ""
-    REQUIRES core_os local_display remote_bridge
-)
+idf_component_register(SRCS ${app_sources})
