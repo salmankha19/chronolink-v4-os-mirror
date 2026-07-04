@@ -2,6 +2,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include <string.h>
+#include "event_bus.h"
 
 static const char *TAG = "event_bus";
 static QueueHandle_t g_event_queue = NULL;

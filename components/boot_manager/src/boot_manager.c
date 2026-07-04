@@ -3,17 +3,62 @@
 #include "nvs_flash.h"
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
-
-/* Use your actual headers here. These must exist in your project. */
-#include "core_os.h"    /* core_os_init(), core_os_start() or kernel_init() */
-#include "display_api.h" /* if UI init lives here; otherwise include your ui.h */
+#include "core_os.h"
+#include "display_api.h"
+#include "event_bus.h"
+#include "boot_events.h"
+#include <string.h>
 
 static boot_flags_t boot_flags = {0};
 
 static const char *TAG = "boot_manager";
 
 bool boot_manager_init(void);
-static void detect_safe_mode(void); 
+static void detect_safe_mode(void);
+static void enter_recovery(void); /* stubbed recovery handler */
+
+/* Helper: publish a boot stage event */
+static void publish_boot_stage(boot_stage_t stage, boot_status_t status, int err)
+{
+    event_t evt;
+    boot_event_payload_u p;
+    memset(&evt, 0, sizeof(evt));
+    memset(&p, 0, sizeof(p));
+
+    p.stage.stage = (uint8_t)stage;
+    p.stage.status = (uint8_t)status;
+    p.stage.err = err;
+
+    /* Use the event_bus helper to initialize payload safely */
+    event_init_payload(&evt, EVENT_BOOT_STAGE, &p, sizeof(p));
+    event_bus_publish(&evt);
+
+    ESP_LOGI(TAG, "BOOT_STAGE %s %s (err=%d)",
+             boot_stage_to_str(stage),
+             boot_status_to_str(status),
+             err);
+}
+
+/* Helper: publish a boot fail event */
+static void publish_boot_fail(boot_stage_t stage, int err, uint32_t flags)
+{
+    event_t evt;
+    boot_event_payload_u p;
+    memset(&evt, 0, sizeof(evt));
+    memset(&p, 0, sizeof(p));
+
+    p.fail.stage = (uint8_t)stage;
+    p.fail.err = err;
+    p.fail.fail_flags = flags;
+
+    event_init_payload(&evt, EVENT_BOOT_FAIL, &p, sizeof(p));
+    event_bus_publish(&evt);
+
+    ESP_LOGE(TAG, "BOOT_FAIL %s err=%d flags=0x%08x",
+             boot_stage_to_str(stage),
+             err,
+             flags);
+}
 
 static esp_err_t mount_nvs(void)
 {
@@ -61,28 +106,45 @@ bool boot_manager_init(void)
 {
     ESP_LOGI(TAG, "Boot manager start");
 
-    /* 1. NVS */
+    /* NVS stage */
+    publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_START, 0);
     if (mount_nvs() != ESP_OK) {
-        ESP_LOGE(TAG, "NVS mount failed");
+        publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_FAIL, -1);
+        publish_boot_fail(BOOT_STAGE_NVS, -1, 0);
+        enter_recovery();
         return false;
     }
+    publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_OK, 0);
 
-    /* 1.5 Safe Mode Detection */
+    /* Safe Mode Detection */
     detect_safe_mode();
 
-    /* 2. FATFS (non-fatal) */
+    /* FATFS stage (non-fatal) */
+    publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_START, 0);
     if (mount_fatfs() != ESP_OK) {
+        publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_FAIL, -2);
         ESP_LOGW(TAG, "FATFS mount failed, continuing without filesystem");
-        /* If the filesystem is critical for your app, return false here instead */
+        /* publish a non-fatal fail event so telemetry can record it */
+        publish_boot_fail(BOOT_STAGE_FATFS, -2, 0);
+    } else {
+        publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_OK, 0);
     }
 
-    /* 3. Core OS init (kernel, state manager, message bus, etc) */
-    /* Replace with your kernel_init() if you have that API */
+    /* CORE_INIT stage */
+    publish_boot_stage(BOOT_STAGE_CORE_INIT, BOOT_STATUS_START, 0);
     ESP_LOGI(TAG, "Initializing core OS");
     core_os_init(&boot_flags);
+    publish_boot_stage(BOOT_STAGE_CORE_INIT, BOOT_STATUS_OK, 0);
 
-    /* 4. Start core OS (services, tasks, UI) */
+    /* CORE_START stage */
+    publish_boot_stage(BOOT_STAGE_CORE_START, BOOT_STATUS_START, 0);
     core_os_start();
+    publish_boot_stage(BOOT_STAGE_CORE_START, BOOT_STATUS_OK, 0);
+
+    /* HANDOFF stage */
+    publish_boot_stage(BOOT_STAGE_HANDOFF, BOOT_STATUS_START, 0);
+    /* If you have a kernel handoff or init process, do it here. For now we mark handoff OK. */
+    publish_boot_stage(BOOT_STAGE_HANDOFF, BOOT_STATUS_OK, 0);
 
     ESP_LOGI(TAG, "Boot manager finished successfully");
     return true;
@@ -97,4 +159,14 @@ static void detect_safe_mode(void)
     gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
     boot_flags.safe_mode = (gpio_get_level(GPIO_NUM_0) == 0);
     ESP_LOGI(TAG, "Safe mode: %s", boot_flags.safe_mode ? "ON" : "OFF");
+}
+
+/* Minimal recovery stub: increment persistent failure counter, set state, attempt fallback */
+static void enter_recovery(void)
+{
+    ESP_LOGW(TAG, "Entering recovery mode (stub). Implement rollback/factory reset here.");
+    /* Publish RECOVERY stage event */
+    publish_boot_stage(BOOT_STAGE_RECOVERY, BOOT_STATUS_START, 0);
+    /* TODO: implement persistent failure counter in NVS and actual recovery actions */
+    publish_boot_stage(BOOT_STAGE_RECOVERY, BOOT_STATUS_OK, 0);
 }
