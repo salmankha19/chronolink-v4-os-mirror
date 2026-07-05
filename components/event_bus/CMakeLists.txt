@@ -1,5 +1,9 @@
 idf_component_register(
-    SRCS "src/event_bus.c"
-    INCLUDE_DIRS "include"
-    REQUIRES freertos
+    SRCS
+        "src/event_bus.c"
+        "src/boot_events.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
 )
