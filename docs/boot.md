@@ -65,3 +65,4 @@ A small manifest embedded in the image or stored in flash describing expected ha
     "require_signature": false
   }
 }
+
