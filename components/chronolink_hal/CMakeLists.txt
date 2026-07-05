@@ -1,0 +1,20 @@
+﻿idf_component_register(
+    SRCS
+        "src/hal_init.c"
+        "src/hal_gpio_esp32.c"
+        "src/hal_i2c_esp32.c"
+        "src/hal_spi_esp32.c"
+        "src/hal_rtc_ds3231m.c"
+        "src/hal_display_st7796s.c"
+        "src/hal_display_max7219.c"
+        "src/hal_sensors.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        driver
+        esp_driver_gpio
+        esp_driver_spi
+        esp_driver_i2c
+        esp_timer
+        esp_system
+)
