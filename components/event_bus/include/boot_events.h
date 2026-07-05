@@ -35,6 +35,9 @@ typedef struct {
     uint16_t error_count;
 } boot_health_t;
 
+/* Compatibility aliases for existing call sites. */
+typedef boot_health_t boot_health_payload_t;
+
 typedef struct {
     uint8_t stage;
     uint8_t status;
@@ -46,6 +49,9 @@ typedef struct {
     int32_t err;
     uint32_t fail_flags;
 } boot_fail_t;
+
+/* Compatibility aliases for existing call sites. */
+typedef boot_fail_t boot_fail_payload_t;
 
 typedef struct {
     uint32_t timestamp;
@@ -92,6 +98,7 @@ static inline void boot_event_init_fail(boot_event_payload_u *p, boot_stage_t st
     p->fail.fail_flags = flags;
 }
 
+/* prototypes for helpers (single declaration visible to all TUs) */
 const char *boot_stage_to_str(boot_stage_t stage);
 const char *boot_status_to_str(boot_status_t status);
 

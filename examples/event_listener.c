@@ -1,5 +1,4 @@
 #include "event_bus.h"
-#include "boot_events.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include <string.h>

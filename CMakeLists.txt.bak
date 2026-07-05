@@ -1,3 +1,0 @@
-﻿cmake_minimum_required(VERSION 3.16)
-include(\$ENVC:/Users/salma/.platformio/packages/framework-espidf/tools/cmake/project.cmake)
-project(chronolink_v4_os)

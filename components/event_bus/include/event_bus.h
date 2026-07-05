@@ -7,7 +7,6 @@
 #include "boot_events.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "boot_events.h"
 
 typedef enum {
     EVENT_NONE = 0,
