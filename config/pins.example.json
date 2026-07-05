@@ -1,0 +1,20 @@
+{
+  "i2c": {
+    "scl": 9,
+    "sda": 8
+  },
+  "spi": {
+    "sck": 12,
+    "mosi": 11,
+    "miso": 13
+  },
+  "display": {
+    "dc": 5,
+    "rst": 6,
+    "cs": 7
+  },
+  "buttons": {
+    "button_1": 2,
+    "button_2": 3
+  }
+}
