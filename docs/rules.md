@@ -51,3 +51,4 @@ Application must only contain UI and display logic.
 ---
 
 Copilot Agent must comply with these rules for all fixes, refactors, and code generation.
+

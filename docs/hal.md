@@ -38,3 +38,4 @@ hal_status_t HAL_RegisterDevice(const char* name, const char* type, void* ops);
 hal_status_t HAL_HealthCheck(void);
 hal_status_t HAL_Ready(void);
 
+

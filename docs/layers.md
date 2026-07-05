@@ -5,3 +5,4 @@
 - Service / Engine Layer: pure logic (state, scheduler, prayer engine).
 - Application Layer: UI, web config, display cycle.
 
+

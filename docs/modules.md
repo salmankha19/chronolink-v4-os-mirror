@@ -8,3 +8,4 @@ This document lists the initial module stubs and their responsibilities.
 - src/svc: service and engine logic.
 - src/app: application-level UI and flows.
 
+
