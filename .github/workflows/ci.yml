@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -37,12 +39,18 @@ jobs:
 
       - name: Install ESP-IDF tools (esp-idf v6.x)
         env:
-          IDF_VERSION: 'v6.2'
+          IDF_VERSION: 'v6.0.2'
         run: |
-          git clone --depth 1 --branch ${IDF_VERSION} https://github.com/espressif/esp-idf.git $HOME/esp-idf
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+          # retry clone up to 3 times to avoid transient network failures
+          for i in 1 2 3; do
+            git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "$HOME/esp-idf" && break || sleep 5
+          done
           python3 -m pip install --upgrade pip
-          python3 -m pip install -r $HOME/esp-idf/requirements.txt
-          # Source the export script for this runner session
+          python3 -m pip install -r "$HOME/esp-idf/requirements.txt"
           echo "source $HOME/esp-idf/export.sh" >> $GITHUB_ENV
 
       - name: Show IDF version
