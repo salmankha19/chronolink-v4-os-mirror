@@ -8,6 +8,7 @@
         "src/hal_display_st7796s.c"
         "src/hal_display_max7219.c"
         "src/hal_sensors.c"
+        "src/pdl_board_esp32.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
@@ -15,3 +16,9 @@
         esp_timer
         esp_system
 )
+
+# Temporary fallback: ensure driver headers are visible to this component
+if(NOT DEFINED IDF_PATH)
+    set(IDF_PATH $ENV{IDF_PATH})
+endif()
+target_include_directories(${COMPONENT_LIB} PRIVATE "${IDF_PATH}/components/driver/include")
