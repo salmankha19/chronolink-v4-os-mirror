@@ -17,7 +17,6 @@
         esp_system
 )
 
-# Temporary fallback: ensure driver headers are visible to this component
 if(NOT DEFINED IDF_PATH)
     set(IDF_PATH $ENV{IDF_PATH})
 endif()
