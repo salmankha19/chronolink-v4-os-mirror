@@ -183,3 +183,5 @@ Copilot Agent must:
 
 Maintain ChronoLink V4 OS architecture integrity and produce code that compiles cleanly under PlatformIO ESP‑IDF 6.0.1 with FATFS.
 
+
+

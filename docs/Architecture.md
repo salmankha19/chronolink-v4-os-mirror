@@ -1,57 +1,100 @@
+# ChronoLink V4 — System Architecture
+
+ChronoLink V4 uses a clean 4‑layer architecture:
+
+1. **PDL Board Layer** — board profile, pin macros, partition notes  
+2. **PIL / HAL Layer** — stable C ABI + MCU‑specific drivers  
+3. **Service / Engine Layer** — pure logic (state, prayer engine, scheduler, events)  
+4. **Application Layer** — UI, display cycle, web config
+
+---
+
 ```mermaid
 flowchart TB
 
 %% ============================
-%% APPLICATION LAYER (OUTSIDE OS)
+%% APPLICATION LAYER
 %% ============================
-subgraph APP["Application Layer (Outside OS)"]
-    UI_MANAGER["UI Manager"]
-    MENU_CONTROLLER["Menu Controller"]
-    NOTIFY_MANAGER["Notification Manager"]
+subgraph APP["Application Layer"]
+    CLOCK_APP["Clock App"]
+    WEB_CONFIG["Web Config App"]
+    DISPLAY_CYCLE["Display Cycle"]
+    THEME_ENGINE["Theme Engine"]
+    ERROR_UI["Error Display"]
 end
 
 %% ============================
-%% OS SERVICE / ENGINE LAYER
+%% SERVICE / ENGINE LAYER
 %% ============================
-subgraph SERVICE["ChronoLink OS — Service / Engine Layer"]
+subgraph SERVICE["Service / Engine Layer"]
     STATE_MANAGER["State Manager"]
     EVENT_BUS["Event Bus"]
-    SENSOR_ENGINE["Sensor Engine"]
     PRAYER_ENGINE["Prayer Engine"]
     TIME_ENGINE["Time Engine"]
+    SCHEDULER["Scheduler"]
+    CONFIG_SERVICE["Config Service"]
+    THEME_REGISTRY["Theme Registry"]
 end
 
 %% ============================
-%% OS HAL / DRIVER LAYER
+%% PIL / HAL LAYER
 %% ============================
-subgraph HAL["ChronoLink OS — HAL / Driver Layer"]
-    AUDIO_HAL["Audio HAL"]
-    DISPLAY_HAL["Display HAL"]
-    TEMP_HAL["Temperature HAL"]
-    LIGHT_HAL["Light Sensor HAL"]
-    OPTIONAL_I2C["Optional I2C Sensors HAL"]
-    STORAGE_HAL["Storage HAL"]
-    WIFI_HAL["WiFi HAL"]
-    RTC_HAL["RTC HAL"]
+subgraph HAL["PIL / HAL Layer"]
+    PIL_GPIO["PIL GPIO"]
+    PIL_I2C["PIL I2C"]
+    PIL_SPI["PIL SPI"]
+    PIL_SENSOR["PIL Sensor API"]
+    PIL_CONFIG["PIL Config Loader"]
+
+    HAL_GPIO["HAL GPIO Driver"]
+    HAL_I2C["HAL I2C Driver"]
+    HAL_SPI["HAL SPI Driver"]
+    HAL_SENSOR["HAL Sensor Driver"]
+    HAL_BUS["HAL Bus Manager"]
+    HAL_HEALTH["HAL Health Monitor"]
+end
+
+%% ============================
+%% PDL BOARD LAYER
+%% ============================
+subgraph PDL["PDL Board Layer"]
+    BOARD_PROFILE["Board Profile"]
+    PIN_MAP["Pin Map"]
+    PARTITIONS["Partition Table"]
+    CAPABILITIES["Board Capabilities"]
 end
 
 %% ============================
 %% CONNECTIONS
 %% ============================
-%% Application Layer → OS
-UI_MANAGER --> STATE_MANAGER
-MENU_CONTROLLER --> STATE_MANAGER
-NOTIFY_MANAGER --> STATE_MANAGER
 
-%% Service Layer → HAL
-TIME_ENGINE --> RTC_HAL
-TIME_ENGINE --> WIFI_HAL
-PRAYER_ENGINE --> STORAGE_HAL
-SENSOR_ENGINE --> TEMP_HAL
-SENSOR_ENGINE --> LIGHT_HAL
-SENSOR_ENGINE --> OPTIONAL_I2C
+%% Application → Service
+CLOCK_APP --> STATE_MANAGER
+WEB_CONFIG --> CONFIG_SERVICE
+DISPLAY_CYCLE --> EVENT_BUS
+THEME_ENGINE --> THEME_REGISTRY
+ERROR_UI --> STATE_MANAGER
 
-%% Application Layer → HAL (Display/Audio only)
-UI_MANAGER --> DISPLAY_HAL
-UI_MANAGER --> AUDIO_HAL
-```
+%% Service → PIL/HAL
+TIME_ENGINE --> PIL_CONFIG
+TIME_ENGINE --> HAL_GPIO
+PRAYER_ENGINE --> PIL_CONFIG
+PRAYER_ENGINE --> HAL_SENSOR
+SCHEDULER --> EVENT_BUS
+CONFIG_SERVICE --> PIL_CONFIG
+STATE_MANAGER --> HAL_HEALTH
+
+%% PIL → HAL
+PIL_GPIO --> HAL_GPIO
+PIL_I2C --> HAL_I2C
+PIL_SPI --> HAL_SPI
+PIL_SENSOR --> HAL_SENSOR
+
+%% HAL → PDL
+HAL_GPIO --> PIN_MAP
+HAL_I2C --> PIN_MAP
+HAL_SPI --> PIN_MAP
+HAL_SENSOR --> CAPABILITIES
+HAL_BUS --> BOARD_PROFILE
+HAL_HEALTH --> BOARD_PROFILE
+
