@@ -13,6 +13,8 @@
         "include"
     REQUIRES
         driver
+        esp_driver_gpio
+        esp_driver_spi
         esp_timer
         esp_system
 )
@@ -21,4 +23,8 @@
 if(NOT DEFINED IDF_PATH)
     set(IDF_PATH $ENV{IDF_PATH})
 endif()
-target_include_directories(${COMPONENT_LIB} PRIVATE "${IDF_PATH}/components/driver/include")
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${IDF_PATH}/components/driver/include"
+    "${IDF_PATH}/components/esp_driver_gpio/include"
+    "${IDF_PATH}/components/esp_driver_spi/include"
+)
