@@ -64,9 +64,7 @@ jobs:
           for i in 1 2 3; do
             git clone --depth 1 --branch "${IDF_VERSION}" https://github.com/espressif/esp-idf.git "$HOME/esp-idf" && break || sleep 5
           done
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r "$HOME/esp-idf/requirements.txt"
-          echo "source $HOME/esp-idf/export.sh" >> $GITHUB_ENV
+          "$HOME/esp-idf/install.sh" esp32s3
 
       - name: Show IDF version
         run: |
