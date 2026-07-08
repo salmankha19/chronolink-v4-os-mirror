@@ -6,9 +6,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include <string.h>
-#include "hal_display.h"
-#include "driver/spi_master.h"
-#include "esp_log.h"
+#include "pdl_pins.h"
 
 #define TAG "HAL_DISPLAY"
 
@@ -23,10 +21,11 @@ static spi_device_handle_t st7796s_spi;
 #define ST7796S_CMD_RASET     0x2B
 #define ST7796S_CMD_RAMWR     0x2C
 
-// GPIO pins (example â€” adjust to your PCB)
-#define LCD_CS   5
-#define LCD_DC   6
-#define LCD_RST  7
+// Use PDL pins instead of hardcoded values
+#define LCD_CS   PDL_PIN_SPI_CS_DISPLAY
+#define LCD_DC   PDL_PIN_DISPLAY_DC
+#define LCD_RST  PDL_PIN_DISPLAY_RST
+#define LCD_BL   PDL_PIN_DISPLAY_BL
 
 static void st7796s_send_cmd(uint8_t cmd)
 {
@@ -56,6 +55,10 @@ hal_status_t HAL_Display_Init(void)
     gpio_set_direction(LCD_CS, GPIO_MODE_OUTPUT);
     gpio_set_direction(LCD_DC, GPIO_MODE_OUTPUT);
     gpio_set_direction(LCD_RST, GPIO_MODE_OUTPUT);
+#ifdef LCD_BL
+    gpio_set_direction(LCD_BL, GPIO_MODE_OUTPUT);
+    gpio_set_level(LCD_BL, 1);
+#endif
 
     // Reset sequence
     gpio_set_level(LCD_RST, 0);
@@ -63,11 +66,11 @@ hal_status_t HAL_Display_Init(void)
     gpio_set_level(LCD_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    // SPI config
+    // SPI config using PDL SPI pins
     spi_bus_config_t buscfg = {
-        .mosi_io_num = 11,
-        .miso_io_num = -1,
-        .sclk_io_num = 10,
+        .mosi_io_num = PDL_PIN_SPI_MOSI,
+        .miso_io_num = PDL_PIN_SPI_MISO,
+        .sclk_io_num = PDL_PIN_SPI_SCLK,
         .max_transfer_sz = 320 * 480 * 2
     };
 
@@ -96,6 +99,6 @@ hal_status_t HAL_Display_Init(void)
 
 void HAL_Display_WriteText(const char *text)
 {
-    // Placeholder â€” later replaced with font renderer
+    // Placeholder — later replaced with font renderer
     ESP_LOGI(TAG, "Display text: %s", text);
 }
