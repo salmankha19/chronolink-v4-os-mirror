@@ -1,44 +1,19 @@
-#pragma once
-#include <stdbool.h>
+#ifndef BOOT_MANAGER_H
+#define BOOT_MANAGER_H
 
+#include "event_bus/boot_events.h"   /* centralized boot enums/types */
+
+/* Boot manager public API */
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Boot flags exposed to other components */
-typedef struct {
-    bool safe_mode;
-    bool factory_reset;
-    bool ota_allowed;
-} boot_flags_t;
-
-/* Boot stages */
-typedef enum {
-    BOOT_STAGE_NONE = 0,
-    BOOT_STAGE_NVS,
-    BOOT_STAGE_HAL_INIT,
-    BOOT_STAGE_FATFS,
-    BOOT_STAGE_CORE_INIT,
-    BOOT_STAGE_CORE_START,
-    BOOT_STAGE_HANDOFF,
-    BOOT_STAGE_RECOVERY,
-} boot_stage_t;
-
-/* Boot status for stage events */
-typedef enum {
-    BOOT_STATUS_START = 0,
-    BOOT_STATUS_OK,
-    BOOT_STATUS_FAIL,
-} boot_status_t;
-
-/* Public API */
-bool boot_manager_init(void);
-bool cl_fs_mount(void);
-
-/* Query boot state */
-const boot_flags_t *boot_get_flags(void);
-boot_stage_t boot_get_last_stage(void);
+void boot_manager_start(void);
+void boot_manager_signal_stage(boot_stage_t stage, boot_status_t status);
+void boot_manager_signal_fail(boot_stage_t stage, int32_t err, uint32_t flags);
 
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* BOOT_MANAGER_H */
