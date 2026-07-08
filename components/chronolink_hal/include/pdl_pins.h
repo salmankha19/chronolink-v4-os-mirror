@@ -1,4 +1,4 @@
-﻿#ifndef CHRONOLINK_HAL_PDL_PINS_H
+#ifndef CHRONOLINK_HAL_PDL_PINS_H
 #define CHRONOLINK_HAL_PDL_PINS_H
 
 /* Migrated from src/platformDependentLayer/pdl_pins.h

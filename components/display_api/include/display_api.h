@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <stdint.h>
 typedef struct { uint16_t w,h; uint8_t format; } DisplayConfig;
 int display_init(const DisplayConfig *cfg);

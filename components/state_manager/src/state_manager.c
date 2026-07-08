@@ -1,4 +1,4 @@
-﻿#include "ui_state.h"           /* canonical declarations for state_get_snapshot and state_publish_update */
+#include "ui_state.h"           /* canonical declarations for state_get_snapshot and state_publish_update */
 #include "state_manager.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"

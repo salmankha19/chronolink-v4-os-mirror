@@ -1,4 +1,4 @@
-﻿/* ServiceEngineLayer alias header for docs and public API */
+/* ServiceEngineLayer alias header for docs and public API */
 #ifndef SERVICE_ENGINE_ALIAS_H
 #define SERVICE_ENGINE_ALIAS_H
 

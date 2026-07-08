@@ -1,4 +1,4 @@
-﻿#include "hal_display.h"
+#include "hal_display.h"
 #include "hal.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -99,6 +99,6 @@ hal_status_t HAL_Display_Init(void)
 
 void HAL_Display_WriteText(const char *text)
 {
-    // Placeholder — later replaced with font renderer
+    // Placeholder � later replaced with font renderer
     ESP_LOGI(TAG, "Display text: %s", text);
 }

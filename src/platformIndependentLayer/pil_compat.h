@@ -1,4 +1,4 @@
-﻿/* Compatibility aliases for platformIndependentLayer (pil) */
+/* Compatibility aliases for platformIndependentLayer (pil) */
 #ifndef PIL_COMPAT_H
 #define PIL_COMPAT_H
 

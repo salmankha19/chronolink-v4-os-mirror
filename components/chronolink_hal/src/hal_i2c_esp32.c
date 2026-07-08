@@ -1,4 +1,4 @@
-﻿#include "hal_spi.h"
+#include "hal_spi.h"
 #include "pdl_pins.h"
 #include "esp_log.h"
 #include "driver/spi_master.h"

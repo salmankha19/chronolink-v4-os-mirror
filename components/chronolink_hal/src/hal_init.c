@@ -1,4 +1,4 @@
-﻿#include "hal.h"
+#include "hal.h"
 #include "hal_gpio.h"
 #include "hal_i2c.h"
 #include "hal_spi.h"

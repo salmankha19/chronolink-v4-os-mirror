@@ -1,4 +1,4 @@
-﻿/* Compatibility aliases for hardwareAccessLayer (hal) */
+/* Compatibility aliases for hardwareAccessLayer (hal) */
 #ifndef HAL_COMPAT_H
 #define HAL_COMPAT_H
 
