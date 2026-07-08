@@ -1,7 +1,7 @@
 #ifndef BOOT_MANAGER_H
 #define BOOT_MANAGER_H
 
-#include "event_bus/boot_events.h"   /* centralized boot enums/types */
+#include "boot_events.h"   /* centralized boot enums/types */
 
 /* Boot manager public API */
 #ifdef __cplusplus
