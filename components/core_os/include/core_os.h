@@ -1,12 +1,6 @@
 ﻿#pragma once
 
-#include <stdbool.h>
-
-typedef struct {
-    bool safe_mode;
-    bool factory_reset;
-    bool ota_allowed;
-} boot_flags_t;
+#include "event_bus/boot_events.h"
 
 /* Kernel init: create queues, timers, tasks, but do NOT start scheduler here */
 void core_os_init(const boot_flags_t *boot_flags);
