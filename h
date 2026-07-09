@@ -8,7 +8,7 @@
 [32m+[m[32m#ifndef BOOT_MANAGER_H[m
 [32m+[m[32m#define BOOT_MANAGER_H[m
  [m
-[32m+[m[32m#include "event_bus/boot_events.h"   /* centralized boot enums/types */[m
+[32m+[m[32m#include "boot_events.h"   /* centralized boot enums/types */[m
 [32m+[m
 [32m+[m[32m/* Boot manager public API */[m
  #ifdef __cplusplus[m
