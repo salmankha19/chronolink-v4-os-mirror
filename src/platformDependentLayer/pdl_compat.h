@@ -1,4 +1,4 @@
-﻿/* Compatibility aliases: expose PlatformDependentLayer public types while keeping pdl_* aliases */
+/* Compatibility aliases: expose PlatformDependentLayer public types while keeping pdl_* aliases */
 #ifndef PDL_COMPAT_H
 #define PDL_COMPAT_H
 

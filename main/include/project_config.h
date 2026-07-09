@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // Example pin mapping; change to match your PCB
 #define PIN_I2C_SDA 21
 #define PIN_I2C_SCL 22

@@ -1,4 +1,4 @@
-﻿#include "local_display.h"
+#include "local_display.h"
 #include "esp_log.h"
 
 static const char *TAG = "local_display";

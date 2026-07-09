@@ -9,7 +9,13 @@
 #include "boot_events.h"
 #include <string.h>
 
+/* HAL includes used by boot manager for safe-mode and HAL init */
+#include "hal.h"
+#include "hal_gpio.h"
+#include "pdl_pins.h"
+
 static boot_flags_t boot_flags = {0};
+static boot_stage_t g_last_stage = BOOT_STAGE_NONE;
 
 static const char *TAG = "boot_manager";
 
@@ -24,6 +30,9 @@ static void publish_boot_stage(boot_stage_t stage, boot_status_t status, int err
     boot_event_payload_u p;
     memset(&evt, 0, sizeof(evt));
     memset(&p, 0, sizeof(p));
+
+    /* cache last stage for external queries */
+    g_last_stage = stage;
 
     p.stage.stage = (uint8_t)stage;
     p.stage.status = (uint8_t)status;
@@ -119,6 +128,16 @@ bool boot_manager_init(void)
     /* Safe Mode Detection */
     detect_safe_mode();
 
+    /* HAL init stage */
+    publish_boot_stage(BOOT_STAGE_HAL_INIT, BOOT_STATUS_START, 0);
+    if (HAL_Init() != HAL_OK) {
+        publish_boot_stage(BOOT_STAGE_HAL_INIT, BOOT_STATUS_FAIL, -3);
+        publish_boot_fail(BOOT_STAGE_HAL_INIT, -3, 0);
+        enter_recovery();
+        return false;
+    }
+    publish_boot_stage(BOOT_STAGE_HAL_INIT, BOOT_STATUS_OK, 0);
+
     /* FATFS stage (non-fatal) */
     publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_START, 0);
     if (mount_fatfs() != ESP_OK) {
@@ -156,8 +175,9 @@ bool cl_fs_mount() {
 
 static void detect_safe_mode(void)
 {
-    gpio_set_direction(GPIO_NUM_0, GPIO_MODE_INPUT);
-    boot_flags.safe_mode = (gpio_get_level(GPIO_NUM_0) == 0);
+    /* Use HAL GPIO abstraction and PDL pin mapping */
+    HAL_GPIO_Init(); /* ensure GPIO subsystem configured */
+    boot_flags.safe_mode = (HAL_GPIO_Read(PDL_PIN_SAFE_MODE) == GPIO_LOW);
     ESP_LOGI(TAG, "Safe mode: %s", boot_flags.safe_mode ? "ON" : "OFF");
 }
 
@@ -169,4 +189,15 @@ static void enter_recovery(void)
     publish_boot_stage(BOOT_STAGE_RECOVERY, BOOT_STATUS_START, 0);
     /* TODO: implement persistent failure counter in NVS and actual recovery actions */
     publish_boot_stage(BOOT_STAGE_RECOVERY, BOOT_STATUS_OK, 0);
+}
+
+/* Public accessors */
+const boot_flags_t *boot_get_flags(void)
+{
+    return &boot_flags;
+}
+
+boot_stage_t boot_get_last_stage(void)
+{
+    return g_last_stage;
 }

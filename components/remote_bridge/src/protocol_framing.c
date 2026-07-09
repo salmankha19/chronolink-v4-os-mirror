@@ -1,4 +1,4 @@
-﻿#include "protocol_framing.h"
+#include "protocol_framing.h"
 #include "esp_log.h"
 
 static const char *TAG = "protocol_framing";

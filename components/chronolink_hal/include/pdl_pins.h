@@ -17,5 +17,10 @@
 #define PDL_PIN_DISPLAY_RST      17
 #define PDL_PIN_DISPLAY_BL       25
 
+/* Safe mode input pin (active low).
+   Previously boot_manager used GPIO_NUM_0 directly.
+   Keep using GPIO0 here for backward compatibility; change if your board uses a different pin. */
+#define PDL_PIN_SAFE_MODE         0
+
 /* Add any additional board-specific pins below */
 #endif /* CHRONOLINK_HAL_PDL_PINS_H */
