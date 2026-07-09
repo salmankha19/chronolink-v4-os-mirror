@@ -8,6 +8,12 @@
 extern "C" {
 #endif
 
+typedef uint32_t boot_flags_t;
+
+#define BOOT_FLAG_SAFE_MODE     (1u << 0)
+#define BOOT_FLAG_FACTORY_RESET (1u << 1)
+#define BOOT_FLAG_OTA_ALLOWED   (1u << 2)
+
 typedef enum {
     BOOT_STAGE_NONE = 0,
     BOOT_STAGE_INIT,
@@ -21,6 +27,8 @@ typedef enum {
     BOOT_STAGE_SERVICES,
     BOOT_STAGE_READY
 } boot_stage_t;
+
+#define BOOT_STAGE_HAL_INIT BOOT_STAGE_HW
 
 typedef enum {
     BOOT_STATUS_START = 0,

@@ -14,12 +14,12 @@
 #include "hal_gpio.h"
 #include "pdl_pins.h"
 
-static boot_flags_t boot_flags = {0};
+static boot_flags_t boot_flags = 0;
 static boot_stage_t g_last_stage = BOOT_STAGE_NONE;
 
 static const char *TAG = "boot_manager";
 
-bool boot_manager_init(void);
+int boot_manager_init(boot_flags_t flags);
 static void detect_safe_mode(void);
 static void enter_recovery(void); /* stubbed recovery handler */
 
@@ -111,8 +111,9 @@ static esp_err_t mount_fatfs(void)
     return ESP_OK;
 }
 
-bool boot_manager_init(void)
+int boot_manager_init(boot_flags_t flags)
 {
+    boot_flags = flags;
     ESP_LOGI(TAG, "Boot manager start");
 
     /* NVS stage */
@@ -121,7 +122,7 @@ bool boot_manager_init(void)
         publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_FAIL, -1);
         publish_boot_fail(BOOT_STAGE_NVS, -1, 0);
         enter_recovery();
-        return false;
+        return -1;
     }
     publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_OK, 0);
 
@@ -134,7 +135,7 @@ bool boot_manager_init(void)
         publish_boot_stage(BOOT_STAGE_HAL_INIT, BOOT_STATUS_FAIL, -3);
         publish_boot_fail(BOOT_STAGE_HAL_INIT, -3, 0);
         enter_recovery();
-        return false;
+        return -1;
     }
     publish_boot_stage(BOOT_STAGE_HAL_INIT, BOOT_STATUS_OK, 0);
 
@@ -152,7 +153,7 @@ bool boot_manager_init(void)
     /* CORE_INIT stage */
     publish_boot_stage(BOOT_STAGE_CORE_INIT, BOOT_STATUS_START, 0);
     ESP_LOGI(TAG, "Initializing core OS");
-    core_os_init(&boot_flags);
+    core_os_init(boot_flags);
     publish_boot_stage(BOOT_STAGE_CORE_INIT, BOOT_STATUS_OK, 0);
 
     /* CORE_START stage */
@@ -166,7 +167,7 @@ bool boot_manager_init(void)
     publish_boot_stage(BOOT_STAGE_HANDOFF, BOOT_STATUS_OK, 0);
 
     ESP_LOGI(TAG, "Boot manager finished successfully");
-    return true;
+    return 0;
 }
 
 bool cl_fs_mount() {
@@ -177,8 +178,12 @@ static void detect_safe_mode(void)
 {
     /* Use HAL GPIO abstraction and PDL pin mapping */
     HAL_GPIO_Init(); /* ensure GPIO subsystem configured */
-    boot_flags.safe_mode = (HAL_GPIO_Read(PDL_PIN_SAFE_MODE) == GPIO_LOW);
-    ESP_LOGI(TAG, "Safe mode: %s", boot_flags.safe_mode ? "ON" : "OFF");
+    if (HAL_GPIO_Read(PDL_PIN_SAFE_MODE) == GPIO_LOW) {
+        boot_flags |= BOOT_FLAG_SAFE_MODE;
+    } else {
+        boot_flags &= ~BOOT_FLAG_SAFE_MODE;
+    }
+    ESP_LOGI(TAG, "Safe mode: %s", (boot_flags & BOOT_FLAG_SAFE_MODE) ? "ON" : "OFF");
 }
 
 /* Minimal recovery stub: increment persistent failure counter, set state, attempt fallback */
@@ -192,12 +197,12 @@ static void enter_recovery(void)
 }
 
 /* Public accessors */
-const boot_flags_t *boot_get_flags(void)
-{
-    return &boot_flags;
-}
-
-boot_stage_t boot_get_last_stage(void)
+boot_stage_t boot_manager_get_stage(void)
 {
     return g_last_stage;
+}
+
+void boot_manager_notify_stage(boot_stage_t stage, boot_status_t status)
+{
+    publish_boot_stage(stage, status, 0);
 }

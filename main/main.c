@@ -2,8 +2,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
-#include "core_os.h"
-#include "display_api.h"
 #include "boot_manager.h"
 
 static const char *TAG = "main";
@@ -16,7 +14,7 @@ void app_main(void) {
     // - FATFS mount
     // - OTA partition detection
     // - Core OS init + start
-    if (!boot_manager_init()) {
+    if (boot_manager_init(0) != 0) {
         ESP_LOGE(TAG, "Boot manager failed, entering safe loop");
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(1000));

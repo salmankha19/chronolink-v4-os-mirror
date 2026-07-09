@@ -10,6 +10,7 @@ idf_component_register(
     nvs_flash
     fatfs
     app_update
+    chronolink_hal
     core_os
     event_bus
     display_api

@@ -17,7 +17,7 @@ static QueueHandle_t g_state_queue = NULL;
 static TimerHandle_t g_heartbeat_timer = NULL;
 
 /* Cached boot flags */
-static boot_flags_t g_boot_flags = {0};
+static boot_flags_t g_boot_flags = 0;
 
 /* Simple uptime helper (ms) */
 static uint32_t get_uptime_ms(void)
@@ -48,21 +48,17 @@ static void heartbeat_timer_cb(TimerHandle_t xTimer)
     }
 }
 
-void core_os_init(const boot_flags_t *boot_flags)
+void core_os_init(boot_flags_t boot_flags)
 {
     ESP_LOGI(TAG, "Core OS init start");
 
     /* 1. Cache boot flags */
-    if (boot_flags) {
-        g_boot_flags = *boot_flags;
-        ESP_LOGI(TAG,
-                 "Boot flags: safe_mode=%d factory_reset=%d ota_allowed=%d",
-                 g_boot_flags.safe_mode,
-                 g_boot_flags.factory_reset,
-                 g_boot_flags.ota_allowed);
-    } else {
-        ESP_LOGW(TAG, "Boot flags pointer is NULL, using defaults");
-    }
+    g_boot_flags = boot_flags;
+    ESP_LOGI(TAG,
+             "Boot flags: safe_mode=%d factory_reset=%d ota_allowed=%d",
+             (g_boot_flags & BOOT_FLAG_SAFE_MODE) != 0,
+             (g_boot_flags & BOOT_FLAG_FACTORY_RESET) != 0,
+             (g_boot_flags & BOOT_FLAG_OTA_ALLOWED) != 0);
 
     /* 2. Create queues */
     g_event_queue = xQueueCreate(32, sizeof(event_t));
@@ -96,7 +92,7 @@ void core_os_init(const boot_flags_t *boot_flags)
     }
 
     /* 4. Safe mode handling (no services, minimal OS) */
-    if (g_boot_flags.safe_mode) {
+    if (g_boot_flags & BOOT_FLAG_SAFE_MODE) {
         ESP_LOGW(TAG, "Safe mode active: core_os_start() will skip normal services");
     }
 
@@ -129,7 +125,7 @@ void core_os_start(void)
 {
     ESP_LOGI(TAG, "Core OS start");
 
-    if (g_boot_flags.safe_mode) {
+    if (g_boot_flags & BOOT_FLAG_SAFE_MODE) {
         ESP_LOGW(TAG, "Safe mode: skipping normal service tasks (placeholder)");
         return;
     }

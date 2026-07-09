@@ -1,80 +1,117 @@
-#include "hal_spi.h"
+﻿#include "hal_i2c.h"
 #include "pdl_pins.h"
 #include "esp_log.h"
-#include "driver/spi_master.h"
-#include "driver/gpio.h"
-#include <string.h>
+#include "driver/i2c.h"
 
-static const char *TAG = "HAL_SPI";
-static bool spi_bus_ready = false;
+static const char *TAG = "HAL_I2C";
+static bool i2c_ready = false;
 
-/* Default SPI host and DMA channel used across HAL */
-#ifndef HAL_SPI_HOST
-#define HAL_SPI_HOST SPI2_HOST
-#endif
-#ifndef HAL_SPI_DMA_CH
-#define HAL_SPI_DMA_CH SPI_DMA_CH_AUTO
+#ifndef HAL_I2C_PORT
+#define HAL_I2C_PORT I2C_NUM_0
 #endif
 
-hal_status_t HAL_SPI_Init(void)
+#ifndef HAL_I2C_FREQ_HZ
+#define HAL_I2C_FREQ_HZ 400000
+#endif
+
+#ifndef HAL_I2C_TIMEOUT_MS
+#define HAL_I2C_TIMEOUT_MS 100
+#endif
+
+hal_status_t HAL_I2C_Init(void)
 {
-    if (spi_bus_ready) {
+    if (i2c_ready) {
         return HAL_OK;
     }
 
-    spi_bus_config_t buscfg = {
-        .mosi_io_num = PDL_PIN_SPI_MOSI,
-        .miso_io_num = PDL_PIN_SPI_MISO,
-        .sclk_io_num = PDL_PIN_SPI_SCLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4096
+    const i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = PDL_PIN_I2C_SDA,
+        .scl_io_num = PDL_PIN_I2C_SCL,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = HAL_I2C_FREQ_HZ,
+        .clk_flags = 0,
     };
 
-    esp_err_t err = spi_bus_initialize(HAL_SPI_HOST, &buscfg, HAL_SPI_DMA_CH);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(err));
+    esp_err_t err = i2c_param_config(HAL_I2C_PORT, &conf);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_param_config failed: %s", esp_err_to_name(err));
         return HAL_ERR_INIT;
     }
 
-    spi_bus_ready = true;
-    ESP_LOGI(TAG, "SPI bus initialized (MOSI=%d MISO=%d SCLK=%d)",
-             PDL_PIN_SPI_MOSI, PDL_PIN_SPI_MISO, PDL_PIN_SPI_SCLK);
+    err = i2c_driver_install(HAL_I2C_PORT, conf.mode, 0, 0, 0);
+    if (err == ESP_ERR_INVALID_STATE) {
+        i2c_ready = true;
+        return HAL_OK;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "i2c_driver_install failed: %s", esp_err_to_name(err));
+        return HAL_ERR_INIT;
+    }
+
+    i2c_ready = true;
+    ESP_LOGI(TAG, "I2C master initialized on SDA=%d SCL=%d", PDL_PIN_I2C_SDA, PDL_PIN_I2C_SCL);
     return HAL_OK;
 }
 
-hal_status_t HAL_SPI_Transfer(uint8_t cs_pin, const uint8_t *tx, uint8_t *rx, size_t len, uint32_t speed_hz)
+hal_status_t HAL_I2C_Read(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint16_t len)
 {
-    if (!spi_bus_ready) {
-        hal_status_t s = HAL_SPI_Init();
-        if (s != HAL_OK) return s;
+    if (!buf || len == 0) {
+        return HAL_ERR_DEV;
     }
-
-    spi_device_handle_t dev;
-    spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = (int)(speed_hz ? speed_hz : 10 * 1000 * 1000),
-        .mode = 0,
-        .spics_io_num = cs_pin,
-        .queue_size = 1
-    };
-
-    esp_err_t err = spi_bus_add_device(HAL_SPI_HOST, &devcfg, &dev);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "spi_bus_add_device failed: %s", esp_err_to_name(err));
+    if (HAL_I2C_Init() != HAL_OK) {
         return HAL_ERR_INIT;
     }
 
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.length = (int)(len * 8);
-    t.tx_buffer = tx;
-    t.rx_buffer = rx;
-
-    err = spi_device_transmit(dev, &t);
-    spi_bus_remove_device(dev);
-
+    const esp_err_t err = i2c_master_write_read_device(
+        HAL_I2C_PORT,
+        dev_addr,
+        &reg,
+        1,
+        buf,
+        len,
+        pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS)
+    );
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "spi_device_transmit failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "I2C read failed (addr=0x%02x reg=0x%02x): %s", dev_addr, reg, esp_err_to_name(err));
+        return HAL_ERR_DEV;
+    }
+
+    return HAL_OK;
+}
+
+hal_status_t HAL_I2C_Write(uint8_t dev_addr, uint8_t reg, const uint8_t *data, uint16_t len)
+{
+    if (len > 0 && !data) {
+        return HAL_ERR_DEV;
+    }
+    if (HAL_I2C_Init() != HAL_OK) {
+        return HAL_ERR_INIT;
+    }
+
+    uint8_t stack_buf[64];
+    uint8_t *tx = stack_buf;
+    const uint16_t tx_len = (uint16_t)(len + 1);
+
+    if (tx_len > sizeof(stack_buf)) {
+        return HAL_ERR_DEV;
+    }
+
+    tx[0] = reg;
+    for (uint16_t i = 0; i < len; ++i) {
+        tx[i + 1] = data[i];
+    }
+
+    const esp_err_t err = i2c_master_write_to_device(
+        HAL_I2C_PORT,
+        dev_addr,
+        tx,
+        tx_len,
+        pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS)
+    );
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C write failed (addr=0x%02x reg=0x%02x): %s", dev_addr, reg, esp_err_to_name(err));
         return HAL_ERR_DEV;
     }
 
