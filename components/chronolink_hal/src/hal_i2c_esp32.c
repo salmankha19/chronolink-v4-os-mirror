@@ -1,5 +1,5 @@
 ﻿#include "hal_i2c.h"
-#include "pdl_pins.h"
+#include "board_pins.h"
 #include "esp_log.h"
 #include "driver/i2c.h"
 
@@ -26,8 +26,8 @@ hal_status_t HAL_I2C_Init(void)
 
     const i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = PDL_PIN_I2C_SDA,
-        .scl_io_num = PDL_PIN_I2C_SCL,
+        .sda_io_num = BOARD_I2C_SDA,
+        .scl_io_num = BOARD_I2C_SCL,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
         .master.clk_speed = HAL_I2C_FREQ_HZ,
@@ -51,7 +51,7 @@ hal_status_t HAL_I2C_Init(void)
     }
 
     i2c_ready = true;
-    ESP_LOGI(TAG, "I2C master initialized on SDA=%d SCL=%d", PDL_PIN_I2C_SDA, PDL_PIN_I2C_SCL);
+    ESP_LOGI(TAG, "I2C master initialized on SDA=%d SCL=%d", BOARD_I2C_SDA, BOARD_I2C_SCL);
     return HAL_OK;
 }
 

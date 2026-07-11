@@ -1,0 +1,45 @@
+menu "ChronoLink HAL Board Pins"
+
+config BOARD_LCD_CS
+    int "LCD CS GPIO"
+    range 0 48
+    default 5
+    help
+        Chip-select pin for ST7796S display SPI device.
+
+config BOARD_LCD_DC
+    int "LCD D/C GPIO"
+    range 0 48
+    default 16
+    help
+        Data/Command select pin for ST7796S display.
+
+config BOARD_LCD_RST
+    int "LCD Reset GPIO"
+    range 0 48
+    default 17
+    help
+        Reset pin for ST7796S display.
+
+config BOARD_LCD_BL
+    int "LCD Backlight GPIO"
+    range 0 48
+    default 25
+    help
+        Backlight control pin for ST7796S display.
+
+config BOARD_I2C_SDA
+    int "I2C SDA GPIO"
+    range 0 48
+    default 21
+    help
+        SDA pin for HAL I2C master.
+
+config BOARD_I2C_SCL
+    int "I2C SCL GPIO"
+    range 0 48
+    default 22
+    help
+        SCL pin for HAL I2C master.
+
+endmenu
