@@ -17,3 +17,6 @@ typedef struct {
    The kernel (core_os) creates the queue and passes the handle here.
    Idempotent and safe to call multiple times. */
 void state_manager_init(QueueHandle_t queue);
+
+/* Dispatch one OS state message into the state manager reducer. */
+void state_manager_dispatch(const os_state_msg_t *msg);

@@ -1,9 +1,7 @@
-#include "ui_state.h"           /* canonical declarations for state_get_snapshot and state_publish_update */
 #include "state_manager.h"
+#include "ui_state.h"           /* canonical declarations for state_get_snapshot and state_publish_update */
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/queue.h"
 #include <string.h>
 
 static const char *TAG = "state_manager";
@@ -50,6 +48,35 @@ void state_manager_init(QueueHandle_t queue)
     state_manager_init_once();
 
     ESP_LOGI(TAG, "state_manager_init: initialized with queue=%p", (void*)g_state_queue);
+}
+
+/* Public: dispatch one message from the OS state queue into state updates. */
+void state_manager_dispatch(const os_state_msg_t *msg)
+{
+    if (msg == NULL) {
+        return;
+    }
+
+    state_manager_init_once();
+
+    enum {
+        OS_STATE_MSG_BRIGHTNESS = 1,
+        OS_STATE_MSG_UNIX_TS    = 2,
+    };
+
+    if (state_lock && xSemaphoreTake(state_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        switch (msg->id) {
+            case OS_STATE_MSG_BRIGHTNESS:
+                current.brightness = (uint8_t)(msg->value & 0xFFu);
+                break;
+            case OS_STATE_MSG_UNIX_TS:
+                current.unix_ts = msg->value;
+                break;
+            default:
+                break;
+        }
+        xSemaphoreGive(state_lock);
+    }
 }
 
 /* Return a pointer to the current UIState snapshot (read-only).

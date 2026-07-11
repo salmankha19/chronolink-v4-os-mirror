@@ -1,12 +1,9 @@
 #include "core_os.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
 #include "freertos/timers.h"
 #include "event_bus.h"
 #include "state_manager.h"
-#include "boot_events.h" 
+#include "boot_events.h"
 #include <string.h>
 
 static const char *TAG = "core_os";
@@ -32,14 +29,14 @@ static void heartbeat_timer_cb(TimerHandle_t xTimer)
 
     event_t evt;
     boot_event_payload_u p;
-     memset(&evt, 0, sizeof(evt));
+    memset(&evt, 0, sizeof(evt));
     memset(&p, 0, sizeof(p));
 
     p.health.uptime_ms = get_uptime_ms();
-     p.health.current_stage = (uint8_t)BOOT_STAGE_NONE;
-     p.health.error_count = 0;
+    p.health.current_stage = (uint8_t)BOOT_STAGE_NONE;
+    p.health.error_count = 0;
 
-     event_init_payload(&evt, EVENT_BOOT_HEALTH, &p, sizeof(p));
+    event_init_payload(&evt, EVENT_BOOT_HEALTH, &p, sizeof(p));
     event_bus_publish(&evt);
 
     if (g_state_queue) {
@@ -99,6 +96,36 @@ void core_os_init(boot_flags_t boot_flags)
     ESP_LOGI(TAG, "Core OS init complete");
 }
 
+/* --------------------------------------------------------------------------
+ * State queue dispatcher task
+ *
+ * Reads os_state_msg_t items from g_state_queue and forwards them to the
+ * state_manager reducer via state_manager_dispatch(). Keeps reducer calls
+ * serialized and off the producers' context.
+ * -------------------------------------------------------------------------- */
+static void state_queue_task(void *arg)
+{
+    (void)arg;
+    os_state_msg_t msg;
+
+    ESP_LOGI(TAG, "state_queue_task started");
+
+    for (;;) {
+        if (g_state_queue == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        if (xQueueReceive(g_state_queue, &msg, portMAX_DELAY) == pdTRUE) {
+            /* Dispatch into state manager */
+            state_manager_dispatch(&msg);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Core tasks (placeholders)
+ * -------------------------------------------------------------------------- */
 static void core0_task(void *arg)
 {
     ESP_LOGI(TAG, "Core0 task started (system/network)");
@@ -121,12 +148,28 @@ static void core1_task(void *arg)
     }
 }
 
+/* --------------------------------------------------------------------------
+ * Start kernel tasks and the state queue dispatcher
+ * -------------------------------------------------------------------------- */
 void core_os_start(void)
 {
     ESP_LOGI(TAG, "Core OS start");
 
     if (g_boot_flags & BOOT_FLAG_SAFE_MODE) {
         ESP_LOGW(TAG, "Safe mode: skipping normal service tasks (placeholder)");
+        return;
+    }
+
+    /* Start the state queue dispatcher first so posted events are handled */
+    BaseType_t res_state = xTaskCreatePinnedToCore(state_queue_task,
+                                                   "state_q",
+                                                   4096,
+                                                   NULL,
+                                                   tskIDLE_PRIORITY + 3,
+                                                   NULL,
+                                                   0); /* pin to core 0 */
+    if (res_state != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create state_queue_task: res=%ld", (long)res_state);
         return;
     }
 
@@ -153,4 +196,12 @@ void core_os_start(void)
     }
 
     ESP_LOGI(TAG, "Core OS start complete, tasks running");
+}
+
+/* --------------------------------------------------------------------------
+ * Mailbox getter
+ * -------------------------------------------------------------------------- */
+QueueHandle_t core_os_get_state_queue(void)
+{
+    return g_state_queue;
 }

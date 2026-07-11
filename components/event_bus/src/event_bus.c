@@ -1,9 +1,6 @@
 #include "event_bus.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include <string.h>
-#include "event_bus.h"
 #include "boot_events.h"
 
 static const char *TAG = "event_bus";
