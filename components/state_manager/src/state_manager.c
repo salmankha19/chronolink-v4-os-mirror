@@ -1,4 +1,4 @@
-﻿#include "state_manager.h"
+#include "state_manager.h"
 #include "ui_state.h"           /* canonical declarations for state_get_snapshot and state_publish_update */
 #include "esp_log.h"
 #include "freertos/semphr.h"
