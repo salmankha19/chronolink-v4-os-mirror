@@ -5,7 +5,6 @@
 #include "freertos/queue.h"
 
 #include "boot_events.h"
-#include "state_manager.h"
 
 /* Kernel init: create queues, timers, tasks, but do NOT start scheduler here */
 void core_os_init(boot_flags_t boot_flags);
