@@ -1,9 +1,10 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hal_display_st7796s.h"
 #include "hal_display.h"
 #include "hal.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_log.h"
 #include <string.h>
 #include "pdl_pins.h"
@@ -27,7 +28,7 @@ static spi_device_handle_t st7796s_spi;
 #define LCD_RST  PDL_PIN_DISPLAY_RST
 #define LCD_BL   PDL_PIN_DISPLAY_BL
 
-static void st7796s_send_cmd(uint8_t cmd)
+static void st7796s_send_cmd_internal(uint8_t cmd)
 {
     gpio_set_level(LCD_DC, 0);
     spi_transaction_t t = {
@@ -37,7 +38,7 @@ static void st7796s_send_cmd(uint8_t cmd)
     spi_device_transmit(st7796s_spi, &t);
 }
 
-static void st7796s_send_data(const uint8_t *data, int len)
+void st7796s_send_data(const uint8_t *data, size_t len)
 {
     gpio_set_level(LCD_DC, 1);
     spi_transaction_t t = {
@@ -85,13 +86,13 @@ hal_status_t HAL_Display_Init(void)
     spi_bus_add_device(SPI2_HOST, &devcfg, &st7796s_spi);
 
     // ST7796S init sequence
-    st7796s_send_cmd(ST7796S_CMD_SWRESET);
+    st7796s_send_cmd_internal(ST7796S_CMD_SWRESET);
     vTaskDelay(pdMS_TO_TICKS(150));
 
-    st7796s_send_cmd(ST7796S_CMD_SLPOUT);
+    st7796s_send_cmd_internal(ST7796S_CMD_SLPOUT);
     vTaskDelay(pdMS_TO_TICKS(150));
 
-    st7796s_send_cmd(ST7796S_CMD_DISPON);
+    st7796s_send_cmd_internal(ST7796S_CMD_DISPON);
 
     ESP_LOGI(TAG, "ST7796S display initialized");
     return HAL_OK;
@@ -99,6 +100,24 @@ hal_status_t HAL_Display_Init(void)
 
 void HAL_Display_WriteText(const char *text)
 {
-    // Placeholder — later replaced with font renderer
+    // Placeholder ï¿½ later replaced with font renderer
     ESP_LOGI(TAG, "Display text: %s", text);
+}
+
+void st7796s_send_command(uint8_t cmd)
+{
+    st7796s_send_cmd_internal(cmd);
+}
+
+void st7796s_reset(void)
+{
+    gpio_set_level(LCD_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LCD_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(120));
+}
+
+void st7796s_init(void)
+{
+    (void)HAL_Display_Init();
 }

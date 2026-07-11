@@ -11,3 +11,14 @@ core_os.bak
 build/
 *.bin
 sdkconfig
+# Local build scripts and logs
+build_idf.ps1
+build_step_fullclean.log
+
+# Build artifacts
+*.log
+build/
+.pio/
+*.bin
+*.elf
+*.map

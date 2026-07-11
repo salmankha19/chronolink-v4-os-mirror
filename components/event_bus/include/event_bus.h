@@ -1,12 +1,13 @@
 #pragma once
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include "boot_events.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 
 typedef enum {
     EVENT_NONE = 0,
