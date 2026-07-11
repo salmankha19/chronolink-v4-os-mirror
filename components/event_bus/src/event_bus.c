@@ -1,4 +1,4 @@
-﻿#include "event_bus.h"
+#include "event_bus.h"
 #include "esp_log.h"
 #include <string.h>
 #include "boot_events.h"
