@@ -987,6 +987,23 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# ChronoLink HAL Board Pins
+#
+# default:
+CONFIG_BOARD_LCD_CS=5
+# default:
+CONFIG_BOARD_LCD_DC=16
+# default:
+CONFIG_BOARD_LCD_RST=17
+# default:
+CONFIG_BOARD_LCD_BL=25
+# default:
+CONFIG_BOARD_I2C_SDA=21
+# default:
+CONFIG_BOARD_I2C_SCL=22
+# end of ChronoLink HAL Board Pins
+
+#
 # Compiler options
 #
 # default:

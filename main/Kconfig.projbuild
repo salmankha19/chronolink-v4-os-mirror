@@ -1,0 +1,39 @@
+menu "ChronoLink HAL Board Pins"
+
+config BOARD_LCD_CS
+	int
+	prompt "LCD CS GPIO"
+	range 0 48
+	default 5
+
+config BOARD_LCD_DC
+	int
+	prompt "LCD D/C GPIO"
+	range 0 48
+	default 16
+
+config BOARD_LCD_RST
+	int
+	prompt "LCD Reset GPIO"
+	range 0 48
+	default 17
+
+config BOARD_LCD_BL
+	int
+	prompt "LCD Backlight GPIO"
+	range 0 48
+	default 25
+
+config BOARD_I2C_SDA
+	int
+	prompt "I2C SDA GPIO"
+	range 0 48
+	default 21
+
+config BOARD_I2C_SCL
+	int
+	prompt "I2C SCL GPIO"
+	range 0 48
+	default 22
+
+endmenu
