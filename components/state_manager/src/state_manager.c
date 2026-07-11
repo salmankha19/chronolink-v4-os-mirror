@@ -59,18 +59,20 @@ void state_manager_dispatch(const os_state_msg_t *msg)
 
     state_manager_init_once();
 
+    enum {
+        OS_STATE_MSG_BRIGHTNESS = 1,
+        OS_STATE_MSG_UNIX_TS    = 2,
+    };
+
     if (state_lock && xSemaphoreTake(state_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
         switch (msg->id) {
-            case 1:
-                /* id=1: brightness update */
+            case OS_STATE_MSG_BRIGHTNESS:
                 current.brightness = (uint8_t)(msg->value & 0xFFu);
                 break;
-            case 2:
-                /* id=2: unix timestamp update */
+            case OS_STATE_MSG_UNIX_TS:
                 current.unix_ts = msg->value;
                 break;
             default:
-                /* Unknown message id: no state mutation yet. */
                 break;
         }
         xSemaphoreGive(state_lock);
