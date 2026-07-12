@@ -1,0 +1,10 @@
+menu "Chronolink HAL options"
+
+config CHRONOLINK_USE_MOCK_DISPLAY
+    bool "Use mock display driver for local testing"
+    default n
+    help
+      When enabled, the mock display driver will be compiled in addition to
+      the real drivers for local builds without hardware.
+
+endmenu

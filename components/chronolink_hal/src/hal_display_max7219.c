@@ -1,7 +1,27 @@
 #include "hal_display.h"
+#include "hal_display_max7219.h"
 #include "esp_log.h"
 
 static const char *TAG = "HAL_MAX7219";
+
+/* Add this near the top, after includes */
+hal_status_t HAL_Display_MAX7219_HasCapability(hal_display_cap_t cap)
+{
+    switch (cap) {
+    case HAL_CAP_TEXT:
+    case HAL_CAP_BITMAP:
+    case HAL_CAP_BRIGHTNESS:
+    case HAL_CAP_CLEAR:
+    case HAL_CAP_SHOW:
+        return HAL_OK;
+
+    case HAL_CAP_DRAW_PIXEL:
+    case HAL_CAP_FILL:
+    case HAL_CAP_ROTATION:
+    default:
+        return HAL_ERR_DEV;
+    }
+}
 
 hal_status_t HAL_Display_MAX7219_Init(void)
 {

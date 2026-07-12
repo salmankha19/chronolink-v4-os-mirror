@@ -1,7 +1,28 @@
 #include "hal_display.h"
+#include "hal_display_remote.h"
+
 #include "esp_log.h"
 
 static const char *TAG = "HAL_REMOTE_DISP";
+
+/* Add this near the top, after includes */
+hal_status_t HAL_Display_Remote_HasCapability(hal_display_cap_t cap)
+{
+    switch (cap) {
+    case HAL_CAP_TEXT:
+    case HAL_CAP_BITMAP:
+    case HAL_CAP_CLEAR:
+    case HAL_CAP_SHOW:
+        return HAL_OK;
+
+    case HAL_CAP_DRAW_PIXEL:
+    case HAL_CAP_FILL:
+    case HAL_CAP_ROTATION:
+    case HAL_CAP_BRIGHTNESS:
+    default:
+        return HAL_ERR_DEV;
+    }
+}
 
 hal_status_t HAL_Display_Remote_Init(void)
 {
