@@ -17,6 +17,12 @@
 #define PDL_PIN_DISPLAY_RST      17
 #define PDL_PIN_DISPLAY_BL       25
 
+/* Legacy aliases kept for older pil_config callers. */
+#define PDL_PIN_SPI_SCK          PDL_PIN_SPI_SCLK
+#define PDL_PIN_DISPLAY_CS       PDL_PIN_SPI_CS_DISPLAY
+#define PDL_PIN_BUTTON_1         2
+#define PDL_PIN_BUTTON_2         3
+
 /* Safe mode input pin (active low).
    Previously boot_manager used GPIO_NUM_0 directly.
    Keep using GPIO0 here for backward compatibility; change if your board uses a different pin. */

@@ -1,0 +1,13 @@
+devices:
+  temperature:
+    driver: virtual_sht4x
+    address: 0x44
+    bus: 1
+  humidity:
+    driver: virtual_sht4x
+    address: 0x44
+    bus: 1
+  display:
+    driver: virtual_oled
+    address: 0x3C
+    bus: 1
