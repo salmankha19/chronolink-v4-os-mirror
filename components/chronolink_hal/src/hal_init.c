@@ -45,6 +45,15 @@ static void log_display_caps(void)
 
 static const char *TAG = "HAL_INIT";
 
+/* ensure the keep symbol is referenced so the linker keeps it */
+extern const char keep_display_caps[];
+static void __attribute__((constructor)) keep_display_caps_ref_init(void)
+{
+    volatile const char *p = keep_display_caps;
+    (void)p;
+}
+
+
 hal_status_t HAL_Init(void)
 {
     hal_status_t hs;
@@ -89,7 +98,7 @@ hal_status_t HAL_Init(void)
         ESP_LOGE(TAG, "HAL_Display_Init failed (%d)", (int)hs);
         return hs;
     }
-    
+
 #ifdef CONFIG_DEBUG_DISPLAY_CAPS
     log_display_caps();
 #endif

@@ -2,9 +2,8 @@
 #include "hal_display.h"
 
 static const char *TAG = "DISPLAY_CAPS";
-
-/* Force the literal into the final binary even if the linker would discard it */
-__attribute__((used)) static const char keep_display_caps[] = "DISPLAY_CAPS";
+__attribute__((used, section(".flash.rodata"))) static const char keep_display_caps[] = "DISPLAY_CAPS";
+__attribute__((used)) static const char *keep_display_caps_ref = keep_display_caps;
 
 hal_status_t HAL_Display_Init(void)
 {
