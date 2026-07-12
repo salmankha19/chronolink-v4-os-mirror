@@ -1,4 +1,4 @@
-#include "hal.h"
+﻿#include "hal.h"
 #include "hal_gpio.h"
 #include "hal_i2c.h"
 #include "hal_spi.h"
@@ -8,7 +8,51 @@
 #include "pdl_compat.h"
 #include "esp_log.h"
 
+#ifdef CONFIG_DEBUG_DISPLAY_CAPS
+#include "esp_log.h"
+
+static const char *DISPLAY_CAP_TAG = "DISPLAY_CAPS";
+
+static const char *cap_name(hal_display_cap_t cap)
+{
+    switch (cap) {
+    case HAL_CAP_DRAW_PIXEL:   return "DRAW_PIXEL";
+    case HAL_CAP_FILL:         return "FILL";
+    case HAL_CAP_CLEAR:        return "CLEAR";
+    case HAL_CAP_SHOW:         return "SHOW";
+    case HAL_CAP_TEXT:         return "TEXT";
+    case HAL_CAP_BITMAP:       return "BITMAP";
+    case HAL_CAP_BRIGHTNESS:   return "BRIGHTNESS";
+    case HAL_CAP_ROTATION:     return "ROTATION";
+    default:                   return "UNKNOWN";
+    }
+}
+
+static void log_display_caps(void)
+{
+    hal_display_cap_t caps[] = {
+        HAL_CAP_DRAW_PIXEL, HAL_CAP_FILL, HAL_CAP_CLEAR, HAL_CAP_SHOW,
+        HAL_CAP_TEXT, HAL_CAP_BITMAP, HAL_CAP_BRIGHTNESS, HAL_CAP_ROTATION
+    };
+
+    for (size_t i = 0; i < sizeof(caps)/sizeof(caps[0]); ++i) {
+        hal_status_t s = HAL_Display_HasCapability(caps[i]);
+        ESP_LOGI(DISPLAY_CAP_TAG, "%s -> %s", cap_name(caps[i]),
+                 (s == HAL_OK) ? "OK" : "NOT SUPPORTED");
+    }
+}
+#endif /* CONFIG_DEBUG_DISPLAY_CAPS */
+
 static const char *TAG = "HAL_INIT";
+
+/* ensure the keep symbol is referenced so the linker keeps it */
+extern const char keep_display_caps[];
+static void __attribute__((constructor)) keep_display_caps_ref_init(void)
+{
+    volatile const char *p = keep_display_caps;
+    (void)p;
+}
+
 
 hal_status_t HAL_Init(void)
 {
@@ -54,6 +98,10 @@ hal_status_t HAL_Init(void)
         ESP_LOGE(TAG, "HAL_Display_Init failed (%d)", (int)hs);
         return hs;
     }
+
+#ifdef CONFIG_DEBUG_DISPLAY_CAPS
+    log_display_caps();
+#endif
 
     /* Sensors (optional) */
     hs = HAL_Sensors_Init();
