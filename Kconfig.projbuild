@@ -3,7 +3,7 @@ menu "ChronoLink HAL Board Pins"
 config BOARD_LCD_CS
     int "LCD CS GPIO"
     range 0 48
-    default 5
+    default 12
     help
         Chip-select pin for ST7796S display SPI device.
 
@@ -41,5 +41,39 @@ config BOARD_I2C_SCL
     default 22
     help
         SCL pin for HAL I2C master.
+
+endmenu
+
+
+menu "ChronoLink Display Configuration"
+
+choice BOARD_DISPLAY_TYPE
+    prompt "Select display driver"
+    default BOARD_DISPLAY_ST7796S
+    help
+        Choose which display backend ChronoLink HAL should use.
+        Only one display driver is compiled into the firmware.
+
+config BOARD_DISPLAY_NONE
+    bool "No display"
+    help
+        Disable all display drivers. Useful for headless builds.
+
+config BOARD_DISPLAY_ST7796S
+    bool "ST7796S SPI LCD"
+    help
+        Use the ST7796S TFT LCD driver.
+
+config BOARD_DISPLAY_MAX7219
+    bool "MAX7219 LED Matrix"
+    help
+        Use the MAX7219 LED matrix driver.
+
+config BOARD_DISPLAY_REMOTE
+    bool "Remote display (future)"
+    help
+        Use remote display backend (WiFi/HTTP/MQTT).
+
+endchoice
 
 endmenu
