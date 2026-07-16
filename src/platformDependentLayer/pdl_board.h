@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_err.h"
 
 /* Board identity and basic API for board-level initialization */
 
@@ -21,6 +22,7 @@ typedef struct {
 } pdl_board_info_t;
 
 const pdl_board_info_t *pdl_board_get_info(void);
-void pdl_board_init(void);
+esp_err_t pdl_board_init(void);
+bool valid_gpio(int pin);
 
 #endif /* PDL_BOARD_H */
