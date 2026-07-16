@@ -8,6 +8,8 @@
 #include "pdl_compat.h"
 #include "esp_log.h"
 
+bool valid_gpio(int pin);
+
 #ifdef CONFIG_DEBUG_DISPLAY_CAPS
 #include "esp_log.h"
 
@@ -68,10 +70,15 @@ hal_status_t HAL_Init(void)
     HAL_GPIO_Init();
 
     /* I2C */
-    hs = HAL_I2C_Init();
-    if (hs != HAL_OK) {
-        ESP_LOGE(TAG, "HAL_I2C_Init failed (%d)", (int)hs);
-        return hs;
+    if (valid_gpio(PDL_PIN_I2C_SCL) && valid_gpio(PDL_PIN_I2C_SDA)) {
+        hs = HAL_I2C_Init();
+        if (hs != HAL_OK) {
+            ESP_LOGE(TAG, "HAL_I2C_Init failed (%d)", (int)hs);
+            return hs;
+        }
+    } else {
+        ESP_LOGW(TAG, "Skipping I2C init due to invalid pins SCL=%d SDA=%d",
+                 PDL_PIN_I2C_SCL, PDL_PIN_I2C_SDA);
     }
 
     /* SPI wrapper does not strictly require an init on some platforms,

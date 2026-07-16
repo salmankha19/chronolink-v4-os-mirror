@@ -13,6 +13,7 @@ set(CHRONOLINK_HAL_SRCS
     "src/hal_display_remote.c"
     "src/hal_sensors.c"
     "src/pdl_board_esp32.c"
+    "${CMAKE_SOURCE_DIR}/src/platformDependentLayer/pdl_board.c"
 )
 
 # Append mock only when enabled in menuconfig
@@ -37,6 +38,7 @@ if(NOT DEFINED IDF_PATH)
     set(IDF_PATH $ENV{IDF_PATH})
 endif()
 target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/platformDependentLayer"
     "${IDF_PATH}/components/driver/include"
     "${IDF_PATH}/components/esp_driver_gpio/include"
     "${IDF_PATH}/components/esp_driver_spi/include"

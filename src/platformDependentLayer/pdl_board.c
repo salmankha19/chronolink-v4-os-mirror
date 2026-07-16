@@ -1,4 +1,5 @@
 #include "pdl_board.h"
+#include "esp_log.h"
 
 /* Minimal board info; extend per-board in future. */
 
@@ -15,7 +16,8 @@ const pdl_board_info_t *pdl_board_get_info(void)
     return &g_board_info;
 }
 
-void pdl_board_init(void)
+/* Conservative ESP32-S3 GPIO guard */
+bool valid_gpio(int pin)
 {
-    /* Board-level init placeholder (clocks, PSRAM, early peripherals). */
+    return (pin >= 0 && pin <= 48);
 }

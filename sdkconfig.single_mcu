@@ -3622,6 +3622,24 @@ CONFIG_WL_SECTOR_SIZE_4096=y
 # default:
 CONFIG_WL_SECTOR_SIZE=4096
 # end of Wear Levelling
+
+#
+# Chronolink HAL options
+#
+# default:
+# CONFIG_CHRONOLINK_USE_MOCK_DISPLAY is not set
+
+#
+# Chronolink HAL Pin Overrides
+#
+# default:
+CONFIG_PDL_PIN_I2C_SCL=22
+# default:
+CONFIG_PDL_PIN_I2C_SDA=21
+# default:
+CONFIG_PDL_I2C_FREQ_HZ=100000
+# end of Chronolink HAL Pin Overrides
+# end of Chronolink HAL options
 # end of Component config
 
 # default:

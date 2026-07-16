@@ -7,4 +7,26 @@ config CHRONOLINK_USE_MOCK_DISPLAY
       When enabled, the mock display driver will be compiled in addition to
       the real drivers for local builds without hardware.
 
+menu "Chronolink HAL Pin Overrides"
+
+config PDL_PIN_I2C_SCL
+    int "I2C SCL pin"
+    default 22
+    help
+      GPIO number for I2C SCL. Override for your board.
+
+config PDL_PIN_I2C_SDA
+    int "I2C SDA pin"
+    default 21
+    help
+      GPIO number for I2C SDA. Override for your board.
+
+config PDL_I2C_FREQ_HZ
+    int "I2C frequency (Hz)"
+    default 100000
+    help
+      I2C clock frequency.
+
+endmenu
+
 endmenu
