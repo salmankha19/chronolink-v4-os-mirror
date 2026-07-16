@@ -1,3 +1,4 @@
+#include "pdl_board.h"
 #include "pdl_pins.h"
 #include "pdl_capabilities.h"
 #include "pdl_partitions.h"
