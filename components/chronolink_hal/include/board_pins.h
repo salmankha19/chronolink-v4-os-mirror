@@ -35,3 +35,25 @@
 
 #define BOARD_I2C_SDA  CONFIG_BOARD_I2C_SDA
 #define BOARD_I2C_SCL  CONFIG_BOARD_I2C_SCL
+
+/* Kconfig-driven pin mapping with safe fallbacks */
+
+/* If Kconfig defines PDL_PIN_I2C_SDA/SCL, use those; otherwise fall back to safe defaults */
+#ifdef CONFIG_PDL_PIN_I2C_SDA
+#define BOARD_I2C_SDA CONFIG_PDL_PIN_I2C_SDA
+#else
+#define BOARD_I2C_SDA 21
+#endif
+
+#ifdef CONFIG_PDL_PIN_I2C_SCL
+#define BOARD_I2C_SCL CONFIG_PDL_PIN_I2C_SCL
+#else
+#define BOARD_I2C_SCL 22
+#endif
+
+/* Frequency fallback */
+#ifdef CONFIG_PDL_I2C_FREQ_HZ
+#define BOARD_I2C_FREQ_HZ CONFIG_PDL_I2C_FREQ_HZ
+#else
+#define BOARD_I2C_FREQ_HZ 100000
+#endif
