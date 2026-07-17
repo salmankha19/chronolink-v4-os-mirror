@@ -28,18 +28,23 @@ void pdl_board_config_pins(void)
 {
     ESP_LOGI(TAG, "Configuring board pins");
 
+    /* single gpio_config_t used and reinitialized per block */
+    gpio_config_t io_conf;
+    memset(&io_conf, 0, sizeof(io_conf));
+
     /* Status LED */
 #ifdef PDL_PIN_LED_STATUS
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PDL_PIN_LED_STATUS),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
-    };
+    /* reinitialize before use */
+    memset(&io_conf, 0, sizeof(io_conf));
+    io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_LED_STATUS);
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+
     if (validate_pin_or_log("LED_STATUS", PDL_PIN_LED_STATUS)) {
         gpio_config(&io_conf);
-        gpio_set_level(PDL_PIN_LED_STATUS, 0);
+        gpio_set_level((gpio_num_t)PDL_PIN_LED_STATUS, 0);
     } else {
         ESP_LOGW(TAG, "Skipping LED_STATUS config due to invalid pin");
     }
@@ -47,9 +52,10 @@ void pdl_board_config_pins(void)
 
     /* I2C pins (SDA, SCL) - leave as inputs if not used by driver init */
 #ifdef PDL_PIN_I2C_SDA
+    memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("I2C_SDA", PDL_PIN_I2C_SDA) &&
         validate_pin_or_log("I2C_SCL", PDL_PIN_I2C_SCL)) {
-        io_conf.pin_bit_mask = (1ULL << PDL_PIN_I2C_SDA) | (1ULL << PDL_PIN_I2C_SCL);
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_I2C_SDA) | (1ULL << (uint64_t)PDL_PIN_I2C_SCL);
         io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -62,10 +68,13 @@ void pdl_board_config_pins(void)
 
     /* SPI pins */
 #ifdef PDL_PIN_SPI_MOSI
+    memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("SPI_MOSI", PDL_PIN_SPI_MOSI) &&
         validate_pin_or_log("SPI_MISO", PDL_PIN_SPI_MISO) &&
         validate_pin_or_log("SPI_SCLK", PDL_PIN_SPI_SCLK)) {
-        io_conf.pin_bit_mask = (1ULL << PDL_PIN_SPI_MOSI) | (1ULL << PDL_PIN_SPI_MISO) | (1ULL << PDL_PIN_SPI_SCLK);
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_SPI_MOSI) |
+                               (1ULL << (uint64_t)PDL_PIN_SPI_MISO) |
+                               (1ULL << (uint64_t)PDL_PIN_SPI_SCLK);
         io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -78,15 +87,16 @@ void pdl_board_config_pins(void)
 
     /* Display control pins */
 #ifdef PDL_PIN_DISPLAY_DC
+    memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("DISPLAY_DC", PDL_PIN_DISPLAY_DC) &&
         validate_pin_or_log("DISPLAY_RST", PDL_PIN_DISPLAY_RST)) {
-        io_conf.pin_bit_mask = (1ULL << PDL_PIN_DISPLAY_DC) | (1ULL << PDL_PIN_DISPLAY_RST);
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_DISPLAY_DC) | (1ULL << (uint64_t)PDL_PIN_DISPLAY_RST);
         io_conf.mode = GPIO_MODE_OUTPUT;
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
         gpio_config(&io_conf);
-        gpio_set_level(PDL_PIN_DISPLAY_RST, 1);
+        gpio_set_level((gpio_num_t)PDL_PIN_DISPLAY_RST, 1);
     } else {
         ESP_LOGW(TAG, "Skipping display control pin config due to invalid pins");
     }
@@ -94,14 +104,15 @@ void pdl_board_config_pins(void)
 
     /* Backlight */
 #ifdef PDL_PIN_DISPLAY_BL
+    memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("DISPLAY_BL", PDL_PIN_DISPLAY_BL)) {
-        io_conf.pin_bit_mask = (1ULL << PDL_PIN_DISPLAY_BL);
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_DISPLAY_BL);
         io_conf.mode = GPIO_MODE_OUTPUT;
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
         gpio_config(&io_conf);
-        gpio_set_level(PDL_PIN_DISPLAY_BL, 1);
+        gpio_set_level((gpio_num_t)PDL_PIN_DISPLAY_BL, 1);
     } else {
         ESP_LOGW(TAG, "Skipping display backlight config due to invalid pin");
     }
@@ -109,8 +120,9 @@ void pdl_board_config_pins(void)
 
     /* RTC interrupt pin */
 #ifdef PDL_PIN_RTC_INT
+    memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("RTC_INT", PDL_PIN_RTC_INT)) {
-        io_conf.pin_bit_mask = (1ULL << PDL_PIN_RTC_INT);
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_RTC_INT);
         io_conf.mode = GPIO_MODE_INPUT;
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
