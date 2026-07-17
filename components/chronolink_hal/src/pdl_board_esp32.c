@@ -5,6 +5,7 @@
 #include "hal.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include <string.h>
 
 static const char *TAG = "pdl_board";
 
@@ -32,17 +33,24 @@ void pdl_board_config_pins(void)
     gpio_config_t io_conf;
     memset(&io_conf, 0, sizeof(io_conf));
 
+    /* Debug: raw macro values (temporary, remove when stable) */
+#ifdef PDL_PIN_LED_STATUS
+    ESP_LOGD(TAG, "DEBUG: PDL_PIN_LED_STATUS=%d", (int)PDL_PIN_LED_STATUS);
+#endif
+#ifdef PDL_PIN_I2C_SDA
+    ESP_LOGD(TAG, "DEBUG: PDL_PIN_I2C_SDA=%d PDL_PIN_I2C_SCL=%d", (int)PDL_PIN_I2C_SDA, (int)PDL_PIN_I2C_SCL);
+#endif
+
     /* Status LED */
 #ifdef PDL_PIN_LED_STATUS
-    /* reinitialize before use */
     memset(&io_conf, 0, sizeof(io_conf));
-    io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_LED_STATUS);
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-
     if (validate_pin_or_log("LED_STATUS", PDL_PIN_LED_STATUS)) {
+        io_conf.pin_bit_mask = (1ULL << (uint64_t)PDL_PIN_LED_STATUS);
+        io_conf.mode = GPIO_MODE_OUTPUT;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config LED_STATUS mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
         gpio_set_level((gpio_num_t)PDL_PIN_LED_STATUS, 0);
     } else {
@@ -51,7 +59,7 @@ void pdl_board_config_pins(void)
 #endif
 
     /* I2C pins (SDA, SCL) - leave as inputs if not used by driver init */
-#ifdef PDL_PIN_I2C_SDA
+#if defined(PDL_PIN_I2C_SDA) && defined(PDL_PIN_I2C_SCL)
     memset(&io_conf, 0, sizeof(io_conf));
     if (validate_pin_or_log("I2C_SDA", PDL_PIN_I2C_SDA) &&
         validate_pin_or_log("I2C_SCL", PDL_PIN_I2C_SCL)) {
@@ -60,6 +68,7 @@ void pdl_board_config_pins(void)
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config I2C pins mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
     } else {
         ESP_LOGW(TAG, "Skipping I2C pin config due to invalid SDA/SCL pins");
@@ -79,6 +88,7 @@ void pdl_board_config_pins(void)
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config SPI pins mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
     } else {
         ESP_LOGW(TAG, "Skipping SPI pin config due to invalid pins");
@@ -95,6 +105,7 @@ void pdl_board_config_pins(void)
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config display ctrl mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
         gpio_set_level((gpio_num_t)PDL_PIN_DISPLAY_RST, 1);
     } else {
@@ -111,6 +122,7 @@ void pdl_board_config_pins(void)
         io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config display BL mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
         gpio_set_level((gpio_num_t)PDL_PIN_DISPLAY_BL, 1);
     } else {
@@ -127,6 +139,7 @@ void pdl_board_config_pins(void)
         io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
         io_conf.intr_type = GPIO_INTR_NEGEDGE;
+        ESP_LOGD(TAG, "Config RTC_INT mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
     } else {
         ESP_LOGW(TAG, "Skipping RTC_INT config due to invalid pin");
