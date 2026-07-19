@@ -7,6 +7,7 @@
 #include "hal_sensors.h"
 #include "pdl_compat.h"
 #include "esp_log.h"
+#include "esp_err.h"
 
 bool valid_gpio(int pin);
 
@@ -61,8 +62,9 @@ hal_status_t HAL_Init(void)
     hal_status_t hs;
 
     /* Board level platform init (PDL). Keep existing behavior that returns esp_err_t */
-    if (pdl_board_init() != ESP_OK) {
-        ESP_LOGE(TAG, "pdl_board_init failed");
+    esp_err_t board_err = pdl_board_init();
+    if (board_err != ESP_OK) {
+        ESP_LOGE(TAG, "pdl_board_init failed: %s (%d)", esp_err_to_name(board_err), (int)board_err);
         return HAL_ERR_INIT;
     }
 

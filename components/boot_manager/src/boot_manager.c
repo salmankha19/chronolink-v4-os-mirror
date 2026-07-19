@@ -7,6 +7,7 @@
 #include "display_api.h"
 #include "event_bus.h"
 #include "boot_events.h"
+#include "driver/gpio.h"
 #include <string.h>
 
 /* HAL includes used by boot manager for safe-mode and HAL init */
@@ -22,6 +23,32 @@ static const char *TAG = "boot_manager";
 int boot_manager_init(boot_flags_t flags);
 static void detect_safe_mode(void);
 static void enter_recovery(void); /* stubbed recovery handler */
+
+/* GPIO2 is boot-sensitive on many ESP32 designs; drive it high early to avoid conflicts. */
+static void force_gpio2_safe_state(void)
+{
+    gpio_config_t io;
+    memset(&io, 0, sizeof(io));
+    io.pin_bit_mask = (1ULL << 2);
+    io.mode = GPIO_MODE_OUTPUT;
+    io.pull_up_en = GPIO_PULLUP_DISABLE;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+
+    esp_err_t err = gpio_config(&io);
+    if (err != ESP_OK) {
+        ESP_LOGE("HWINIT", "GPIO2 safe-state config failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = gpio_set_level(GPIO_NUM_2, 1);
+    if (err != ESP_OK) {
+        ESP_LOGE("HWINIT", "GPIO2 safe-state set failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    ESP_LOGI("HWINIT", "GPIO2 forced HIGH early (boot-sensitive pin)");
+}
 
 /* Helper: publish a boot stage event */
 static void publish_boot_stage(boot_stage_t stage, boot_status_t status, int err)
@@ -115,6 +142,8 @@ int boot_manager_init(boot_flags_t flags)
 {
     boot_flags = flags;
     ESP_LOGI(TAG, "Boot manager start");
+
+    force_gpio2_safe_state();
 
     /* NVS stage */
     publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_START, 0);

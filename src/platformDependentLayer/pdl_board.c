@@ -19,5 +19,5 @@ const pdl_board_info_t *pdl_board_get_info(void)
 /* Conservative ESP32-S3 GPIO guard */
 bool valid_gpio(int pin)
 {
-    return (pin >= 0 && pin <= 48);
+    return (pin >= 0 && pin <= 47);
 }
