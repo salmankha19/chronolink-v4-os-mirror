@@ -5,6 +5,7 @@
 
 static const char *TAG = "HAL_I2C";
 static bool i2c_ready = false;
+static bool i2c_disabled = false;
 
 #ifndef HAL_I2C_PORT
 #define HAL_I2C_PORT I2C_NUM_0
@@ -18,9 +19,29 @@ static bool i2c_ready = false;
 #define HAL_I2C_TIMEOUT_MS 100
 #endif
 
+static bool hal_i2c_pins_valid(void)
+{
+    if (BOARD_I2C_SDA < 0 || BOARD_I2C_SDA >= GPIO_PIN_COUNT ||
+        BOARD_I2C_SCL < 0 || BOARD_I2C_SCL >= GPIO_PIN_COUNT) {
+        ESP_LOGW(TAG, "Skipping I2C init due to invalid pins SDA=%d SCL=%d",
+                 BOARD_I2C_SDA, BOARD_I2C_SCL);
+        return false;
+    }
+    return true;
+}
+
 hal_status_t HAL_I2C_Init(void)
 {
+    if (i2c_disabled) {
+        return HAL_OK;
+    }
+
     if (i2c_ready) {
+        return HAL_OK;
+    }
+
+    if (!hal_i2c_pins_valid()) {
+        i2c_disabled = true;
         return HAL_OK;
     }
 
@@ -57,6 +78,10 @@ hal_status_t HAL_I2C_Init(void)
 
 hal_status_t HAL_I2C_Read(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint16_t len)
 {
+    if (i2c_disabled) {
+        return HAL_ERR_INIT;
+    }
+
     if (!buf || len == 0) {
         return HAL_ERR_DEV;
     }
@@ -83,6 +108,10 @@ hal_status_t HAL_I2C_Read(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint16_t 
 
 hal_status_t HAL_I2C_Write(uint8_t dev_addr, uint8_t reg, const uint8_t *data, uint16_t len)
 {
+    if (i2c_disabled) {
+        return HAL_ERR_INIT;
+    }
+
     if (len > 0 && !data) {
         return HAL_ERR_DEV;
     }

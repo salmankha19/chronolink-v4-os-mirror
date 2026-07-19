@@ -2,6 +2,7 @@
 
 #include "sdkconfig.h"
 #include "pdl_pins.h"
+#include <stdint.h>
 
 /* LCD control config fallbacks (preserve existing behavior) */
 #ifndef CONFIG_BOARD_LCD_CS
@@ -38,12 +39,12 @@
 #endif
 
 /* --------------------------------------------------------------------------
-   I2C pin mapping and frequency
-   - Prefer CONFIG_PDL_PIN_* if present (your new Kconfig)
-   - Otherwise accept CONFIG_BOARD_I2C_* if present
-   - Otherwise fall back to safe dev defaults
-   - Use #ifndef BOARD_I2C_* to avoid redefinition errors
-   -------------------------------------------------------------------------- */
+  I2C pin mapping and frequency
+  - Prefer CONFIG_PDL_PIN_* if present (new Kconfig)
+  - Otherwise accept CONFIG_BOARD_I2C_* if present
+  - Otherwise fall back to safe dev defaults
+  - Use #ifndef BOARD_I2C_* to avoid redefinition errors
+  -------------------------------------------------------------------------- */
 
 /* BOARD_I2C_SDA */
 #ifndef BOARD_I2C_SDA
