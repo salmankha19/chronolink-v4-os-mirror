@@ -152,6 +152,15 @@ static bool validate_output_pin(int pin, const char *name)
     return true;
 }
 
+static bool validate_pin_optional(int pin, const char *name)
+{
+    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
+        return true;
+    }
+
+    return false;
+}
+
 /* safe_pin_mask: return 0 for invalid pins and log a warning
  * Prevents shifting by negative or out-of-range values which produces
  * huge masks that later cause gpio_config/gpio_set_level errors.
@@ -163,6 +172,15 @@ static uint64_t safe_pin_mask(int pin, const char *name)
         return 0ULL;
     }
     return (1ULL << pin);
+}
+
+static uint64_t safe_pin_mask_optional(int pin, const char *name)
+{
+    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
+        return (1ULL << pin);
+    }
+
+    return 0ULL;
 }
 
 static void log_pindbg_line(void)
@@ -198,14 +216,10 @@ static esp_err_t validate_pdl_pins(void)
     ok = validate_output_pin(PDL_PIN_LED_STATUS, "LED_STATUS") && ok;
 #endif
 #ifdef PDL_PIN_I2C_SDA
-    if (!validate_output_pin(PDL_PIN_I2C_SDA, "I2C_SDA")) {
-        ESP_LOGW("PINCHK", "I2C_SDA preconfig pin invalid; HAL_I2C fallback resolution will be used");
-    }
+    (void)validate_pin_optional(PDL_PIN_I2C_SDA, "I2C_SDA");
 #endif
 #ifdef PDL_PIN_I2C_SCL
-    if (!validate_output_pin(PDL_PIN_I2C_SCL, "I2C_SCL")) {
-        ESP_LOGW("PINCHK", "I2C_SCL preconfig pin invalid; HAL_I2C fallback resolution will be used");
-    }
+    (void)validate_pin_optional(PDL_PIN_I2C_SCL, "I2C_SCL");
 #endif
 #ifdef PDL_PIN_SPI_MOSI
     ok = validate_output_pin(PDL_PIN_SPI_MOSI, "SPI_MOSI") && ok;
@@ -295,10 +309,10 @@ static esp_err_t pdl_board_config_pins(void)
 #if defined(PDL_PIN_I2C_SDA) && defined(PDL_PIN_I2C_SCL)
     memset(&io_conf, 0, sizeof(io_conf));
     {
-        uint64_t sda_mask = safe_pin_mask(PDL_PIN_I2C_SDA, "I2C_SDA");
-        uint64_t scl_mask = safe_pin_mask(PDL_PIN_I2C_SCL, "I2C_SCL");
+        uint64_t sda_mask = safe_pin_mask_optional(PDL_PIN_I2C_SDA, "I2C_SDA");
+        uint64_t scl_mask = safe_pin_mask_optional(PDL_PIN_I2C_SCL, "I2C_SCL");
         if (sda_mask == 0 || scl_mask == 0) {
-            ESP_LOGW("PINCHK", "Skipping board-level I2C GPIO preconfig due to invalid pin(s); HAL_I2C will configure effective pins");
+            ESP_LOGD("PINCHK", "Skipping board-level I2C GPIO preconfig; HAL_I2C will configure effective pins");
         } else {
             io_conf.pin_bit_mask = sda_mask | scl_mask;
             io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;

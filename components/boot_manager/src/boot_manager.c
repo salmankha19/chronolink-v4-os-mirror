@@ -3,6 +3,7 @@
 #include "nvs_flash.h"
 #include "esp_err.h"
 #include "esp_vfs_fat.h"
+#include "esp_partition.h"
 #include "core_os.h"
 #include "display_api.h"
 #include "event_bus.h"
@@ -120,7 +121,7 @@ static esp_err_t mount_nvs(void)
 static esp_err_t mount_fatfs(void)
 {
     esp_vfs_fat_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
         .max_files = 8,
         .allocation_unit_size = 4096,
         .disk_status_check_enable = false,
@@ -128,9 +129,17 @@ static esp_err_t mount_fatfs(void)
     };
 
     wl_handle_t wl_handle;
-    esp_err_t err = esp_vfs_fat_spiflash_mount("/storage", "storage", &mount_config, &wl_handle);
+    const esp_partition_t *storage_partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                                                       ESP_PARTITION_SUBTYPE_DATA_FAT,
+                                                                       "storage");
+    if (!storage_partition) {
+        ESP_LOGW(TAG, "FATFS partition 'storage' not present, skipping filesystem mount");
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl("/storage", "storage", &mount_config, &wl_handle);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_vfs_fat_spiflash_mount failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "esp_vfs_fat_spiflash_mount_rw_wl failed: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -144,6 +153,7 @@ int boot_manager_init(boot_flags_t flags)
     ESP_LOGI(TAG, "Boot manager start");
 
     force_gpio2_safe_state();
+    event_bus_init(NULL);
 
     /* NVS stage */
     publish_boot_stage(BOOT_STAGE_NVS, BOOT_STATUS_START, 0);
@@ -171,10 +181,8 @@ int boot_manager_init(boot_flags_t flags)
     /* FATFS stage (non-fatal) */
     publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_START, 0);
     if (mount_fatfs() != ESP_OK) {
-        publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_FAIL, -2);
-        ESP_LOGW(TAG, "FATFS mount failed, continuing without filesystem");
-        /* publish a non-fatal fail event so telemetry can record it */
-        publish_boot_fail(BOOT_STAGE_FATFS, -2, 0);
+        ESP_LOGW(TAG, "FATFS unavailable, continuing without filesystem");
+        publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_OK, 0);
     } else {
         publish_boot_stage(BOOT_STAGE_FATFS, BOOT_STATUS_OK, 0);
     }

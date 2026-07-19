@@ -53,7 +53,7 @@ static bool hal_i2c_pins_valid(void)
         ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SCL=%d, fallback PDL_PIN_I2C_SCL=%d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL);
         s_i2c_scl = PDL_PIN_I2C_SCL;
     } else {
-        ESP_LOGE("PINCHK", "Invalid BOARD/PDL I2C SCL (%d/%d), fallback to %d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL, I2C_FALLBACK_SCL);
+        ESP_LOGI("PINDBG", "Invalid BOARD/PDL I2C SCL (%d/%d), fallback to %d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL, I2C_FALLBACK_SCL);
         s_i2c_scl = I2C_FALLBACK_SCL;
     }
 

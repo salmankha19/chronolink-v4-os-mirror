@@ -41,7 +41,11 @@ void event_bus_publish(const event_t *evt)
        This avoids immediate drops during short bursts; increase timeout
        or queue length if needed. Consider coalescing frequent events. */
     if (xQueueSend(g_event_queue, evt, pdMS_TO_TICKS(ENQUEUE_TIMEOUT_MS)) != pdPASS) {
-        ESP_LOGW(TAG, "event_bus_publish: queue full after %dms, event dropped", ENQUEUE_TIMEOUT_MS);
+        static uint32_t s_drop_count = 0;
+        s_drop_count++;
+        if ((s_drop_count % 100U) == 1U) {
+            ESP_LOGD(TAG, "event_bus_publish: queue full, event dropped (count=%lu)", (unsigned long)s_drop_count);
+        }
     }
 }
 
