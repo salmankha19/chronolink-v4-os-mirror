@@ -66,7 +66,7 @@
     #define BOARD_I2C_SCL CONFIG_BOARD_I2C_SCL
   #else
     /* safe dev default */
-    #define BOARD_I2C_SCL 22
+    #define BOARD_I2C_SCL 26
   #endif
 #endif
 

@@ -130,12 +130,26 @@ static const char *TAG = "pdl_board";
 
 static bool validate_pin(int pin, const char *name)
 {
-    if (pin >= 0 && pin <= 47) {
+    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
         return true;
     }
 
     ESP_LOGE("PINCHK", "Invalid pin for %s: %d", name, pin);
     return false;
+}
+
+static bool validate_output_pin(int pin, const char *name)
+{
+    if (!validate_pin(pin, name)) {
+        return false;
+    }
+
+    if (!GPIO_IS_VALID_OUTPUT_GPIO(pin)) {
+        ESP_LOGE("PINCHK", "Pin for %s is not output-capable: %d", name, pin);
+        return false;
+    }
+
+    return true;
 }
 
 /* safe_pin_mask: return 0 for invalid pins and log a warning
@@ -181,34 +195,38 @@ static esp_err_t validate_pdl_pins(void)
     bool ok = true;
 
 #ifdef PDL_PIN_LED_STATUS
-    ok = validate_pin(PDL_PIN_LED_STATUS, "LED_STATUS") && ok;
+    ok = validate_output_pin(PDL_PIN_LED_STATUS, "LED_STATUS") && ok;
 #endif
 #ifdef PDL_PIN_I2C_SDA
-    ok = validate_pin(PDL_PIN_I2C_SDA, "I2C_SDA") && ok;
+    if (!validate_output_pin(PDL_PIN_I2C_SDA, "I2C_SDA")) {
+        ESP_LOGW("PINCHK", "I2C_SDA preconfig pin invalid; HAL_I2C fallback resolution will be used");
+    }
 #endif
 #ifdef PDL_PIN_I2C_SCL
-    ok = validate_pin(PDL_PIN_I2C_SCL, "I2C_SCL") && ok;
+    if (!validate_output_pin(PDL_PIN_I2C_SCL, "I2C_SCL")) {
+        ESP_LOGW("PINCHK", "I2C_SCL preconfig pin invalid; HAL_I2C fallback resolution will be used");
+    }
 #endif
 #ifdef PDL_PIN_SPI_MOSI
-    ok = validate_pin(PDL_PIN_SPI_MOSI, "SPI_MOSI") && ok;
+    ok = validate_output_pin(PDL_PIN_SPI_MOSI, "SPI_MOSI") && ok;
 #endif
 #ifdef PDL_PIN_SPI_MISO
     ok = validate_pin(PDL_PIN_SPI_MISO, "SPI_MISO") && ok;
 #endif
 #ifdef PDL_PIN_SPI_SCLK
-    ok = validate_pin(PDL_PIN_SPI_SCLK, "SPI_SCLK") && ok;
+    ok = validate_output_pin(PDL_PIN_SPI_SCLK, "SPI_SCLK") && ok;
 #endif
 #ifdef PDL_PIN_SPI_CS_DISPLAY
-    ok = validate_pin(PDL_PIN_SPI_CS_DISPLAY, "SPI_CS_DISPLAY") && ok;
+    ok = validate_output_pin(PDL_PIN_SPI_CS_DISPLAY, "SPI_CS_DISPLAY") && ok;
 #endif
 #ifdef PDL_PIN_DISPLAY_DC
-    ok = validate_pin(PDL_PIN_DISPLAY_DC, "DISPLAY_DC") && ok;
+    ok = validate_output_pin(PDL_PIN_DISPLAY_DC, "DISPLAY_DC") && ok;
 #endif
 #ifdef PDL_PIN_DISPLAY_RST
-    ok = validate_pin(PDL_PIN_DISPLAY_RST, "DISPLAY_RST") && ok;
+    ok = validate_output_pin(PDL_PIN_DISPLAY_RST, "DISPLAY_RST") && ok;
 #endif
 #ifdef PDL_PIN_DISPLAY_BL
-    ok = validate_pin(PDL_PIN_DISPLAY_BL, "DISPLAY_BL") && ok;
+    ok = validate_output_pin(PDL_PIN_DISPLAY_BL, "DISPLAY_BL") && ok;
 #endif
 #ifdef PDL_PIN_RTC_INT
     ok = validate_pin(PDL_PIN_RTC_INT, "RTC_INT") && ok;
@@ -280,15 +298,16 @@ static esp_err_t pdl_board_config_pins(void)
         uint64_t sda_mask = safe_pin_mask(PDL_PIN_I2C_SDA, "I2C_SDA");
         uint64_t scl_mask = safe_pin_mask(PDL_PIN_I2C_SCL, "I2C_SCL");
         if (sda_mask == 0 || scl_mask == 0) {
-            return ESP_ERR_INVALID_ARG;
+            ESP_LOGW("PINCHK", "Skipping board-level I2C GPIO preconfig due to invalid pin(s); HAL_I2C will configure effective pins");
+        } else {
+            io_conf.pin_bit_mask = sda_mask | scl_mask;
+            io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
+            io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+            io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+            io_conf.intr_type = GPIO_INTR_DISABLE;
+            ESP_LOGD(TAG, "Config I2C pins mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
+            gpio_config(&io_conf);
         }
-        io_conf.pin_bit_mask = sda_mask | scl_mask;
-        io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
-        io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io_conf.intr_type = GPIO_INTR_DISABLE;
-        ESP_LOGD(TAG, "Config I2C pins mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
-        gpio_config(&io_conf);
     }
 #endif
 

@@ -10,14 +10,14 @@
    For ESP32-S3 WROOM-1 N16R8, avoid GPIO35..GPIO37 (PSRAM-connected). */
 
 #define PDL_PIN_LED_STATUS        2
-#define PDL_PIN_SPI_MOSI         23
+#define PDL_PIN_SPI_MOSI         11
 #define PDL_PIN_SPI_MISO         19
 #define PDL_PIN_SPI_SCLK         18
 #define PDL_PIN_SPI_CS_DISPLAY   5
 #define PDL_PIN_RTC_INT          4
 #define PDL_PIN_DISPLAY_DC       16
 #define PDL_PIN_DISPLAY_RST      17
-#define PDL_PIN_DISPLAY_BL       25
+#define PDL_PIN_DISPLAY_BL       27
 
 /* Legacy aliases kept for older pil_config callers. */
 #define PDL_PIN_SPI_SCK          PDL_PIN_SPI_SCLK
@@ -30,7 +30,7 @@
 #ifdef CONFIG_PDL_PIN_I2C_SCL
 #define PDL_PIN_I2C_SCL CONFIG_PDL_PIN_I2C_SCL
 #else
-#define PDL_PIN_I2C_SCL 22
+#define PDL_PIN_I2C_SCL 26
 #endif
 #endif
 
@@ -63,7 +63,7 @@
 #define PDL_PIN_I2C_SDA           21  /* dev remap */
 
 #undef PDL_PIN_I2C_SCL
-#define PDL_PIN_I2C_SCL           22  /* dev remap */
+#define PDL_PIN_I2C_SCL           26  /* dev remap */
 
 #undef PDL_PIN_DISPLAY_DC
 #define PDL_PIN_DISPLAY_DC        16  /* dev remap */
@@ -72,7 +72,7 @@
 #define PDL_PIN_DISPLAY_RST       17  /* dev remap */
 
 #undef PDL_PIN_DISPLAY_BL
-#define PDL_PIN_DISPLAY_BL        25  /* dev remap */
+#define PDL_PIN_DISPLAY_BL        27  /* dev remap */
 
 /* Remove DEV_PIN_MAP before release builds. */
 #endif

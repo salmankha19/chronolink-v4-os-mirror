@@ -22,22 +22,42 @@ static int s_i2c_scl = -1;
 #define HAL_I2C_TIMEOUT_MS 100
 #endif
 
+#ifndef I2C_FALLBACK_SDA
+#define I2C_FALLBACK_SDA 21
+#endif
+
+#ifndef I2C_FALLBACK_SCL
+#define I2C_FALLBACK_SCL 26
+#endif
+
+static bool is_valid_i2c_gpio(int pin)
+{
+    return GPIO_IS_VALID_GPIO(pin) && GPIO_IS_VALID_OUTPUT_GPIO(pin);
+}
+
 static bool hal_i2c_pins_valid(void)
 {
-    const bool board_sda_ok = (BOARD_I2C_SDA >= 0 && BOARD_I2C_SDA <= 47);
-    const bool board_scl_ok = (BOARD_I2C_SCL >= 0 && BOARD_I2C_SCL <= 47);
-
-    s_i2c_sda = board_sda_ok ? BOARD_I2C_SDA : PDL_PIN_I2C_SDA;
-    s_i2c_scl = board_scl_ok ? BOARD_I2C_SCL : PDL_PIN_I2C_SCL;
-
-    if (!board_sda_ok) {
+    if (is_valid_i2c_gpio(BOARD_I2C_SDA)) {
+        s_i2c_sda = BOARD_I2C_SDA;
+    } else if (is_valid_i2c_gpio(PDL_PIN_I2C_SDA)) {
         ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SDA=%d, fallback PDL_PIN_I2C_SDA=%d", BOARD_I2C_SDA, PDL_PIN_I2C_SDA);
-    }
-    if (!board_scl_ok) {
-        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SCL=%d, fallback PDL_PIN_I2C_SCL=%d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL);
+        s_i2c_sda = PDL_PIN_I2C_SDA;
+    } else {
+        ESP_LOGE("PINCHK", "Invalid BOARD/PDL I2C SDA (%d/%d), fallback to %d", BOARD_I2C_SDA, PDL_PIN_I2C_SDA, I2C_FALLBACK_SDA);
+        s_i2c_sda = I2C_FALLBACK_SDA;
     }
 
-    if (s_i2c_sda < 0 || s_i2c_sda > 47 || s_i2c_scl < 0 || s_i2c_scl > 47) {
+    if (is_valid_i2c_gpio(BOARD_I2C_SCL)) {
+        s_i2c_scl = BOARD_I2C_SCL;
+    } else if (is_valid_i2c_gpio(PDL_PIN_I2C_SCL)) {
+        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SCL=%d, fallback PDL_PIN_I2C_SCL=%d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL);
+        s_i2c_scl = PDL_PIN_I2C_SCL;
+    } else {
+        ESP_LOGE("PINCHK", "Invalid BOARD/PDL I2C SCL (%d/%d), fallback to %d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL, I2C_FALLBACK_SCL);
+        s_i2c_scl = I2C_FALLBACK_SCL;
+    }
+
+    if (!is_valid_i2c_gpio(s_i2c_sda) || !is_valid_i2c_gpio(s_i2c_scl)) {
         ESP_LOGE("PINCHK", "Invalid effective I2C pins SDA=%d SCL=%d", s_i2c_sda, s_i2c_scl);
         return false;
     }
