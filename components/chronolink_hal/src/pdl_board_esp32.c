@@ -124,9 +124,13 @@ static const char *TAG = "pdl_board";
 #define PINDBG_SAFE_MODE -1
 #endif
 
+#ifndef GPIO_PIN_COUNT
+#define GPIO_PIN_COUNT 48
+#endif
+
 static bool validate_pin(int pin, const char *name)
 {
-    if (pin >= 0 && pin <= 47) {
+    if (pin >= 0 && pin < GPIO_PIN_COUNT) {
         return true;
     }
 
@@ -134,11 +138,15 @@ static bool validate_pin(int pin, const char *name)
     return false;
 }
 
+/* safe_pin_mask: return 0 for invalid pins and log a warning
+ * Prevents shifting by negative or out-of-range values which produces
+ * huge masks that later cause gpio_config/gpio_set_level errors.
+ */
 static uint64_t safe_pin_mask(int pin, const char *name)
 {
     if (!validate_pin(pin, name)) {
-        ESP_LOGE("PINCHK", "Mask skipped for %s due to invalid pin", name);
-        return 0;
+        ESP_LOGW("PINCHK", "Mask skipped for %s due to invalid pin %d", name, pin);
+        return 0ULL;
     }
     return (1ULL << pin);
 }
