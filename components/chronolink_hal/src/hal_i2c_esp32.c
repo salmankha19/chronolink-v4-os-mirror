@@ -1,11 +1,14 @@
 ﻿#include "hal_i2c.h"
 #include "board_pins.h"
+#include "pdl_pins.h"
 #include "esp_log.h"
 #include "driver/i2c.h"
 
 static const char *TAG = "HAL_I2C";
 static bool i2c_ready = false;
 static bool i2c_disabled = false;
+static int s_i2c_sda = -1;
+static int s_i2c_scl = -1;
 
 #ifndef HAL_I2C_PORT
 #define HAL_I2C_PORT I2C_NUM_0
@@ -21,12 +24,26 @@ static bool i2c_disabled = false;
 
 static bool hal_i2c_pins_valid(void)
 {
-    if (BOARD_I2C_SDA < 0 || BOARD_I2C_SDA >= GPIO_PIN_COUNT ||
-        BOARD_I2C_SCL < 0 || BOARD_I2C_SCL >= GPIO_PIN_COUNT) {
-        ESP_LOGW(TAG, "Skipping I2C init due to invalid pins SDA=%d SCL=%d",
-                 BOARD_I2C_SDA, BOARD_I2C_SCL);
+    const bool board_sda_ok = (BOARD_I2C_SDA >= 0 && BOARD_I2C_SDA <= 47);
+    const bool board_scl_ok = (BOARD_I2C_SCL >= 0 && BOARD_I2C_SCL <= 47);
+
+    s_i2c_sda = board_sda_ok ? BOARD_I2C_SDA : PDL_PIN_I2C_SDA;
+    s_i2c_scl = board_scl_ok ? BOARD_I2C_SCL : PDL_PIN_I2C_SCL;
+
+    if (!board_sda_ok) {
+        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SDA=%d, fallback PDL_PIN_I2C_SDA=%d", BOARD_I2C_SDA, PDL_PIN_I2C_SDA);
+    }
+    if (!board_scl_ok) {
+        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SCL=%d, fallback PDL_PIN_I2C_SCL=%d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL);
+    }
+
+    if (s_i2c_sda < 0 || s_i2c_sda > 47 || s_i2c_scl < 0 || s_i2c_scl > 47) {
+        ESP_LOGE("PINCHK", "Invalid effective I2C pins SDA=%d SCL=%d", s_i2c_sda, s_i2c_scl);
         return false;
     }
+
+    ESP_LOGI("PINDBG", "I2C effective pins SDA=%d SCL=%d (BOARD_SDA=%d BOARD_SCL=%d)",
+             s_i2c_sda, s_i2c_scl, BOARD_I2C_SDA, BOARD_I2C_SCL);
     return true;
 }
 
@@ -47,8 +64,8 @@ hal_status_t HAL_I2C_Init(void)
 
     const i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = BOARD_I2C_SDA,
-        .scl_io_num = BOARD_I2C_SCL,
+        .sda_io_num = s_i2c_sda,
+        .scl_io_num = s_i2c_scl,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
         .master.clk_speed = HAL_I2C_FREQ_HZ,
@@ -72,7 +89,7 @@ hal_status_t HAL_I2C_Init(void)
     }
 
     i2c_ready = true;
-    ESP_LOGI(TAG, "I2C master initialized on SDA=%d SCL=%d", BOARD_I2C_SDA, BOARD_I2C_SCL);
+    ESP_LOGI(TAG, "I2C master initialized on SDA=%d SCL=%d", s_i2c_sda, s_i2c_scl);
     return HAL_OK;
 }
 

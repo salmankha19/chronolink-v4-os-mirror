@@ -130,7 +130,7 @@ static const char *TAG = "pdl_board";
 
 static bool validate_pin(int pin, const char *name)
 {
-    if (pin >= 0 && pin < GPIO_PIN_COUNT) {
+    if (pin >= 0 && pin <= 47) {
         return true;
     }
 

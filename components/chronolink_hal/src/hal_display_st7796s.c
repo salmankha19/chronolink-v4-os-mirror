@@ -17,7 +17,7 @@ void st7796s_send_command(uint8_t cmd)
         return;
     }
 
-    board_gpio_set_level(BOARD_LCD_DC, 0, "BOARD_LCD_DC");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_DC, 0, "BOARD_LCD_DC");
 
     spi_transaction_t t = (spi_transaction_t){
         .length = 8,
@@ -35,7 +35,7 @@ void st7796s_send_data(const uint8_t *data, size_t len)
         return;
     }
 
-    board_gpio_set_level(BOARD_LCD_DC, 1, "BOARD_LCD_DC");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_DC, 1, "BOARD_LCD_DC");
 
     spi_transaction_t t = (spi_transaction_t){
         .length = len * 8,
@@ -49,22 +49,22 @@ void st7796s_send_data(const uint8_t *data, size_t len)
 
 void st7796s_init(void)
 {
-    board_gpio_set_direction(BOARD_LCD_CS, GPIO_MODE_OUTPUT, "BOARD_LCD_CS");
-    board_gpio_set_direction(BOARD_LCD_DC, GPIO_MODE_OUTPUT, "BOARD_LCD_DC");
-    board_gpio_set_direction(BOARD_LCD_RST, GPIO_MODE_OUTPUT, "BOARD_LCD_RST");
-    board_gpio_set_direction(BOARD_LCD_BL, GPIO_MODE_OUTPUT, "BOARD_LCD_BL");
+    board_gpio_set_direction_maskaware((uint64_t)BOARD_LCD_CS, GPIO_MODE_OUTPUT, "BOARD_LCD_CS");
+    board_gpio_set_direction_maskaware((uint64_t)BOARD_LCD_DC, GPIO_MODE_OUTPUT, "BOARD_LCD_DC");
+    board_gpio_set_direction_maskaware((uint64_t)BOARD_LCD_RST, GPIO_MODE_OUTPUT, "BOARD_LCD_RST");
+    board_gpio_set_direction_maskaware((uint64_t)BOARD_LCD_BL, GPIO_MODE_OUTPUT, "BOARD_LCD_BL");
 
-    board_gpio_set_level(BOARD_LCD_CS, 1, "BOARD_LCD_CS");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_CS, 1, "BOARD_LCD_CS");
 
     st7796s_reset();
-    board_gpio_set_level(BOARD_LCD_BL, 1, "BOARD_LCD_BL");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_BL, 1, "BOARD_LCD_BL");
 }
 
 void st7796s_reset(void)
 {
-    board_gpio_set_level(BOARD_LCD_RST, 0, "BOARD_LCD_RST");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_RST, 0, "BOARD_LCD_RST");
     vTaskDelay(pdMS_TO_TICKS(50));
-    board_gpio_set_level(BOARD_LCD_RST, 1, "BOARD_LCD_RST");
+    board_gpio_set_level_maskaware((uint64_t)BOARD_LCD_RST, 1, "BOARD_LCD_RST");
     vTaskDelay(pdMS_TO_TICKS(120));
 }
 

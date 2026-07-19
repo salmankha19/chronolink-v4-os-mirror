@@ -46,17 +46,21 @@ static void iterate_mask_and_apply(uint64_t mask, pin_cb_t cb, int arg, const ch
 
 static void cb_set_level(int pin, int level, const char *who)
 {
-    gpio_set_level((gpio_num_t)pin, (uint32_t)level);
+    /* Use the public wrapper so validation/logging is centralized */
+    board_gpio_set_level(pin, level, who);
 }
 
 static void cb_set_direction(int pin, int mode, const char *who)
 {
-    gpio_set_direction((gpio_num_t)pin, (gpio_mode_t)mode);
+    /* Use the public wrapper so validation/logging is centralized */
+    board_gpio_set_direction(pin, (gpio_mode_t)mode, who);
 }
 
 void board_gpio_set_level(int pin, int level, const char *who)
 {
     if (pin_is_valid(pin)) {
+        ESP_LOGD(TAG_HAL_GPIO, "%s: gpio_set_level pin=%d level=%d",
+                 who ? who : "board_gpio_set_level", pin, level);
         gpio_set_level((gpio_num_t)pin, (uint32_t)level);
     } else {
         ESP_LOGW(TAG_HAL_GPIO, "%s: invalid pin %d, skipping gpio_set_level", who ? who : "board_gpio_set_level", pin);
