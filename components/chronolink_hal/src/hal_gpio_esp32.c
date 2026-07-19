@@ -16,7 +16,7 @@ void HAL_GPIO_Init(void)
 
 void HAL_GPIO_Write(uint32_t pin, gpio_level_t level)
 {
-    board_gpio_set_level((int)pin, level, "HAL_GPIO_Write");
+    board_gpio_set_level_maskaware(pin, level, "HAL_GPIO_Write");
 }
 
 gpio_level_t HAL_GPIO_Read(uint32_t pin)
