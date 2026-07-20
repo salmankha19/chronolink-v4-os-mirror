@@ -1,6 +1,8 @@
 #include "hal.h"
 #include "hal_gpio.h"
+#include "esp_log.h"
 #include "driver/gpio.h"
+#include "hal_gpio_safe.h"
 
 void HAL_GPIO_Init(void)
 {
@@ -14,7 +16,7 @@ void HAL_GPIO_Init(void)
 
 void HAL_GPIO_Write(uint32_t pin, gpio_level_t level)
 {
-    gpio_set_level(pin, level);
+    board_gpio_set_level_maskaware(pin, level, "HAL_GPIO_Write");
 }
 
 gpio_level_t HAL_GPIO_Read(uint32_t pin)

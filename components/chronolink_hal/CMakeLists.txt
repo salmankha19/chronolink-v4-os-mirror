@@ -4,6 +4,7 @@
 set(CHRONOLINK_HAL_SRCS
     "src/hal_init.c"
     "src/hal_gpio_esp32.c"
+    "src/hal_gpio_safe.c"
     "src/hal_i2c_esp32.c"
     "src/hal_spi_esp32.c"
     "src/hal_rtc_ds3231m.c"

@@ -5,17 +5,19 @@
 
 /* Migrated from src/platformDependentLayer/pdl_pins.h
    Canonical board pin definitions for ChronoLink V4.
-   Edit values to match your board wiring if needed. */
+   Edit values to match your board wiring if needed.
+   Use chip GPIO numbers (0..47), not connector/silkscreen labels.
+   For ESP32-S3 WROOM-1 N16R8, avoid GPIO35..GPIO37 (PSRAM-connected). */
 
 #define PDL_PIN_LED_STATUS        2
-#define PDL_PIN_SPI_MOSI         23
+#define PDL_PIN_SPI_MOSI         11
 #define PDL_PIN_SPI_MISO         19
 #define PDL_PIN_SPI_SCLK         18
 #define PDL_PIN_SPI_CS_DISPLAY   5
 #define PDL_PIN_RTC_INT          4
 #define PDL_PIN_DISPLAY_DC       16
 #define PDL_PIN_DISPLAY_RST      17
-#define PDL_PIN_DISPLAY_BL       25
+#define PDL_PIN_DISPLAY_BL       27
 
 /* Legacy aliases kept for older pil_config callers. */
 #define PDL_PIN_SPI_SCK          PDL_PIN_SPI_SCLK
@@ -28,7 +30,7 @@
 #ifdef CONFIG_PDL_PIN_I2C_SCL
 #define PDL_PIN_I2C_SCL CONFIG_PDL_PIN_I2C_SCL
 #else
-#define PDL_PIN_I2C_SCL 22
+#define PDL_PIN_I2C_SCL 26
 #endif
 #endif
 
@@ -46,6 +48,33 @@
 #else
 #define PDL_I2C_FREQ_HZ 100000
 #endif
+#endif
+
+/*
+ * Temporary development remap block.
+ * Enable with -DDEV_PIN_MAP to override selected pins during bring-up.
+ * Keep this for development only and remove before production release.
+ */
+#ifdef DEV_PIN_MAP
+#undef PDL_PIN_LED_STATUS
+#define PDL_PIN_LED_STATUS        10  /* dev remap: avoid boot-sensitive GPIO2 */
+
+#undef PDL_PIN_I2C_SDA
+#define PDL_PIN_I2C_SDA           21  /* dev remap */
+
+#undef PDL_PIN_I2C_SCL
+#define PDL_PIN_I2C_SCL           26  /* dev remap */
+
+#undef PDL_PIN_DISPLAY_DC
+#define PDL_PIN_DISPLAY_DC        16  /* dev remap */
+
+#undef PDL_PIN_DISPLAY_RST
+#define PDL_PIN_DISPLAY_RST       17  /* dev remap */
+
+#undef PDL_PIN_DISPLAY_BL
+#define PDL_PIN_DISPLAY_BL        27  /* dev remap */
+
+/* Remove DEV_PIN_MAP before release builds. */
 #endif
 
 /* Safe mode input pin (active low).
