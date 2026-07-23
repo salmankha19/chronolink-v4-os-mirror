@@ -6,7 +6,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-static const char *TAG = "HAL_DISPLAY";
+static const char *TAG = "HAL_DISPLAY_ST7796S";
 
 // SPI handle
 static spi_device_handle_t st7796s_spi;
@@ -104,6 +104,10 @@ hal_status_t HAL_Display_Init(void)
 
 void HAL_Display_WriteText(const char *text)
 {
+    if (text == NULL) {
+        return;
+    }
+
     // Placeholder â€” later replaced with font renderer
-    ESP_LOGI(TAG, "Display text: %s", text ? text : "");
+    ESP_LOGI(TAG, "Display text: %s", text);
 }
