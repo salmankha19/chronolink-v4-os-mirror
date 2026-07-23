@@ -96,6 +96,8 @@ static uint16_t st7796s_win_y1 = 0;
 static uint16_t st7796s_win_x2 = ST7796S_WIDTH - 1;
 static uint16_t st7796s_win_y2 = ST7796S_HEIGHT - 1;
 
+static uint8_t st7796s_current_madctl = ST7796S_DEFAULT_MADCTL;
+
 /* Dedicated reusable DMA buffer used only for fills/clears.
    It is never reused for arbitrary transfers to avoid races. */
 static uint8_t *st7796s_fill_dma_buf = NULL;
@@ -630,7 +632,7 @@ hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
 }
 
 /* Deinit helper */
-void HAL_Display_ST7796S_Deinit(void)
+hal_status_t HAL_Display_ST7796S_Deinit(void)
 {
     if (st7796s_spi) {
         /* Turn display off and backlight off */
@@ -650,4 +652,21 @@ void HAL_Display_ST7796S_Deinit(void)
 
     st7796s_initialized = false;
     ESP_LOGI(TAG, "ST7796S deinitialized");
+
+    return HAL_OK;
+}
+
+
+hal_status_t HAL_Display_ST7796S_SetOrientation(uint8_t madctl)
+{
+    if (!st7796s_initialized)
+        return HAL_ERR_INIT;
+
+    esp_err_t e = st7796s_send_cmd_with_byte(ST7796S_MADCTL, madctl);
+    if (e != ESP_OK)
+        return map_esp_err(e);
+
+    st7796s_current_madctl = madctl;
+
+    return HAL_OK;
 }
