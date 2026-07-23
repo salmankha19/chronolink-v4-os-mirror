@@ -55,14 +55,16 @@ static hal_status_t st7796s_send_data(const uint8_t *data, int len)
     return spi_device_transmit(st7796s_spi, &t) == ESP_OK ? HAL_OK : HAL_ERR_BUS;
 }
 
-static void st7796s_cleanup(bool remove_device)
+static void st7796s_cleanup(bool bus_initialized, bool remove_device)
 {
     if (remove_device && st7796s_spi != NULL) {
         spi_bus_remove_device(st7796s_spi);
         st7796s_spi = NULL;
     }
 
-    spi_bus_free(LCD_HOST);
+    if (bus_initialized) {
+        spi_bus_free(LCD_HOST);
+    }
 }
 
 hal_status_t HAL_Display_Init(void)
@@ -99,11 +101,13 @@ hal_status_t HAL_Display_Init(void)
     };
 
     if (spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize SPI bus");
         return HAL_ERR_BUS;
     }
     bus_initialized = true;
 
     if (spi_bus_add_device(LCD_HOST, &devcfg, &st7796s_spi) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add ST7796S SPI device");
         status = HAL_ERR_DEV;
         goto cleanup;
     }
@@ -131,9 +135,7 @@ hal_status_t HAL_Display_Init(void)
     return HAL_OK;
 
 cleanup:
-    if (bus_initialized) {
-        st7796s_cleanup(device_added);
-    }
+    st7796s_cleanup(bus_initialized, device_added);
 
     return status;
 }
