@@ -8,7 +8,7 @@
 
 static inline esp_err_t hal_gpio_config_outputs(uint64_t pin_mask)
 {
-    const gpio_config_t cfg = {
+    gpio_config_t cfg = {
         .pin_bit_mask = pin_mask,
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,

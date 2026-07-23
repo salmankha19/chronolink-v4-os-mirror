@@ -24,6 +24,10 @@ static spi_device_handle_t st7796s_spi;
 #define LCD_DC   PDL_PIN_DISPLAY_DC
 #define LCD_RST  PDL_PIN_DISPLAY_RST
 
+_Static_assert(LCD_CS < 64, "LCD_CS must fit in a 64-bit GPIO mask");
+_Static_assert(LCD_DC < 64, "LCD_DC must fit in a 64-bit GPIO mask");
+_Static_assert(LCD_RST < 64, "LCD_RST must fit in a 64-bit GPIO mask");
+
 static hal_status_t st7796s_send_cmd(uint8_t cmd)
 {
     if (gpio_set_level(LCD_DC, 0) != ESP_OK) {
