@@ -203,7 +203,16 @@ static esp_err_t st7796s_send_data_raw(const uint8_t *data, size_t len)
         return spi_device_polling_transmit(st7796s_spi, &t);
     }
 
-    /* For larger transfers allocate a temporary DMA buffer to avoid races */
+    /* If caller already provided DMA-capable memory, transmit directly */
+    if (esp_ptr_dma_capable(data)) {
+        spi_transaction_t t;
+        memset(&t, 0, sizeof(t));
+        t.length = len * 8;
+        t.tx_buffer = data;
+        return spi_device_polling_transmit(st7796s_spi, &t);
+    }
+
+    /* Otherwise allocate a temporary DMA buffer */
     uint8_t *dma_buf = heap_caps_malloc(len, MALLOC_CAP_DMA);
     if (!dma_buf) {
         ESP_LOGE(TAG, "Failed to allocate DMA buffer for %u bytes", (unsigned)len);
@@ -357,17 +366,25 @@ static void st7796s_write_memory_prepare(void)
  * -------------------------------------------------------------------------- */
 static esp_err_t st7796s_read_id(uint8_t *out, size_t out_len)
 {
-    if (!st7796s_spi || !out || out_len == 0) return ESP_ERR_INVALID_ARG;
+    if (!st7796s_spi || !out || out_len == 0 || out_len > 4)   /* sizeof(tx_data) in spi_transaction_t */
+        
+        return ESP_ERR_INVALID_ARG;
 
-    /* Send RDDID command then read bytes. Use a transaction with rx_buffer. */
+    /* Command phase: D/C low */
     st7796s_send_command_raw(ST7796S_RDDID);
+
+    /* Data phase: D/C must be high */
+    st7796s_dc_set(1);
 
     spi_transaction_t t;
     memset(&t, 0, sizeof(t));
     t.length = out_len * 8;
     t.rxlength = out_len * 8;
     t.rx_buffer = out;
-    /* For reads, tx_buffer can be NULL; some panels require dummy bytes. */
+    /* Dummy TX bytes to generate read clocks; tx_data is DMA-safe */
+    t.flags = SPI_TRANS_USE_TXDATA;
+    memset(t.tx_data, 0x00, sizeof(t.tx_data));
+
     return spi_device_polling_transmit(st7796s_spi, &t);
 }
 
@@ -388,11 +405,11 @@ static hal_status_t st7796s_run_init_sequence(void)
     if (e != ESP_OK) { ESP_LOGE(TAG, "SLPOUT failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    /* MADCTL */
+    /* MADCTL — use static tracker as single source of truth */
     e = st7796s_send_command_raw(ST7796S_MADCTL);
     if (e != ESP_OK) { ESP_LOGE(TAG, "MADCTL cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
-    uint8_t madctl = (uint8_t)ST7796S_DEFAULT_MADCTL;
-    e = st7796s_send_data_raw(&madctl, 1);
+    st7796s_current_madctl = (uint8_t)ST7796S_DEFAULT_MADCTL;
+    e = st7796s_send_data_raw(&st7796s_current_madctl, 1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "MADCTL data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
     /* COLMOD */
@@ -634,13 +651,25 @@ hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
 /* Deinit helper */
 hal_status_t HAL_Display_ST7796S_Deinit(void)
 {
+    hal_status_t status = HAL_OK;
+
     if (st7796s_spi) {
         /* Turn display off and backlight off */
-        st7796s_send_command_raw(0x28); /* DISP OFF */
+        esp_err_t e = st7796s_send_command_raw(0x28); /* DISP OFF */
+        if (e != ESP_OK) {
+            ESP_LOGW(TAG, "Display off failed during deinit: %s", esp_err_to_name(e));
+            status = map_esp_err(e);
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
-        if ((int)BOARD_LCD_BL >= 0 && (int)BOARD_LCD_BL <= 63) gpio_set_level((gpio_num_t)BOARD_LCD_BL, 0);
 
-        spi_bus_remove_device(st7796s_spi);
+        if ((int)BOARD_LCD_BL >= 0 && (int)BOARD_LCD_BL <= 63) {
+            gpio_set_level((gpio_num_t)BOARD_LCD_BL, 0);
+        }
+
+        e = spi_bus_remove_device(st7796s_spi);
+        if (e != ESP_OK && status == HAL_OK) {
+            status = map_esp_err(e);
+        }
         st7796s_spi = NULL;
     }
 
@@ -653,11 +682,11 @@ hal_status_t HAL_Display_ST7796S_Deinit(void)
     st7796s_initialized = false;
     ESP_LOGI(TAG, "ST7796S deinitialized");
 
-    return HAL_OK;
+    return status;
 }
 
-
-hal_status_t HAL_Display_ST7796S_SetOrientation(uint8_t madctl)
+/* Raw MADCTL register write (low-level orientation control) */
+hal_status_t HAL_Display_ST7796S_SetMadctl(uint8_t madctl)
 {
     if (!st7796s_initialized)
         return HAL_ERR_INIT;
@@ -667,6 +696,5 @@ hal_status_t HAL_Display_ST7796S_SetOrientation(uint8_t madctl)
         return map_esp_err(e);
 
     st7796s_current_madctl = madctl;
-
     return HAL_OK;
 }

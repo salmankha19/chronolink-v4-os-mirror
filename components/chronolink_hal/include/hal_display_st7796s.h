@@ -1,3 +1,19 @@
+/*
+ * hal_display_st7796s.h
+ *
+ * ChronoLink V4 OS — Hardware Abstraction Layer
+ * ST7796S 320x480 TFT LCD Display Driver (Header)
+ *
+ * This header exposes the public HIL API for the ST7796S display backend.
+ * All functions here are implemented in hal_display_st7796s.c.
+ *
+ * Features:
+ *  - DMA‑safe SPI operations
+ *  - MADCTL orientation control (low‑level)
+ *  - Pixel, fill, clear, and show operations
+ *  - Capability reporting for HAL router
+ */
+
 #pragma once
 
 #include <stdint.h>
@@ -19,7 +35,7 @@ extern "C" {
 #endif
 
 /* --------------------------------------------------------------------------
- * Public HIL API (only these should be visible to other modules)
+ * Public HIL API
  * -------------------------------------------------------------------------- */
 
 hal_status_t HAL_Display_ST7796S_Init(void);
@@ -32,8 +48,8 @@ hal_status_t HAL_Display_ST7796S_Show(void);
 
 hal_status_t HAL_Display_ST7796S_WriteText(const char *text);
 
-/* Orientation control */
-hal_status_t HAL_Display_ST7796S_SetOrientation(uint8_t madctl);
+/* Raw MADCTL register write (low‑level orientation control) */
+hal_status_t HAL_Display_ST7796S_SetMadctl(uint8_t madctl);
 
 /* Capability query */
 hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap);
