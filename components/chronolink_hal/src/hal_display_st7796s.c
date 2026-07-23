@@ -23,6 +23,7 @@ static spi_device_handle_t st7796s_spi;
 #define LCD_CS   PDL_PIN_DISPLAY_CS
 #define LCD_DC   PDL_PIN_DISPLAY_DC
 #define LCD_RST  PDL_PIN_DISPLAY_RST
+#define LCD_CONTROL_PIN_MASK ((1ULL << LCD_CS) | (1ULL << LCD_DC) | (1ULL << LCD_RST))
 
 _Static_assert(LCD_CS < 64, "LCD_CS must fit in a 64-bit GPIO mask");
 _Static_assert(LCD_DC < 64, "LCD_DC must fit in a 64-bit GPIO mask");
@@ -54,13 +55,25 @@ static hal_status_t st7796s_send_data(const uint8_t *data, int len)
     return spi_device_transmit(st7796s_spi, &t) == ESP_OK ? HAL_OK : HAL_ERR_BUS;
 }
 
+static void st7796s_cleanup(bool remove_device)
+{
+    if (remove_device && st7796s_spi != NULL) {
+        spi_bus_remove_device(st7796s_spi);
+        st7796s_spi = NULL;
+    }
+
+    spi_bus_free(LCD_HOST);
+}
+
 hal_status_t HAL_Display_Init(void)
 {
-    const uint64_t control_pin_mask = (1ULL << LCD_CS) | (1ULL << LCD_DC) | (1ULL << LCD_RST);
+    hal_status_t status = HAL_OK;
+    bool bus_initialized = false;
+    bool device_added = false;
 
     ESP_LOGI(TAG, "Initializing ST7796S display");
 
-    if (hal_gpio_config_outputs(control_pin_mask) != ESP_OK) {
+    if (hal_gpio_config_outputs(LCD_CONTROL_PIN_MASK) != ESP_OK) {
         return HAL_ERR_INIT;
     }
 
@@ -88,28 +101,41 @@ hal_status_t HAL_Display_Init(void)
     if (spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO) != ESP_OK) {
         return HAL_ERR_BUS;
     }
+    bus_initialized = true;
 
     if (spi_bus_add_device(LCD_HOST, &devcfg, &st7796s_spi) != ESP_OK) {
-        return HAL_ERR_DEV;
+        status = HAL_ERR_DEV;
+        goto cleanup;
     }
+    device_added = true;
 
     // ST7796S init sequence
     if (st7796s_send_cmd(ST7796S_CMD_SWRESET) != HAL_OK) {
-        return HAL_ERR_BUS;
+        status = HAL_ERR_BUS;
+        goto cleanup;
     }
     vTaskDelay(pdMS_TO_TICKS(150));
 
     if (st7796s_send_cmd(ST7796S_CMD_SLPOUT) != HAL_OK) {
-        return HAL_ERR_BUS;
+        status = HAL_ERR_BUS;
+        goto cleanup;
     }
     vTaskDelay(pdMS_TO_TICKS(150));
 
     if (st7796s_send_cmd(ST7796S_CMD_DISPON) != HAL_OK) {
-        return HAL_ERR_BUS;
+        status = HAL_ERR_BUS;
+        goto cleanup;
     }
 
     ESP_LOGI(TAG, "ST7796S display initialized");
     return HAL_OK;
+
+cleanup:
+    if (bus_initialized) {
+        st7796s_cleanup(device_added);
+    }
+
+    return status;
 }
 
 void HAL_Display_WriteText(const char *text)
