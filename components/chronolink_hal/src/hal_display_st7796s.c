@@ -26,7 +26,10 @@ static spi_device_handle_t st7796s_spi;
 
 static hal_status_t st7796s_send_cmd(uint8_t cmd)
 {
-    gpio_set_level(LCD_DC, 0);
+    if (gpio_set_level(LCD_DC, 0) != ESP_OK) {
+        return HAL_ERR_BUS;
+    }
+
     spi_transaction_t t = {
         .length = 8,
         .tx_buffer = &cmd
@@ -36,7 +39,10 @@ static hal_status_t st7796s_send_cmd(uint8_t cmd)
 
 static hal_status_t st7796s_send_data(const uint8_t *data, int len)
 {
-    gpio_set_level(LCD_DC, 1);
+    if (gpio_set_level(LCD_DC, 1) != ESP_OK) {
+        return HAL_ERR_BUS;
+    }
+
     spi_transaction_t t = {
         .length = len * 8,
         .tx_buffer = data
