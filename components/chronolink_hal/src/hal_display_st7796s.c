@@ -8,7 +8,7 @@
 
 static const char *TAG = "HAL_DISPLAY_ST7796S";
 
-// SPI handle
+/* SPI handle for the single display instance; HAL init is expected to be serialized. */
 static spi_device_handle_t st7796s_spi;
 
 // ST7796S commands
@@ -25,6 +25,9 @@ static spi_device_handle_t st7796s_spi;
 #define LCD_RST  PDL_PIN_DISPLAY_RST
 #define LCD_CONTROL_PIN_MASK ((1ULL << LCD_CS) | (1ULL << LCD_DC) | (1ULL << LCD_RST))
 
+_Static_assert(LCD_CS < GPIO_NUM_MAX, "LCD_CS must be a valid GPIO number");
+_Static_assert(LCD_DC < GPIO_NUM_MAX, "LCD_DC must be a valid GPIO number");
+_Static_assert(LCD_RST < GPIO_NUM_MAX, "LCD_RST must be a valid GPIO number");
 _Static_assert(LCD_CS < 64, "LCD_CS must fit in a 64-bit GPIO mask");
 _Static_assert(LCD_DC < 64, "LCD_DC must fit in a 64-bit GPIO mask");
 _Static_assert(LCD_RST < 64, "LCD_RST must fit in a 64-bit GPIO mask");
