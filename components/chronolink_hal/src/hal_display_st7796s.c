@@ -58,12 +58,14 @@ static hal_status_t st7796s_send_data(const uint8_t *data, int len)
 static void st7796s_cleanup(bool bus_initialized, bool remove_device)
 {
     if (remove_device && st7796s_spi != NULL) {
-        spi_bus_remove_device(st7796s_spi);
+        if (spi_bus_remove_device(st7796s_spi) != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to remove ST7796S SPI device");
+        }
         st7796s_spi = NULL;
     }
 
-    if (bus_initialized) {
-        spi_bus_free(LCD_HOST);
+    if (bus_initialized && spi_bus_free(LCD_HOST) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to free SPI bus");
     }
 }
 
