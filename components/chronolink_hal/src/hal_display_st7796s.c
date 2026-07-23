@@ -111,32 +111,32 @@ hal_status_t HAL_Display_Init(void)
     if (spi_bus_add_device(LCD_HOST, &devcfg, &st7796s_spi) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to add ST7796S SPI device");
         status = HAL_ERR_DEV;
-        goto cleanup;
+        goto error_cleanup;
     }
     device_added = true;
 
     // ST7796S init sequence
     if (st7796s_send_cmd(ST7796S_CMD_SWRESET) != HAL_OK) {
         status = HAL_ERR_BUS;
-        goto cleanup;
+        goto error_cleanup;
     }
     vTaskDelay(pdMS_TO_TICKS(150));
 
     if (st7796s_send_cmd(ST7796S_CMD_SLPOUT) != HAL_OK) {
         status = HAL_ERR_BUS;
-        goto cleanup;
+        goto error_cleanup;
     }
     vTaskDelay(pdMS_TO_TICKS(150));
 
     if (st7796s_send_cmd(ST7796S_CMD_DISPON) != HAL_OK) {
         status = HAL_ERR_BUS;
-        goto cleanup;
+        goto error_cleanup;
     }
 
     ESP_LOGI(TAG, "ST7796S display initialized");
     return HAL_OK;
 
-cleanup:
+error_cleanup:
     st7796s_cleanup(bus_initialized, device_added);
 
     return status;
