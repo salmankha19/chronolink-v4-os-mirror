@@ -8,8 +8,8 @@
  * All functions here are implemented in hal_display_st7796s.c.
  *
  * Features:
- *  - DMA‑safe SPI operations
- *  - MADCTL orientation control (low‑level)
+ *  - DMA-safe SPI operations
+ *  - MADCTL orientation control (low-level)
  *  - Pixel, fill, clear, and show operations
  *  - Capability reporting for HAL router
  */
@@ -48,7 +48,7 @@ hal_status_t HAL_Display_ST7796S_Show(void);
 
 hal_status_t HAL_Display_ST7796S_WriteText(const char *text);
 
-/* Raw MADCTL register write (low‑level orientation control) */
+/* Raw MADCTL register write (low-level orientation control) */
 hal_status_t HAL_Display_ST7796S_SetMadctl(uint8_t madctl);
 
 /* Capability query */
