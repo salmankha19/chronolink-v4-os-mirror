@@ -17,7 +17,7 @@ hal_status_t HAL_Display_Remote_HasCapability(hal_display_cap_t cap)
 
     case HAL_CAP_DRAW_PIXEL:
     case HAL_CAP_FILL:
-    case HAL_CAP_ROTATION:
+    case HAL_CAP_ORIENTATION:
     case HAL_CAP_BRIGHTNESS:
     default:
         return HAL_ERR_DEV;
