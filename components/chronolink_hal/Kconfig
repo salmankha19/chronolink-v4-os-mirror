@@ -1,4 +1,4 @@
-menu "Chronolink HAL options"
+menu "ChronoLink HAL options"
 
 config CHRONOLINK_USE_MOCK_DISPLAY
     bool "Use mock display driver for local testing"
@@ -6,6 +6,81 @@ config CHRONOLINK_USE_MOCK_DISPLAY
     help
       When enabled, the mock display driver will be compiled in addition to
       the real drivers for local builds without hardware.
+
+choice CHRONOLINK_HAL_DISPLAY_BACKEND
+    prompt "Display Backend"
+    default CHRONOLINK_HAL_DISPLAY_BACKEND_NONE
+    help
+        Select the display panel driver backend. The router in
+        hal_display.c dispatches all HAL_Display_* calls to the
+        selected backend.
+
+    config CHRONOLINK_HAL_DISPLAY_BACKEND_NONE
+        bool "None (headless mode)"
+        help
+            No local display. HAL_Display_Init() returns HAL_OK
+            so the OS can boot without a panel.
+
+    config CHRONOLINK_HAL_DISPLAY_BACKEND_ST7796S
+        bool "ST7796S 320x480 TFT (SPI)"
+        help
+            ST7796S 320x480 RGB565 TFT over SPI. Requires
+            BOARD_LCD_CS, BOARD_LCD_DC, BOARD_LCD_RST, BOARD_LCD_BL
+            and SPI MOSI/MISO/SCLK pins in board_pins.h.
+
+    config CHRONOLINK_HAL_DISPLAY_BACKEND_MAX7219
+        bool "MAX7219 LED Matrix"
+        help
+            MAX7219 8x8 LED matrix chain.
+
+    config CHRONOLINK_HAL_DISPLAY_BACKEND_REMOTE
+        bool "Remote Display"
+        help
+            Remote display over network/BLE.
+endchoice
+
+config CHRONOLINK_HAL_DISPLAY_MUTEX
+    bool "Enable display mutex"
+    default y
+    depends on !CHRONOLINK_HAL_DISPLAY_BACKEND_NONE
+    help
+        Protect all display operations with a FreeRTOS mutex.
+        Strongly recommended when multiple tasks access the display.
+        Disable only on single-task systems to save a few bytes.
+
+menu "ST7796S Driver"
+    depends on CHRONOLINK_HAL_DISPLAY_BACKEND_ST7796S
+
+    config CHRONOLINK_HAL_ST7796S_SPI_HOST_NUM
+        int "SPI Host Number"
+        default 2
+        range 1 3
+        help
+            SPI peripheral: 1=SPI1, 2=SPI2 (HSPI), 3=SPI3 (VSPI).
+            SPI2 is the typical choice on ESP32.
+
+    config CHRONOLINK_HAL_ST7796S_SPI_CLOCK_MHZ
+        int "SPI Clock Speed (MHz)"
+        default 20
+        range 1 80
+        help
+            SPI clock frequency in MHz. 20 MHz is safe for most panels.
+
+    config CHRONOLINK_HAL_ST7796S_DMA_CHUNK_KB
+        int "DMA Chunk Size (KB)"
+        default 8
+        range 1 64
+        help
+            DMA transfer chunk size in kilobytes.
+
+    config CHRONOLINK_HAL_ST7796S_WIDTH
+        int "Panel Width (pixels)"
+        default 320
+
+    config CHRONOLINK_HAL_ST7796S_HEIGHT
+        int "Panel Height (pixels)"
+        default 480
+endmenu
 
 menu "Chronolink HAL Pin Overrides"
 
