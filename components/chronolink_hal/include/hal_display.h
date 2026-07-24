@@ -61,7 +61,7 @@ typedef enum {
 /**
  * @brief Initialize the display subsystem.
  *
- * Selects the backend based on board/Kconfig configuration, initializes
+ * Selects the backend based on Kconfig/board configuration, initializes
  * the underlying driver, and creates the display mutex.
  */
 hal_status_t HAL_Display_Init(void);

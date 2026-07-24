@@ -5,7 +5,7 @@
  * Display Router / Backend Dispatcher
  *
  * Responsibilities:
- *  - Compile-time backend selection (Kconfig / board config)
+ *  - Compile-time backend selection (Kconfig)
  *  - Thread-safe dispatch to the active backend via FreeRTOS mutex
  *  - State tracking (init, backend type)
  *  - Capability routing
@@ -22,21 +22,21 @@
 /* --------------------------------------------------------------------------
  * Conditionally include backend headers
  * -------------------------------------------------------------------------- */
-#if defined(CONFIG_BOARD_DISPLAY_ST7796S)
+#if defined(CONFIG_CHRONOLINK_HAL_DISPLAY_BACKEND_ST7796S)
 #define BACKEND_ST7796S_ENABLED 1
 #include "hal_display_st7796s.h"
 #else
 #define BACKEND_ST7796S_ENABLED 0
 #endif
 
-#if defined(CONFIG_BOARD_DISPLAY_MAX7219)
+#if defined(CONFIG_CHRONOLINK_HAL_DISPLAY_BACKEND_MAX7219)
 #define BACKEND_MAX7219_ENABLED 1
 #include "hal_display_max7219.h"
 #else
 #define BACKEND_MAX7219_ENABLED 0
 #endif
 
-#if defined(CONFIG_BOARD_DISPLAY_REMOTE)
+#if defined(CONFIG_CHRONOLINK_HAL_DISPLAY_BACKEND_REMOTE)
 #define BACKEND_REMOTE_ENABLED 1
 #include "hal_display_remote.h"
 #else
@@ -97,12 +97,13 @@ hal_status_t HAL_Display_Init(void)
 
     s_backend = hal_display_select_backend();
     if (s_backend == HAL_DISPLAY_BACKEND_NONE) {
-        ESP_LOGW(TAG, "No display backend selected at compile time");
+        ESP_LOGW(TAG, "No display backend selected (headless mode)");
         /* Soft-fail: system can run headless */
         return HAL_OK;
     }
 
-    /* Create mutex once */
+    /* Create mutex if enabled */
+#if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
     if (!s_mutex) {
         s_mutex = xSemaphoreCreateMutex();
         if (!s_mutex) {
@@ -110,6 +111,7 @@ hal_status_t HAL_Display_Init(void)
             return HAL_ERR_INIT;
         }
     }
+#endif
 
     hal_status_t status;
     display_lock();
