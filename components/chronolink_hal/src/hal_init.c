@@ -26,7 +26,7 @@ static const char *cap_name(hal_display_cap_t cap)
     case HAL_CAP_TEXT:         return "TEXT";
     case HAL_CAP_BITMAP:       return "BITMAP";
     case HAL_CAP_BRIGHTNESS:   return "BRIGHTNESS";
-    case HAL_CAP_ROTATION:     return "ROTATION";
+    case HAL_CAP_ORIENTATION:  return "ORIENTATION";
     default:                   return "UNKNOWN";
     }
 }
@@ -35,7 +35,7 @@ static void log_display_caps(void)
 {
     hal_display_cap_t caps[] = {
         HAL_CAP_DRAW_PIXEL, HAL_CAP_FILL, HAL_CAP_CLEAR, HAL_CAP_SHOW,
-        HAL_CAP_TEXT, HAL_CAP_BITMAP, HAL_CAP_BRIGHTNESS, HAL_CAP_ROTATION
+        HAL_CAP_TEXT, HAL_CAP_BITMAP, HAL_CAP_BRIGHTNESS, HAL_CAP_ORIENTATION
     };
 
     for (size_t i = 0; i < sizeof(caps)/sizeof(caps[0]); ++i) {
