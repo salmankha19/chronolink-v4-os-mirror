@@ -36,6 +36,7 @@ typedef enum {
     HAL_CAP_BITMAP,        /* Buffered bitmap/blitting */
     HAL_CAP_BRIGHTNESS,    /* PWM or DAC brightness control */
     HAL_CAP_ORIENTATION,   /* MADCTL / SetMadctl support */
+    HAL_CAP_SCROLL,        /* Hardware vertical scroll (VSCRDEF + VSCSAD) */
     HAL_CAP_COUNT          /* Keep last; not a valid capability */
 } hal_display_cap_t;
 
@@ -135,6 +136,32 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl);
  * Useful for diagnostics and feature-gating in upper layers.
  */
 hal_display_backend_t HAL_Display_GetBackend(void);
+
+/**
+ * @brief Define the vertical scrolling area.
+ *
+ * Configures the panel's three vertical regions: Top Fixed Area (TFA),
+ * Vertical Scroll Area (VSA), and Bottom Fixed Area (BFA). The sum of
+ * TFA + VSA + BFA must equal the panel height (e.g. 480 for ST7796S).
+ *
+ * Supported by backends that implement HAL_CAP_SCROLL (e.g. ST7796S).
+ *
+ * @param tfa Lines in the top fixed area
+ * @param vsa Lines in the vertical scroll area
+ * @param bfa Lines in the bottom fixed area
+ */
+hal_status_t HAL_Display_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa);
+
+/**
+ * @brief Set the vertical scroll start address (VSS).
+ *
+ * Sets the first line of the vertical scroll area to display at the top of
+ * the scroll window. Wraps within the scroll area defined by
+ * HAL_Display_SetScrollArea.
+ *
+ * @param vss Vertical scroll start address (line number within VSA)
+ */
+hal_status_t HAL_Display_SetScrollStart(uint16_t vss);
 
 #ifdef __cplusplus
 }

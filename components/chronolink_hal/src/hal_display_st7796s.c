@@ -83,6 +83,8 @@ static const char *TAG = "HAL_ST7796S";
 #define ST7796S_GMCTRP1   0xE0
 #define ST7796S_GMCTRN1   0xE1
 #define ST7796S_RDDID     0x04
+#define ST7796S_VSCRDEF   0x33  /* Vertical Scrolling Definition */
+#define ST7796S_VSCSAD    0x37  /* Vertical Scroll Start Address */
 
 /* --------------------------------------------------------------------------
  * Internal state
@@ -595,6 +597,26 @@ hal_status_t HAL_Display_ST7796S_WriteText(const char *text)
     return HAL_ERR_DEV;
 }
 
+hal_status_t HAL_Display_ST7796S_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa)
+{
+    if (!st7796s_initialized) return HAL_ERR_INIT;
+
+    uint8_t buf[6] = {
+        (uint8_t)(tfa >> 8), (uint8_t)(tfa & 0xFF),
+        (uint8_t)(vsa >> 8), (uint8_t)(vsa & 0xFF),
+        (uint8_t)(bfa >> 8), (uint8_t)(bfa & 0xFF)
+    };
+    return map_esp_err(st7796s_send_cmd_with_data(ST7796S_VSCRDEF, buf, sizeof(buf)));
+}
+
+hal_status_t HAL_Display_ST7796S_SetScrollStart(uint16_t vss)
+{
+    if (!st7796s_initialized) return HAL_ERR_INIT;
+
+    uint8_t buf[2] = { (uint8_t)(vss >> 8), (uint8_t)(vss & 0xFF) };
+    return map_esp_err(st7796s_send_cmd_with_data(ST7796S_VSCSAD, buf, sizeof(buf)));
+}
+
 hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
 {
     switch (cap) {
@@ -603,6 +625,7 @@ hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
     case HAL_CAP_CLEAR:
     case HAL_CAP_SHOW:
     case HAL_CAP_ORIENTATION:
+    case HAL_CAP_SCROLL:
         return HAL_OK;
     case HAL_CAP_BRIGHTNESS:
         return HAL_ERR_DEV;

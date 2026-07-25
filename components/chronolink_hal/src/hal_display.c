@@ -514,3 +514,53 @@ hal_display_backend_t HAL_Display_GetBackend(void)
 {
     return s_backend;
 }
+
+hal_status_t HAL_Display_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa)
+{
+    if (!s_initialized) return HAL_ERR_INIT;
+    if (HAL_Display_HasCapability(HAL_CAP_SCROLL) != HAL_OK)
+        return HAL_ERR_DEV;
+
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        status = HAL_Display_ST7796S_SetScrollArea(tfa, vsa, bfa);
+        break;
+#endif
+    default:
+        status = HAL_ERR_DEV;
+        break;
+    }
+
+    display_unlock();
+    return status;
+}
+
+hal_status_t HAL_Display_SetScrollStart(uint16_t vss)
+{
+    if (!s_initialized) return HAL_ERR_INIT;
+    if (HAL_Display_HasCapability(HAL_CAP_SCROLL) != HAL_OK)
+        return HAL_ERR_DEV;
+
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        status = HAL_Display_ST7796S_SetScrollStart(vss);
+        break;
+#endif
+    default:
+        status = HAL_ERR_DEV;
+        break;
+    }
+
+    display_unlock();
+    return status;
+}

@@ -54,6 +54,10 @@ hal_status_t HAL_Display_ST7796S_SetMadctl(uint8_t madctl);
 hal_status_t HAL_Display_ST7796S_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color);
 hal_status_t HAL_Display_ST7796S_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
 
+/* Hardware vertical scroll */
+hal_status_t HAL_Display_ST7796S_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa);
+hal_status_t HAL_Display_ST7796S_SetScrollStart(uint16_t vss);
+
 /* Capability query */
 hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap);
 
