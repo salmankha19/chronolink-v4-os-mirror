@@ -15,4 +15,8 @@ hal_status_t HAL_Display_MAX7219_Show(void);
 /* Capability query */
 hal_status_t HAL_Display_MAX7219_HasCapability(hal_display_cap_t cap);
 
+hal_status_t HAL_Display_MAX7219_Deinit(void);
+hal_status_t HAL_Display_MAX7219_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color);
+hal_status_t HAL_Display_MAX7219_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
+
 #endif /* CHRONOLINK_HAL_DISPLAY_MAX7219_H */

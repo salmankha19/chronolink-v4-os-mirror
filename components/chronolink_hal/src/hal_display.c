@@ -16,8 +16,11 @@
 #include "sdkconfig.h"
 #include "hal_display.h"
 #include "esp_log.h"
+
+#if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#endif
 
 /* --------------------------------------------------------------------------
  * Conditionally include backend headers
@@ -52,20 +55,28 @@ static hal_display_backend_t s_backend = HAL_DISPLAY_BACKEND_NONE;
 static bool s_initialized = false;
 
 /* Thread-safety: display is a shared resource; SPI polling is not reentrant */
+#if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
 static SemaphoreHandle_t s_mutex = NULL;
+#endif
 
 /* --------------------------------------------------------------------------
  * Lock helpers
  * -------------------------------------------------------------------------- */
 static inline bool display_lock(void)
 {
-    if (!s_mutex) return true; /* safety: if mutex not created yet, proceed */
-    return (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE);
+#if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
+    if (!s_mutex) return true;
+    return (xSemaphoreTakeRecursive(s_mutex, portMAX_DELAY) == pdTRUE);
+#else
+    return true;
+#endif
 }
 
 static inline void display_unlock(void)
 {
-    if (s_mutex) xSemaphoreGive(s_mutex);
+#if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
+    if (s_mutex) xSemaphoreGiveRecursive(s_mutex);
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -102,10 +113,10 @@ hal_status_t HAL_Display_Init(void)
         return HAL_OK;
     }
 
-    /* Create mutex if enabled */
+    /* Create mutex first (do not mark initialized if mutex creation fails) */
 #if CONFIG_CHRONOLINK_HAL_DISPLAY_MUTEX
     if (!s_mutex) {
-        s_mutex = xSemaphoreCreateMutex();
+        s_mutex = xSemaphoreCreateRecursiveMutex();
         if (!s_mutex) {
             ESP_LOGE(TAG, "Failed to create display mutex");
             return HAL_ERR_INIT;
@@ -113,8 +124,14 @@ hal_status_t HAL_Display_Init(void)
     }
 #endif
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_INIT;
+
+    /* Initialize backend while holding the lock to avoid races during init */
+    if (!display_lock()) {
+        ESP_LOGE(TAG, "Failed to take display mutex during init");
+        return HAL_ERR_INIT;
+    }
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -138,6 +155,7 @@ hal_status_t HAL_Display_Init(void)
         status = HAL_ERR_INIT;
         break;
     }
+
     display_unlock();
 
     if (status == HAL_OK) {
@@ -156,8 +174,10 @@ hal_status_t HAL_Display_Deinit(void)
         return HAL_OK;
     }
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_OK;
+
+    if (!display_lock()) return HAL_ERR_INIT;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -178,6 +198,7 @@ hal_status_t HAL_Display_Deinit(void)
         status = HAL_OK;
         break;
     }
+
     display_unlock();
 
     s_initialized = false;
@@ -193,8 +214,10 @@ hal_status_t HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color)
     if (HAL_Display_HasCapability(HAL_CAP_DRAW_PIXEL) != HAL_OK)
         return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -215,6 +238,7 @@ hal_status_t HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }
@@ -225,8 +249,10 @@ hal_status_t HAL_Display_Fill(uint32_t color)
     if (HAL_Display_HasCapability(HAL_CAP_FILL) != HAL_OK)
         return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -247,6 +273,74 @@ hal_status_t HAL_Display_Fill(uint32_t color)
         status = HAL_ERR_DEV;
         break;
     }
+
+    display_unlock();
+    return status;
+}
+
+hal_status_t HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color)
+{
+    if (!s_initialized) return HAL_ERR_INIT;
+    if (w == 0 || h == 0) return HAL_OK;
+
+    hal_status_t status = HAL_ERR_DEV;
+    if (!display_lock()) return HAL_ERR_DEV;
+
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        status = HAL_Display_ST7796S_FillRect(x, y, w, h, color);
+        break;
+#endif
+#if BACKEND_MAX7219_ENABLED
+    case HAL_DISPLAY_BACKEND_MAX7219:
+        status = HAL_Display_MAX7219_FillRect(x, y, w, h, color);
+        break;
+#endif
+#if BACKEND_REMOTE_ENABLED
+    case HAL_DISPLAY_BACKEND_REMOTE:
+        status = HAL_Display_Remote_FillRect(x, y, w, h, color);
+        break;
+#endif
+    default:
+        status = HAL_ERR_DEV;
+        break;
+    }
+
+    display_unlock();
+    return status;
+}
+
+hal_status_t HAL_Display_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len)
+{
+    if (!s_initialized) return HAL_ERR_INIT;
+    if (len == 0) return HAL_OK;
+    if (!pixels24) return HAL_ERR_DEV;
+
+    hal_status_t status = HAL_ERR_DEV;
+    if (!display_lock()) return HAL_ERR_DEV;
+
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        status = HAL_Display_ST7796S_BlitRow(x, y, pixels24, len);
+        break;
+#endif
+#if BACKEND_MAX7219_ENABLED
+    case HAL_DISPLAY_BACKEND_MAX7219:
+        status = HAL_Display_MAX7219_BlitRow(x, y, pixels24, len);
+        break;
+#endif
+#if BACKEND_REMOTE_ENABLED
+    case HAL_DISPLAY_BACKEND_REMOTE:
+        status = HAL_Display_Remote_BlitRow(x, y, pixels24, len);
+        break;
+#endif
+    default:
+        status = HAL_ERR_DEV;
+        break;
+    }
+
     display_unlock();
     return status;
 }
@@ -257,8 +351,10 @@ hal_status_t HAL_Display_Clear(void)
     if (HAL_Display_HasCapability(HAL_CAP_CLEAR) != HAL_OK)
         return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -279,6 +375,7 @@ hal_status_t HAL_Display_Clear(void)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }
@@ -289,8 +386,10 @@ hal_status_t HAL_Display_Show(void)
     if (HAL_Display_HasCapability(HAL_CAP_SHOW) != HAL_OK)
         return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -311,6 +410,7 @@ hal_status_t HAL_Display_Show(void)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }
@@ -321,8 +421,10 @@ hal_status_t HAL_Display_WriteText(const char *text)
     if (HAL_Display_HasCapability(HAL_CAP_TEXT) != HAL_OK)
         return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -343,6 +445,7 @@ hal_status_t HAL_Display_WriteText(const char *text)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }
@@ -352,8 +455,10 @@ hal_status_t HAL_Display_HasCapability(hal_display_cap_t cap)
     if (!s_initialized) return HAL_ERR_INIT;
     if (cap >= HAL_CAP_COUNT) return HAL_ERR_DEV;
 
-    hal_status_t status;
-    display_lock();
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -374,6 +479,7 @@ hal_status_t HAL_Display_HasCapability(hal_display_cap_t cap)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }
@@ -382,8 +488,13 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
 {
     if (!s_initialized) return HAL_ERR_INIT;
 
-    hal_status_t status;
-    display_lock();
+    if (HAL_Display_HasCapability(HAL_CAP_ORIENTATION) != HAL_OK)
+        return HAL_ERR_DEV;
+
+    hal_status_t status = HAL_ERR_DEV;
+
+    if (!display_lock()) return HAL_ERR_DEV;
+
     switch (s_backend) {
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -394,6 +505,7 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
         status = HAL_ERR_DEV;
         break;
     }
+
     display_unlock();
     return status;
 }

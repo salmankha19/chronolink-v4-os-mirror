@@ -5,8 +5,6 @@
  *
  * Key safety and performance features
  *  - DMA-safe SPI transfers (heap_caps_malloc with MALLOC_CAP_DMA)
- *  - No stack pointers passed to DMA
- *  - SPI driver manages CS (spics_io_num)
  *  - Chunked transfers for fills and clears
  *  - Correct RGB24 -> RGB565 conversion
  *  - Init sequence checks and ID read option
@@ -170,8 +168,6 @@ static bool ensure_fill_dma_buf(size_t bytes)
 
 /* --------------------------------------------------------------------------
  * DMA-safe SPI helpers
- * - small transfers use SPI_TRANS_USE_TXDATA
- * - larger transfers allocate a temporary DMA buffer (not reusing fill buffer)
  * -------------------------------------------------------------------------- */
 
 static esp_err_t st7796s_send_command_raw(uint8_t cmd)
@@ -203,7 +199,6 @@ static esp_err_t st7796s_send_data_raw(const uint8_t *data, size_t len)
         return spi_device_polling_transmit(st7796s_spi, &t);
     }
 
-    /* If caller already provided DMA-capable memory, transmit directly */
     if (esp_ptr_dma_capable(data)) {
         spi_transaction_t t;
         memset(&t, 0, sizeof(t));
@@ -212,7 +207,6 @@ static esp_err_t st7796s_send_data_raw(const uint8_t *data, size_t len)
         return spi_device_polling_transmit(st7796s_spi, &t);
     }
 
-    /* Otherwise allocate a temporary DMA buffer */
     uint8_t *dma_buf = heap_caps_malloc(len, MALLOC_CAP_DMA);
     if (!dma_buf) {
         ESP_LOGE(TAG, "Failed to allocate DMA buffer for %u bytes", (unsigned)len);
@@ -229,7 +223,6 @@ static esp_err_t st7796s_send_data_raw(const uint8_t *data, size_t len)
     return err;
 }
 
-/* Helper to send command + single byte */
 static esp_err_t st7796s_send_cmd_with_byte(uint8_t cmd, uint8_t b)
 {
     esp_err_t e = st7796s_send_command_raw(cmd);
@@ -237,7 +230,6 @@ static esp_err_t st7796s_send_cmd_with_byte(uint8_t cmd, uint8_t b)
     return st7796s_send_data_raw(&b, 1);
 }
 
-/* Helper to send command + buffer */
 static esp_err_t st7796s_send_cmd_with_data(uint8_t cmd, const uint8_t *buf, size_t len)
 {
     esp_err_t e = st7796s_send_command_raw(cmd);
@@ -250,7 +242,6 @@ static esp_err_t st7796s_send_cmd_with_data(uint8_t cmd, const uint8_t *buf, siz
  * -------------------------------------------------------------------------- */
 static void st7796s_gpio_init(void)
 {
-    /* Build pin mask for DC, RST, BL if valid */
     uint64_t mask = 0;
     if ((int)BOARD_LCD_DC >= 0 && (int)BOARD_LCD_DC <= 63) mask |= (1ULL << BOARD_LCD_DC);
     if ((int)BOARD_LCD_RST >= 0 && (int)BOARD_LCD_RST <= 63) mask |= (1ULL << BOARD_LCD_RST);
@@ -270,7 +261,6 @@ static void st7796s_gpio_init(void)
     };
     gpio_config(&io_conf);
 
-    /* Default states */
     st7796s_dc_set(0);
     if ((int)BOARD_LCD_RST >= 0 && (int)BOARD_LCD_RST <= 63) gpio_set_level((gpio_num_t)BOARD_LCD_RST, 1);
     if ((int)BOARD_LCD_BL >= 0 && (int)BOARD_LCD_BL <= 63) gpio_set_level((gpio_num_t)BOARD_LCD_BL, 0);
@@ -362,18 +352,13 @@ static void st7796s_write_memory_prepare(void)
 
 /* --------------------------------------------------------------------------
  * Optional ID read (useful for bring-up). Returns ESP_OK on success.
- * Requires MISO wired and device supporting read.
  * -------------------------------------------------------------------------- */
-static esp_err_t st7796s_read_id(uint8_t *out, size_t out_len)
+static esp_err_t __attribute__((unused)) st7796s_read_id(uint8_t *out, size_t out_len)
 {
-    if (!st7796s_spi || !out || out_len == 0 || out_len > 4)   /* sizeof(tx_data) in spi_transaction_t */
-        
+    if (!st7796s_spi || !out || out_len == 0 || out_len > 4)
         return ESP_ERR_INVALID_ARG;
 
-    /* Command phase: D/C low */
     st7796s_send_command_raw(ST7796S_RDDID);
-
-    /* Data phase: D/C must be high */
     st7796s_dc_set(1);
 
     spi_transaction_t t;
@@ -381,7 +366,6 @@ static esp_err_t st7796s_read_id(uint8_t *out, size_t out_len)
     t.length = out_len * 8;
     t.rxlength = out_len * 8;
     t.rx_buffer = out;
-    /* Dummy TX bytes to generate read clocks; tx_data is DMA-safe */
     t.flags = SPI_TRANS_USE_TXDATA;
     memset(t.tx_data, 0x00, sizeof(t.tx_data));
 
@@ -405,39 +389,33 @@ static hal_status_t st7796s_run_init_sequence(void)
     if (e != ESP_OK) { ESP_LOGE(TAG, "SLPOUT failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    /* MADCTL — use static tracker as single source of truth */
     e = st7796s_send_command_raw(ST7796S_MADCTL);
     if (e != ESP_OK) { ESP_LOGE(TAG, "MADCTL cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     st7796s_current_madctl = (uint8_t)ST7796S_DEFAULT_MADCTL;
     e = st7796s_send_data_raw(&st7796s_current_madctl, 1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "MADCTL data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* COLMOD */
     e = st7796s_send_command_raw(ST7796S_COLMOD);
     if (e != ESP_OK) { ESP_LOGE(TAG, "COLMOD cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     uint8_t colmod = ST7796S_COLMOD_RGB565;
     e = st7796s_send_data_raw(&colmod, 1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "COLMOD data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* INVON */
     e = st7796s_send_command_raw(ST7796S_INVON);
     if (e != ESP_OK) { ESP_LOGW(TAG, "INVON failed: %s", esp_err_to_name(e)); /* non-fatal */ }
 
-    /* FRMCTR1 */
     e = st7796s_send_command_raw(ST7796S_FRMCTR1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "FRMCTR1 cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     uint8_t frmctr1[] = {0x00, 0x1B};
     e = st7796s_send_data_raw(frmctr1, sizeof(frmctr1));
     if (e != ESP_OK) { ESP_LOGE(TAG, "FRMCTR1 data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* INVCTR */
     e = st7796s_send_command_raw(ST7796S_INVCTR);
     if (e != ESP_OK) { ESP_LOGE(TAG, "INVCTR cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     uint8_t invctr = 0x01;
     e = st7796s_send_data_raw(&invctr, 1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "INVCTR data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* Power controls */
     e = st7796s_send_command_raw(ST7796S_PWCTR1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "PWCTR1 cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     uint8_t pw1[] = {0x17, 0x15, 0x00};
@@ -468,7 +446,6 @@ static hal_status_t st7796s_run_init_sequence(void)
     e = st7796s_send_data_raw(&vm2, 1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "VMCTR2 data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* Gamma tables */
     e = st7796s_send_command_raw(ST7796S_GMCTRP1);
     if (e != ESP_OK) { ESP_LOGE(TAG, "GMCTRP1 cmd failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
     e = st7796s_send_data_raw(gamma_pos, sizeof(gamma_pos));
@@ -479,10 +456,7 @@ static hal_status_t st7796s_run_init_sequence(void)
     e = st7796s_send_data_raw(gamma_neg, sizeof(gamma_neg));
     if (e != ESP_OK) { ESP_LOGE(TAG, "GMCTRN1 data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    /* Set full window */
     st7796s_set_address_window(0, 0, ST7796S_WIDTH - 1, ST7796S_HEIGHT - 1);
-
-    /* Clear screen to black using chunked DMA-safe transfers */
     st7796s_write_memory_prepare();
 
     size_t chunk_pixels = FILL_CHUNK_PIXELS;
@@ -490,7 +464,6 @@ static hal_status_t st7796s_run_init_sequence(void)
     if (!ensure_fill_dma_buf(chunk_bytes)) {
         ESP_LOGW(TAG, "Unable to allocate fill buffer; skipping clear");
     } else {
-        /* Fill buffer with black */
         for (size_t i = 0; i < chunk_pixels; ++i) {
             st7796s_fill_dma_buf[2 * i] = 0x00;
             st7796s_fill_dma_buf[2 * i + 1] = 0x00;
@@ -508,7 +481,7 @@ static hal_status_t st7796s_run_init_sequence(void)
             }
             remaining -= to_send;
             ++chunks_sent;
-            if ((chunks_sent & 0x7) == 0) taskYIELD(); /* yield every 8 chunks */
+            if ((chunks_sent & 0x7) == 0) taskYIELD();
         }
     }
 
@@ -539,22 +512,11 @@ hal_status_t HAL_Display_ST7796S_Init(void)
         return hs;
     }
 
-    /* Optional ID read for bring-up (uncomment to use) */
-    /*
-    uint8_t idbuf[4] = {0};
-    if (st7796s_read_id(idbuf, sizeof(idbuf)) == ESP_OK) {
-        ESP_LOGI(TAG, "Panel ID: %02X %02X %02X %02X", idbuf[0], idbuf[1], idbuf[2], idbuf[3]);
-    } else {
-        ESP_LOGW(TAG, "Panel ID read failed (MISO may be unconnected)");
-    }
-    */
-
     if (st7796s_run_init_sequence() != HAL_OK) {
         ESP_LOGE(TAG, "Panel init sequence failed");
         return HAL_ERR_INIT;
     }
 
-    /* Turn on backlight if pin defined */
     if ((int)BOARD_LCD_BL >= 0 && (int)BOARD_LCD_BL <= 63) {
         gpio_set_level((gpio_num_t)BOARD_LCD_BL, 1);
     }
@@ -586,6 +548,7 @@ hal_status_t HAL_Display_ST7796S_Clear(void)
 hal_status_t HAL_Display_ST7796S_Fill(uint32_t color)
 {
     if (!st7796s_initialized) return HAL_ERR_INIT;
+    if (ST7796S_WIDTH <= 0 || ST7796S_HEIGHT <= 0) return HAL_ERR_DEV;
 
     uint16_t rgb565 = rgb24_to_rgb565(color);
 
@@ -629,7 +592,7 @@ hal_status_t HAL_Display_ST7796S_WriteText(const char *text)
 {
     (void)text;
     ESP_LOGW(TAG, "WriteText not implemented");
-    return HAL_OK;
+    return HAL_ERR_DEV;
 }
 
 hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
@@ -639,22 +602,20 @@ hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap)
     case HAL_CAP_FILL:
     case HAL_CAP_CLEAR:
     case HAL_CAP_SHOW:
+    case HAL_CAP_ORIENTATION:
         return HAL_OK;
     case HAL_CAP_BRIGHTNESS:
-        /* Brightness via PWM not implemented yet */
         return HAL_ERR_DEV;
     default:
         return HAL_ERR_DEV;
     }
 }
 
-/* Deinit helper */
 hal_status_t HAL_Display_ST7796S_Deinit(void)
 {
     hal_status_t status = HAL_OK;
 
     if (st7796s_spi) {
-        /* Turn display off and backlight off */
         esp_err_t e = st7796s_send_command_raw(0x28); /* DISP OFF */
         if (e != ESP_OK) {
             ESP_LOGW(TAG, "Display off failed during deinit: %s", esp_err_to_name(e));
@@ -685,16 +646,87 @@ hal_status_t HAL_Display_ST7796S_Deinit(void)
     return status;
 }
 
-/* Raw MADCTL register write (low-level orientation control) */
 hal_status_t HAL_Display_ST7796S_SetMadctl(uint8_t madctl)
 {
-    if (!st7796s_initialized)
-        return HAL_ERR_INIT;
+    if (!st7796s_initialized) return HAL_ERR_INIT;
 
     esp_err_t e = st7796s_send_cmd_with_byte(ST7796S_MADCTL, madctl);
-    if (e != ESP_OK)
-        return map_esp_err(e);
+    if (e != ESP_OK) return map_esp_err(e);
 
     st7796s_current_madctl = madctl;
+    return HAL_OK;
+}
+
+hal_status_t HAL_Display_ST7796S_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color)
+{
+    if (!st7796s_initialized) return HAL_ERR_INIT;
+    if (w == 0 || h == 0) return HAL_OK;
+    if (x >= ST7796S_WIDTH || y >= ST7796S_HEIGHT) return HAL_ERR_DEV;
+
+    uint32_t x2 = (uint32_t)x + (uint32_t)w - 1u;
+    uint32_t y2 = (uint32_t)y + (uint32_t)h - 1u;
+    if (x2 >= (uint32_t)ST7796S_WIDTH)  x2 = (uint32_t)ST7796S_WIDTH - 1u;
+    if (y2 >= (uint32_t)ST7796S_HEIGHT) y2 = (uint32_t)ST7796S_HEIGHT - 1u;
+
+    uint16_t rgb565 = rgb24_to_rgb565(color);
+    size_t chunk_pixels = FILL_CHUNK_PIXELS;
+    size_t chunk_bytes = chunk_pixels * 2;
+    if (!ensure_fill_dma_buf(chunk_bytes)) return HAL_ERR_INIT;
+
+    for (size_t i = 0; i < chunk_pixels; ++i) {
+        st7796s_fill_dma_buf[2 * i]     = (uint8_t)(rgb565 >> 8);
+        st7796s_fill_dma_buf[2 * i + 1] = (uint8_t)(rgb565 & 0xFF);
+    }
+
+    st7796s_set_address_window(x, y, (uint16_t)x2, (uint16_t)y2);
+    st7796s_write_memory_prepare();
+
+    int total_pixels = (int)((x2 - x + 1u) * (y2 - y + 1u));
+    int remaining = total_pixels;
+    int chunks_sent = 0;
+    while (remaining > 0) {
+        int to_send = (remaining > (int)chunk_pixels) ? (int)chunk_pixels : remaining;
+        esp_err_t e = st7796s_send_data_raw(st7796s_fill_dma_buf, (size_t)to_send * 2u);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "FillRect chunk failed: %s", esp_err_to_name(e));
+            return map_esp_err(e);
+        }
+        remaining -= to_send;
+        ++chunks_sent;
+        if ((chunks_sent & 0x7) == 0) taskYIELD();
+    }
+    return HAL_OK;
+}
+
+hal_status_t HAL_Display_ST7796S_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len)
+{
+    if (!st7796s_initialized) return HAL_ERR_INIT;
+    if (len == 0) return HAL_OK;
+    if (!pixels24) return HAL_ERR_DEV;
+    if (y >= ST7796S_HEIGHT) return HAL_ERR_DEV;
+    if (x >= ST7796S_WIDTH) return HAL_ERR_DEV;
+
+    uint32_t max_len = (uint32_t)ST7796S_WIDTH - (uint32_t)x;
+    if ((uint32_t)len > max_len) len = (uint16_t)max_len;
+
+    size_t need_bytes = (size_t)len * 2u;
+    if (need_bytes > st7796s_fill_dma_bytes) {
+        if (!ensure_fill_dma_buf(need_bytes)) return HAL_ERR_INIT;
+    }
+
+    for (uint16_t i = 0; i < len; ++i) {
+        uint16_t c = rgb24_to_rgb565(pixels24[i]);
+        st7796s_fill_dma_buf[2 * i]     = (uint8_t)(c >> 8);
+        st7796s_fill_dma_buf[2 * i + 1] = (uint8_t)(c & 0xFF);
+    }
+
+    st7796s_set_address_window(x, y, (uint16_t)(x + len - 1u), y);
+    st7796s_write_memory_prepare();
+
+    esp_err_t e = st7796s_send_data_raw(st7796s_fill_dma_buf, need_bytes);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "BlitRow transmit failed: %s", esp_err_to_name(e));
+        return map_esp_err(e);
+    }
     return HAL_OK;
 }

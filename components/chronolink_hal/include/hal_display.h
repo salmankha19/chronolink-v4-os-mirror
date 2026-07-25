@@ -101,6 +101,9 @@ hal_status_t HAL_Display_Clear(void);
  */
 hal_status_t HAL_Display_Show(void);
 
+hal_status_t HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color);
+hal_status_t HAL_Display_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
+
 /**
  * @brief Write text to the display.
  *
