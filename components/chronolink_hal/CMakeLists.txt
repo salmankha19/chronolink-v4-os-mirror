@@ -9,7 +9,6 @@ set(CHRONOLINK_HAL_SRCS
     "src/hal_spi_esp32.c"
     "src/hal_rtc_ds3231m.c"
     "src/hal_display.c"
-    "src/hal_gfx.c" 
     "src/hal_sensors.c"
     "src/pdl_board_esp32.c"
     "${CMAKE_SOURCE_DIR}/src/platformDependentLayer/pdl_board.c"
