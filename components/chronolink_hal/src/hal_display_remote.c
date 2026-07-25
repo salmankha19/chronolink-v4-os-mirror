@@ -65,3 +65,7 @@ hal_status_t HAL_Display_Remote_Show(void)
     // TODO: Trigger remote present/flush.
     return HAL_OK;
 }
+
+hal_status_t HAL_Display_Remote_Deinit(void) { return HAL_OK; }
+hal_status_t HAL_Display_Remote_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color) { (void)x;(void)y;(void)w;(void)h;(void)color; return HAL_OK; }
+hal_status_t HAL_Display_Remote_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len) { (void)x;(void)y;(void)pixels24;(void)len; return HAL_OK; }
