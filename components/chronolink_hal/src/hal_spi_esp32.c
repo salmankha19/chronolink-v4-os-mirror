@@ -181,3 +181,21 @@ hal_status_t HAL_SPI_Transfer(uint8_t cs_pin,
 
     return HAL_OK;
 }
+
+/* --------------------------------------------------------------------------
+ * Debug
+ * -------------------------------------------------------------------------- */
+void HAL_SPI_DebugDump(void)
+{
+    ESP_LOGI(TAG, "SPI bus host=%d initialized=%s",
+             HAL_SPI_HOST, s_spi_bus_inited ? "yes" : "no");
+
+    for (int i = 0; i < HAL_SPI_MAX_DEVICES; i++) {
+        if (s_dev_slots[i].in_use) {
+            ESP_LOGI(TAG, "  slot[%d]: CS=%d handle=%p",
+                     i, s_dev_slots[i].cs_pin, (void *)s_dev_slots[i].handle);
+        } else {
+            ESP_LOGI(TAG, "  slot[%d]: (free)", i);
+        }
+    }
+}

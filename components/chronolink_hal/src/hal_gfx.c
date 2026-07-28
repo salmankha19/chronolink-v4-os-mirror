@@ -56,32 +56,30 @@ static inline bool rect_intersect(int16_t x, int16_t y, int16_t w, int16_t h,
 /* --------------------------------------------------------------------------
  * Initialization
  * -------------------------------------------------------------------------- */
-
 void HAL_GFX_Init(void)
 {
-    /* Query backend for runtime size if available */
-#ifdef HAL_Display_GetWidth
+    /* Query the router for the backend's runtime resolution.
+       If the backend is headless or not ready, fall back to compile-time defaults. */
     int w = HAL_Display_GetWidth();
-#else
-    int w = -1;
-#endif
-
-#ifdef HAL_Display_GetHeight
     int h = HAL_Display_GetHeight();
-#else
-    int h = -1;
-#endif
 
-    if (w > 0) s_disp_w = w;
-    else s_disp_w = HAL_GFX_DISPLAY_WIDTH;
+    if (w > 0) {
+        s_disp_w = w;
+    } else {
+        s_disp_w = HAL_GFX_DISPLAY_WIDTH;
+    }
 
-    if (h > 0) s_disp_h = h;
-    else s_disp_h = HAL_GFX_DISPLAY_HEIGHT;
+    if (h > 0) {
+        s_disp_h = h;
+    } else {
+        s_disp_h = HAL_GFX_DISPLAY_HEIGHT;
+    }
 
-    /* Enforce minimums at runtime as a safety net */
-    if (s_disp_w < HAL_GFX_MIN_WIDTH) s_disp_w = HAL_GFX_MIN_WIDTH;
+    /* Runtime safety net: enforce minimums */
+    if (s_disp_w < HAL_GFX_MIN_WIDTH)  s_disp_w = HAL_GFX_MIN_WIDTH;
     if (s_disp_h < HAL_GFX_MIN_HEIGHT) s_disp_h = HAL_GFX_MIN_HEIGHT;
 
+    /* Reset clip region to full screen */
     s_clip.x = 0;
     s_clip.y = 0;
     s_clip.w = (int16_t)s_disp_w;
