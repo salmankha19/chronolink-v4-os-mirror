@@ -17,6 +17,10 @@
 #include <stdbool.h>
 #include "hal.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief Return the active panel width in pixels.
  * @return Width > 0 if known, 0 if backend is headless or not initialized.
@@ -28,10 +32,6 @@ int HAL_Display_GetWidth(void);
  * @return Height > 0 if known, 0 if backend is headless or not initialized.
  */
 int HAL_Display_GetHeight(void);
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* --------------------------------------------------------------------------
  * Capability flags
