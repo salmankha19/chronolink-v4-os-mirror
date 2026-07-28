@@ -1,18 +1,9 @@
-#ifndef BOOT_MANAGER_H
-#define BOOT_MANAGER_H
+#pragma once
+#include <stdint.h>
 
-#include "boot_events.h"
+#define BOOT_FLAG_SAFE_MODE     (1u << 0)
+#define BOOT_FLAG_FACTORY_RESET (1u << 1)
+#define BOOT_FLAG_OTA_ALLOWED   (1u << 2)
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int boot_manager_init(boot_flags_t flags);
-boot_stage_t boot_manager_get_stage(void);
-void boot_manager_notify_stage(boot_stage_t stage, boot_status_t status);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* BOOT_MANAGER_H */
+int boot_manager_init(uint32_t flags);
+int boot_manager_start(void);
