@@ -5,19 +5,32 @@
  *
  * Backend-agnostic, efficient, clipped drawing built on the HAL display router.
  *
- * Design goals (ESP32-S3 prayer-clock workload):
+ * Design goals:
  *   - Internal pixel format: RGB565 (hal_gfx_color_t).
  *   - Router/backends consume 24-bit RGB packed as 0xRRGGBB in uint32_t.
  *   - Bounded stack, no dynamic allocation, no logging in hot paths.
  *   - Bulk ops routed to backend DMA-friendly APIs (FillRect, BlitRow).
  *
+ * Resolution and configuration:
+ *   - Default compile-time resolution: 480x320 (override via build system).
+ *   - Override by defining HAL_GFX_DISPLAY_WIDTH and HAL_GFX_DISPLAY_HEIGHT
+ *     at compile time (e.g., via target_compile_definitions in CMake).
+ *   - HAL_GFX_MAX_ROW_BUF defaults to HAL_GFX_DISPLAY_WIDTH and controls
+ *     the internal row buffer used by HAL_GFX_Blit. If smaller than the
+ *     display width, blits are chunked automatically.
+ *
+ * Minimum supported resolution:
+ *   - Compile-time enforced minimum: 32x32 (practical minimum for primitives).
+ *   - HAL_GFX_MAX_ROW_BUF must be >= 1.
+ *
+ * Initialization:
+ *   - Call HAL_GFX_Init() after hal_display_init() so the GFX layer can
+ *     query the backend for runtime width/height and set the clip region.
+ *
  * Router contract expected by this layer:
  *   HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color24);
  *   HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color24);
  *   HAL_Display_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
- *
- * Backend-specific optimizations (e.g. ST7796S DMA chunking) belong in the
- * backend implementation, NOT in this GFX layer.
  */
 
 #ifndef HAL_GFX_H
@@ -31,22 +44,40 @@ extern "C" {
 #endif
 
 /* --------------------------------------------------------------------------
- * Configuration defaults
+ * Configuration defaults (override at compile time)
  * -------------------------------------------------------------------------- */
 
 #ifndef HAL_GFX_DISPLAY_WIDTH
-#define HAL_GFX_DISPLAY_WIDTH  320
+#define HAL_GFX_DISPLAY_WIDTH  480
 #endif
 
 #ifndef HAL_GFX_DISPLAY_HEIGHT
-#define HAL_GFX_DISPLAY_HEIGHT 480
+#define HAL_GFX_DISPLAY_HEIGHT 320
 #endif
 
-/* Maximum pixels per row converted by HAL_GFX_Blit.
- * For ST7796S 320-wide panel, 320 is a safe default.
- * If your target has limited RAM, reduce this and HAL_GFX_Blit will chunk. */
 #ifndef HAL_GFX_MAX_ROW_BUF
 #define HAL_GFX_MAX_ROW_BUF HAL_GFX_DISPLAY_WIDTH
+#endif
+
+/* --------------------------------------------------------------------------
+ * Compile-time sanity checks
+ * -------------------------------------------------------------------------- */
+
+/* Practical minimums */
+#ifndef HAL_GFX_MIN_WIDTH
+#define HAL_GFX_MIN_WIDTH 32
+#endif
+
+#ifndef HAL_GFX_MIN_HEIGHT
+#define HAL_GFX_MIN_HEIGHT 32
+#endif
+
+#if (HAL_GFX_DISPLAY_WIDTH < HAL_GFX_MIN_WIDTH) || (HAL_GFX_DISPLAY_HEIGHT < HAL_GFX_MIN_HEIGHT)
+#error "HAL_GFX_DISPLAY_WIDTH/HEIGHT too small. Increase to at least HAL_GFX_MIN_WIDTH x HAL_GFX_MIN_HEIGHT"
+#endif
+
+#if (HAL_GFX_MAX_ROW_BUF <= 0)
+#error "HAL_GFX_MAX_ROW_BUF must be > 0"
 #endif
 
 /* --------------------------------------------------------------------------
@@ -89,6 +120,23 @@ static inline uint32_t HAL_GFX_ColorToBackend24(hal_gfx_color_t c)
     uint8_t b8 = (b5 << 3) | (b5 >> 2);
     return ((uint32_t)r8 << 16) | ((uint32_t)g8 << 8) | (uint32_t)b8;
 }
+
+/* --------------------------------------------------------------------------
+ * Initialization
+ * -------------------------------------------------------------------------- */
+
+/**
+ * Initialize the HAL GFX layer.
+ * Must be called after hal_display_init() so the GFX layer can query the
+ * backend for runtime width/height and set the initial clip rectangle.
+ *
+ * If the backend does not provide runtime size, compile-time defaults are used.
+ */
+void HAL_GFX_Init(void);
+
+/* Optional helpers to query the active display size used by HAL_GFX */
+int HAL_GFX_GetDisplayWidth(void);
+int HAL_GFX_GetDisplayHeight(void);
 
 /* --------------------------------------------------------------------------
  * Clipping API
