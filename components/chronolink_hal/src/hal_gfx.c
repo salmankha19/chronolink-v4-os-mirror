@@ -1,6 +1,5 @@
 // hal_gfx.c
-// ChronoLink V4 — Graphics primitives layer
-// Backend-agnostic, efficient, and compatible with existing router/backends.
+// ChronoLink V4 — Graphics primitives layer (parameterized resolution)
 // Assumes router signatures:
 //   HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color24)
 //   HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color24)
@@ -12,13 +11,12 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Static clip state */
-static hal_gfx_rect_t s_clip = {
-    .x = 0,
-    .y = 0,
-    .w = HAL_GFX_DISPLAY_WIDTH,
-    .h = HAL_GFX_DISPLAY_HEIGHT
-};
+/* Static clip state (initialized at runtime in HAL_GFX_Init) */
+static hal_gfx_rect_t s_clip;
+
+/* Active display size used by HAL_GFX (set in HAL_GFX_Init) */
+static int s_disp_w = HAL_GFX_DISPLAY_WIDTH;
+static int s_disp_h = HAL_GFX_DISPLAY_HEIGHT;
 
 /* Row buffer of uint32_t pixels (0xRRGGBB) to match router/backends */
 static uint32_t s_row_buf[HAL_GFX_MAX_ROW_BUF];
@@ -55,7 +53,48 @@ static inline bool rect_intersect(int16_t x, int16_t y, int16_t w, int16_t h,
     return true;
 }
 
-/* Public clip API */
+/* --------------------------------------------------------------------------
+ * Initialization
+ * -------------------------------------------------------------------------- */
+
+void HAL_GFX_Init(void)
+{
+    /* Query backend for runtime size if available */
+#ifdef HAL_Display_GetWidth
+    int w = HAL_Display_GetWidth();
+#else
+    int w = -1;
+#endif
+
+#ifdef HAL_Display_GetHeight
+    int h = HAL_Display_GetHeight();
+#else
+    int h = -1;
+#endif
+
+    if (w > 0) s_disp_w = w;
+    else s_disp_w = HAL_GFX_DISPLAY_WIDTH;
+
+    if (h > 0) s_disp_h = h;
+    else s_disp_h = HAL_GFX_DISPLAY_HEIGHT;
+
+    /* Enforce minimums at runtime as a safety net */
+    if (s_disp_w < HAL_GFX_MIN_WIDTH) s_disp_w = HAL_GFX_MIN_WIDTH;
+    if (s_disp_h < HAL_GFX_MIN_HEIGHT) s_disp_h = HAL_GFX_MIN_HEIGHT;
+
+    s_clip.x = 0;
+    s_clip.y = 0;
+    s_clip.w = (int16_t)s_disp_w;
+    s_clip.h = (int16_t)s_disp_h;
+}
+
+int HAL_GFX_GetDisplayWidth(void) { return s_disp_w; }
+int HAL_GFX_GetDisplayHeight(void) { return s_disp_h; }
+
+/* --------------------------------------------------------------------------
+ * Public clip API
+ * -------------------------------------------------------------------------- */
+
 void HAL_GFX_SetClip(int16_t x, int16_t y, int16_t w, int16_t h)
 {
     if (w < 0) w = 0;
@@ -70,8 +109,8 @@ void HAL_GFX_ResetClip(void)
 {
     s_clip.x = 0;
     s_clip.y = 0;
-    s_clip.w = HAL_GFX_DISPLAY_WIDTH;
-    s_clip.h = HAL_GFX_DISPLAY_HEIGHT;
+    s_clip.w = (int16_t)s_disp_w;
+    s_clip.h = (int16_t)s_disp_h;
 }
 
 bool HAL_GFX_GetClip(hal_gfx_rect_t *clip)
@@ -81,7 +120,10 @@ bool HAL_GFX_GetClip(hal_gfx_rect_t *clip)
     return true;
 }
 
-/* Pixel / Fill */
+/* --------------------------------------------------------------------------
+ * Pixel / Fill
+ * -------------------------------------------------------------------------- */
+
 void HAL_GFX_DrawPixel(int16_t x, int16_t y, hal_gfx_color_t color)
 {
     if (x < s_clip.x || y < s_clip.y) return;
