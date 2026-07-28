@@ -510,6 +510,48 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
     return status;
 }
 
+int HAL_Display_GetWidth(void)
+{
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        return ST7796S_WIDTH;
+#endif
+#if BACKEND_MAX7219_ENABLED
+    case HAL_DISPLAY_BACKEND_MAX7219:
+        /* MAX7219 is chain-dependent; return 8 as a single-module default.
+           Override at the app layer if you know the chain length. */
+        return 8;
+#endif
+#if BACKEND_REMOTE_ENABLED
+    case HAL_DISPLAY_BACKEND_REMOTE:
+        return 0; /* Unknown until remote handshake */
+#endif
+    default:
+        return 0;
+    }
+}
+
+int HAL_Display_GetHeight(void)
+{
+    switch (s_backend) {
+#if BACKEND_ST7796S_ENABLED
+    case HAL_DISPLAY_BACKEND_ST7796S:
+        return ST7796S_HEIGHT;
+#endif
+#if BACKEND_MAX7219_ENABLED
+    case HAL_DISPLAY_BACKEND_MAX7219:
+        return 8;
+#endif
+#if BACKEND_REMOTE_ENABLED
+    case HAL_DISPLAY_BACKEND_REMOTE:
+        return 0;
+#endif
+    default:
+        return 0;
+    }
+}
+
 hal_display_backend_t HAL_Display_GetBackend(void)
 {
     return s_backend;
