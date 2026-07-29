@@ -2,7 +2,7 @@
 #include "hal_display.h"
 
 static const char *TAG = "DISPLAY_CAPS";
-__attribute__((used, section(".flash.rodata"))) static const char keep_display_caps[] = "DISPLAY_CAPS";
+__attribute__((used, section(".flash.rodata"))) const char keep_display_caps[] = "DISPLAY_CAPS";
 __attribute__((used)) static const char *keep_display_caps_ref = keep_display_caps;
 
 hal_status_t HAL_Display_Mock_Init(void)

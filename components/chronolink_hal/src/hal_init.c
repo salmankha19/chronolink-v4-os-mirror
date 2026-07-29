@@ -49,12 +49,14 @@ static void log_display_caps(void)
 static const char *TAG = "HAL_INIT";
 
 /* ensure the keep symbol is referenced so the linker keeps it */
+#ifdef CONFIG_CHRONOLINK_USE_MOCK_DISPLAY
 extern const char keep_display_caps[];
 static void __attribute__((constructor)) keep_display_caps_ref_init(void)
 {
     volatile const char *p = keep_display_caps;
     (void)p;
 }
+#endif
 
 
 hal_status_t HAL_Init(void)
