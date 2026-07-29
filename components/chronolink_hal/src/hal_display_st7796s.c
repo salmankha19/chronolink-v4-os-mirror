@@ -299,7 +299,11 @@ static hal_status_t st7796s_spi_init(void)
     };
 
     esp_err_t err = spi_bus_initialize(ST7796S_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "SPI bus already initialized, reusing shared bus");
+        err = ESP_OK;
+    }
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(err));
         return HAL_ERR_INIT;
     }
