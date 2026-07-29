@@ -57,6 +57,7 @@ typedef enum {
  * -------------------------------------------------------------------------- */
 typedef enum {
     HAL_DISPLAY_BACKEND_NONE = 0,
+    HAL_DISPLAY_BACKEND_MOCK,
     HAL_DISPLAY_BACKEND_ST7796S,
     HAL_DISPLAY_BACKEND_MAX7219,
     HAL_DISPLAY_BACKEND_REMOTE,

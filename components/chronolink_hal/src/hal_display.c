@@ -46,6 +46,28 @@
 #define BACKEND_REMOTE_ENABLED 0
 #endif
 
+#if defined(CONFIG_CHRONOLINK_USE_MOCK_DISPLAY)
+#define BACKEND_MOCK_ENABLED 1
+#else
+#define BACKEND_MOCK_ENABLED 0
+#endif
+
+#if BACKEND_MOCK_ENABLED
+hal_status_t HAL_Display_Mock_Init(void);
+hal_status_t HAL_Display_Mock_Deinit(void);
+hal_status_t HAL_Display_Mock_DrawPixel(uint16_t x, uint16_t y, uint32_t color);
+hal_status_t HAL_Display_Mock_Fill(uint32_t color);
+hal_status_t HAL_Display_Mock_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color);
+hal_status_t HAL_Display_Mock_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
+hal_status_t HAL_Display_Mock_Clear(void);
+hal_status_t HAL_Display_Mock_Show(void);
+hal_status_t HAL_Display_Mock_WriteText(const char *text);
+hal_status_t HAL_Display_Mock_HasCapability(hal_display_cap_t cap);
+hal_status_t HAL_Display_Mock_SetMadctl(uint8_t madctl);
+hal_status_t HAL_Display_Mock_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa);
+hal_status_t HAL_Display_Mock_SetScrollStart(uint16_t vss);
+#endif
+
 static const char *TAG = "HAL_DISPLAY";
 
 /* --------------------------------------------------------------------------
@@ -84,7 +106,9 @@ static inline void display_unlock(void)
  * -------------------------------------------------------------------------- */
 static hal_display_backend_t hal_display_select_backend(void)
 {
-#if BACKEND_ST7796S_ENABLED
+#if BACKEND_MOCK_ENABLED
+    return HAL_DISPLAY_BACKEND_MOCK;
+#elif BACKEND_ST7796S_ENABLED
     return HAL_DISPLAY_BACKEND_ST7796S;
 #elif BACKEND_MAX7219_ENABLED
     return HAL_DISPLAY_BACKEND_MAX7219;
@@ -133,6 +157,12 @@ hal_status_t HAL_Display_Init(void)
     }
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        ESP_LOGI(TAG, "Initializing Mock display backend");
+        status = HAL_Display_Mock_Init();
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         ESP_LOGI(TAG, "Initializing ST7796S display");
@@ -179,6 +209,11 @@ hal_status_t HAL_Display_Deinit(void)
     if (!display_lock()) return HAL_ERR_INIT;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_Deinit();
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Deinit();
@@ -219,6 +254,11 @@ hal_status_t HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_DrawPixel(x, y, color);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_DrawPixel(x, y, color);
@@ -254,6 +294,11 @@ hal_status_t HAL_Display_Fill(uint32_t color)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_Fill(color);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Fill(color);
@@ -287,6 +332,11 @@ hal_status_t HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_FillRect(x, y, w, h, color);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_FillRect(x, y, w, h, color);
@@ -321,6 +371,11 @@ hal_status_t HAL_Display_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels2
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_BlitRow(x, y, pixels24, len);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_BlitRow(x, y, pixels24, len);
@@ -356,6 +411,11 @@ hal_status_t HAL_Display_Clear(void)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_Clear();
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Clear();
@@ -391,6 +451,11 @@ hal_status_t HAL_Display_Show(void)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_Show();
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Show();
@@ -426,6 +491,11 @@ hal_status_t HAL_Display_WriteText(const char *text)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_WriteText(text);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_WriteText(text);
@@ -460,6 +530,11 @@ hal_status_t HAL_Display_HasCapability(hal_display_cap_t cap)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_HasCapability(cap);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_HasCapability(cap);
@@ -496,6 +571,11 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_SetMadctl(madctl);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_SetMadctl(madctl);
@@ -513,6 +593,10 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
 int HAL_Display_GetWidth(void)
 {
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        return 0;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         return ST7796S_WIDTH;
@@ -535,6 +619,10 @@ int HAL_Display_GetWidth(void)
 int HAL_Display_GetHeight(void)
 {
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        return 0;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         return ST7796S_HEIGHT;
@@ -568,6 +656,11 @@ hal_status_t HAL_Display_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_SetScrollArea(tfa, vsa, bfa);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_SetScrollArea(tfa, vsa, bfa);
@@ -593,6 +686,11 @@ hal_status_t HAL_Display_SetScrollStart(uint16_t vss)
     if (!display_lock()) return HAL_ERR_DEV;
 
     switch (s_backend) {
+#if BACKEND_MOCK_ENABLED
+    case HAL_DISPLAY_BACKEND_MOCK:
+        status = HAL_Display_Mock_SetScrollStart(vss);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_SetScrollStart(vss);

@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 typedef struct {
-   uint8_t  id;
+    uint32_t id;
     uint32_t value;
 } os_state_msg_t;
 
