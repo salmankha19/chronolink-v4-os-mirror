@@ -1,7 +1,9 @@
 #include "state_manager.h"
 #include "ui_state.h"
+#include "esp_log.h"
 #include <string.h>
 
+static const char *TAG = "state_mgr";
 static QueueHandle_t s_state_queue = NULL;
 static UIState s_ui_state = {
     .unix_ts = 0,
@@ -12,11 +14,13 @@ static UIState s_ui_state = {
 void state_manager_init(QueueHandle_t queue)
 {
     s_state_queue = queue;
+    ESP_LOGI(TAG, "State manager initialized");
 }
 
 void state_manager_dispatch(const os_state_msg_t *msg)
 {
-    (void)msg;
+    if (!msg) return;
+    ESP_LOGD(TAG, "Dispatch id=%u value=%lu", (unsigned)msg->id, (unsigned long)msg->value);
 }
 
 const UIState *state_get_snapshot(void)
