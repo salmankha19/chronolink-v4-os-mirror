@@ -72,6 +72,7 @@ if(NOT DEFINED IDF_PATH)
 endif()
 target_include_directories(${COMPONENT_LIB} PRIVATE
     "${CMAKE_SOURCE_DIR}/src/platformDependentLayer"
+    "${CMAKE_SOURCE_DIR}/components/chronolink_driver_sdk/include"
     "${IDF_PATH}/components/driver/include"
     "${IDF_PATH}/components/esp_driver_gpio/include"
     "${IDF_PATH}/components/esp_driver_spi/include"

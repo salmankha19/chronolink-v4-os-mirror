@@ -46,6 +46,9 @@
 #define BACKEND_REMOTE_ENABLED 0
 #endif
 
+#include "chronolink_driver_sdk.h"
+#define BACKEND_CUSTOM_ENABLED 1
+
 #if defined(CONFIG_CHRONOLINK_USE_MOCK_DISPLAY)
 #define BACKEND_MOCK_ENABLED 1
 #else
@@ -66,6 +69,23 @@ hal_status_t HAL_Display_Mock_HasCapability(hal_display_cap_t cap);
 hal_status_t HAL_Display_Mock_SetMadctl(uint8_t madctl);
 hal_status_t HAL_Display_Mock_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa);
 hal_status_t HAL_Display_Mock_SetScrollStart(uint16_t vss);
+#endif
+
+#if BACKEND_CUSTOM_ENABLED
+static inline const chronolink_display_driver_t *custom_driver(void)
+{
+    return chronolink_driver_get();
+}
+
+#define CUSTOM_CALL(method, ...)                                          \
+    do {                                                                  \
+        const chronolink_display_driver_t *drv = custom_driver();         \
+        if ((drv != NULL) && (drv->method != NULL)) {                     \
+            status = drv->method(__VA_ARGS__);                             \
+        } else {                                                          \
+            status = HAL_ERR_DEV;                                         \
+        }                                                                 \
+    } while (0)
 #endif
 
 static const char *TAG = "HAL_DISPLAY";
@@ -114,6 +134,11 @@ static hal_display_backend_t hal_display_select_backend(void)
     return HAL_DISPLAY_BACKEND_MAX7219;
 #elif BACKEND_REMOTE_ENABLED
     return HAL_DISPLAY_BACKEND_REMOTE;
+#elif BACKEND_CUSTOM_ENABLED
+    if (chronolink_driver_is_registered()) {
+        return HAL_DISPLAY_BACKEND_CUSTOM;
+    }
+    return HAL_DISPLAY_BACKEND_NONE;
 #else
     return HAL_DISPLAY_BACKEND_NONE;
 #endif
@@ -162,6 +187,13 @@ hal_status_t HAL_Display_Init(void)
         ESP_LOGI(TAG, "Initializing Mock display backend");
         status = HAL_Display_Mock_Init();
         break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM: {
+        const chronolink_display_driver_t *drv = custom_driver();
+        status = (drv != NULL && drv->init != NULL) ? drv->init() : HAL_ERR_INIT;
+        break;
+    }
 #endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -214,6 +246,11 @@ hal_status_t HAL_Display_Deinit(void)
         status = HAL_Display_Mock_Deinit();
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(deinit);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Deinit();
@@ -259,6 +296,11 @@ hal_status_t HAL_Display_DrawPixel(uint16_t x, uint16_t y, uint32_t color)
         status = HAL_Display_Mock_DrawPixel(x, y, color);
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(draw_pixel, x, y, color);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_DrawPixel(x, y, color);
@@ -299,6 +341,11 @@ hal_status_t HAL_Display_Fill(uint32_t color)
         status = HAL_Display_Mock_Fill(color);
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(fill, color);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Fill(color);
@@ -335,6 +382,11 @@ hal_status_t HAL_Display_FillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         status = HAL_Display_Mock_FillRect(x, y, w, h, color);
+        break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(fill_rect, x, y, w, h, color);
         break;
 #endif
 #if BACKEND_ST7796S_ENABLED
@@ -374,6 +426,11 @@ hal_status_t HAL_Display_BlitRow(uint16_t x, uint16_t y, const uint32_t *pixels2
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         status = HAL_Display_Mock_BlitRow(x, y, pixels24, len);
+        break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(blit_row, x, y, pixels24, len);
         break;
 #endif
 #if BACKEND_ST7796S_ENABLED
@@ -416,6 +473,11 @@ hal_status_t HAL_Display_Clear(void)
         status = HAL_Display_Mock_Clear();
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(clear);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_Clear();
@@ -454,6 +516,11 @@ hal_status_t HAL_Display_Show(void)
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         status = HAL_Display_Mock_Show();
+        break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(show);
         break;
 #endif
 #if BACKEND_ST7796S_ENABLED
@@ -496,6 +563,11 @@ hal_status_t HAL_Display_WriteText(const char *text)
         status = HAL_Display_Mock_WriteText(text);
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(write_text, text);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_WriteText(text);
@@ -533,6 +605,11 @@ hal_status_t HAL_Display_HasCapability(hal_display_cap_t cap)
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         status = HAL_Display_Mock_HasCapability(cap);
+        break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(has_capability, cap);
         break;
 #endif
 #if BACKEND_ST7796S_ENABLED
@@ -576,6 +653,11 @@ hal_status_t HAL_Display_SetMadctl(uint8_t madctl)
         status = HAL_Display_Mock_SetMadctl(madctl);
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(set_madctl, madctl);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_SetMadctl(madctl);
@@ -596,6 +678,12 @@ int HAL_Display_GetWidth(void)
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         return 0;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM: {
+        const chronolink_display_driver_t *drv = custom_driver();
+        return (drv != NULL && drv->get_width != NULL) ? drv->get_width() : 0;
+    }
 #endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -622,6 +710,12 @@ int HAL_Display_GetHeight(void)
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         return 0;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM: {
+        const chronolink_display_driver_t *drv = custom_driver();
+        return (drv != NULL && drv->get_height != NULL) ? drv->get_height() : 0;
+    }
 #endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
@@ -661,6 +755,11 @@ hal_status_t HAL_Display_SetScrollArea(uint16_t tfa, uint16_t vsa, uint16_t bfa)
         status = HAL_Display_Mock_SetScrollArea(tfa, vsa, bfa);
         break;
 #endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(set_scroll_area, tfa, vsa, bfa);
+        break;
+#endif
 #if BACKEND_ST7796S_ENABLED
     case HAL_DISPLAY_BACKEND_ST7796S:
         status = HAL_Display_ST7796S_SetScrollArea(tfa, vsa, bfa);
@@ -689,6 +788,11 @@ hal_status_t HAL_Display_SetScrollStart(uint16_t vss)
 #if BACKEND_MOCK_ENABLED
     case HAL_DISPLAY_BACKEND_MOCK:
         status = HAL_Display_Mock_SetScrollStart(vss);
+        break;
+#endif
+#if BACKEND_CUSTOM_ENABLED
+    case HAL_DISPLAY_BACKEND_CUSTOM:
+        CUSTOM_CALL(set_scroll_start, vss);
         break;
 #endif
 #if BACKEND_ST7796S_ENABLED
