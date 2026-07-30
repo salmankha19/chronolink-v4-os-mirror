@@ -3,6 +3,7 @@
 #include "freertos/timers.h"
 #include "event_bus.h"
 #include "state_manager.h"
+#include "display_manager.h"
 #include "boot_events.h"
 #include <string.h>
 
@@ -71,6 +72,9 @@ void core_os_init(boot_flags_t boot_flags)
 
     /* Initialize State Manager with the state queue */
     state_manager_init(g_state_queue);
+
+    /* Display Manager integration point: Core 1 consumes declarative JSON frames. */
+    display_manager_init();
 
     /* 3. Create timers */
     g_heartbeat_timer = xTimerCreate("heartbeat",
@@ -143,8 +147,9 @@ static void core1_task(void *arg)
     (void)arg;
 
     for (;;) {
-        /* Later: Display compositor, UI Manager, Menu Controller, Notification Manager */
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        /* Display Manager integration point: execute one queued frame command per loop. */
+        display_manager_process_frame();
+        vTaskDelay(pdMS_TO_TICKS(16)); /* ~60 FPS loop */
     }
 }
 

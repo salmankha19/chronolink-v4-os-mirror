@@ -1,5 +1,6 @@
 ﻿idf_component_register(
     SRCS "src/core_os.c"
     INCLUDE_DIRS "include"
-    REQUIRES freertos event_bus state_manager
+    # Display manager runs in core1_task and is part of Core OS runtime wiring.
+    REQUIRES freertos event_bus state_manager display_manager
 )
