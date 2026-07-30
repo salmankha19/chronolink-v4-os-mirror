@@ -46,6 +46,7 @@ idf_component_register(
         freertos
         heap
         log
+        chronolink_driver_sdk
 )
 
 # Pass Kconfig ST7796S settings as compile defines so the driver can use
