@@ -30,6 +30,8 @@ extern "C" {
 
 /* Frame flags */
 #define DM_FRAME_FLAG_NONE      0x00
+#define DM_FRAME_FLAG_DISABLE_SWAP 0x01
+#define DM_FRAME_FLAG_FORCE_SWAP   0x02
 
 typedef enum {
     DM_CMD_NOP = 0,
