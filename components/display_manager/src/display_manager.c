@@ -1,4 +1,5 @@
 #include "display_manager.h"
+#include "font_engine.h"
 #include "hal_display.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -159,11 +160,10 @@ static void dm_execute_cmd(const dm_cmd_t *cmd)
         break;
 
     case DM_CMD_DRAW_TEXT:
-        /* Fallback: draw a single visible pixel so the UI isn't blank.
-         * Replace with bitmap font engine when available. */
-        HAL_GFX_DrawPixel(cmd->arg.text.x, cmd->arg.text.y, cmd->arg.text.color);
-        ESP_LOGD(TAG, "DRAW_TEXT fallback pixel @ (%d,%d)",
-                 cmd->arg.text.x, cmd->arg.text.y);
+        font_engine_draw_text(cmd->arg.text.x, cmd->arg.text.y,
+                              cmd->arg.text.color,
+                              cmd->arg.text.font_id,
+                              cmd->arg.text.text);
         break;
 
     case DM_CMD_NOP:
