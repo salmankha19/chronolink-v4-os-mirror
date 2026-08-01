@@ -1,7 +1,5 @@
 idf_component_register(
-    SRCS
-        "src/display_manager.c"
-        "src/json_display_executor.c"
+    SRCS "src/display_manager.c"
     INCLUDE_DIRS "include"
-    REQUIRES chronolink_hal event_bus freertos
+    REQUIRES freertos chronolink_hal font_engine
 )
