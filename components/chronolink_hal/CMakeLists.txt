@@ -2,16 +2,19 @@
 
 # Base source list
 set(CHRONOLINK_HAL_SRCS
-    "src/hal_init.c"
-    "src/hal_gpio_esp32.c"
-    "src/hal_gpio_safe.c"
-    "src/hal_i2c_esp32.c"
-    "src/hal_spi_esp32.c"
-    "src/hal_rtc_ds3231m.c"
-    "src/hal_display.c"
-    "src/hal_gfx.c"
-    "src/hal_sensors.c"
-    "src/pdl_board_esp32.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_init.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_gpio_esp32.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_gpio_safe.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_i2c_esp32.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_spi_esp32.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_rtc_ds3231m.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_display.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_gfx.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensors.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_bme280.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_sht4x.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_veml7700.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/pdl_board_esp32.c"
     "${CMAKE_SOURCE_DIR}/src/platformDependentLayer/pdl_board.c"
 )
 
@@ -34,7 +37,8 @@ if(CONFIG_CHRONOLINK_USE_MOCK_DISPLAY)
 endif()
 
 idf_component_register(
-    SRCS ${CHRONOLINK_HAL_SRCS}
+    SRCS
+        ${CHRONOLINK_HAL_SRCS}
     INCLUDE_DIRS "include"
     REQUIRES
         driver
