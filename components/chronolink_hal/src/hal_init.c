@@ -5,9 +5,20 @@
 #include "hal_rtc.h"
 #include "hal_display.h"
 #include "hal_sensors.h"
+#include "hal_sensor_bme280.h"
+#include "hal_sensor_sht4x.h"
+#include "hal_sensor_veml7700.h"
 #include "pdl_compat.h"
 #include "esp_log.h"
 #include "esp_err.h"
+
+/* === ChronoLink V4 Display Subsystem === */
+/* Uncomment/adjust these once your generated headers are in the include path */
+#ifdef CONFIG_CHRONOLINK_V4_DISPLAY
+// #include "hal_display_manager.h"
+// #include "hal_display_router.h"
+// #include "hal_gfx.h"
+#endif
 
 bool valid_gpio(int pin);
 
@@ -103,18 +114,66 @@ hal_status_t HAL_Init(void)
         return hs;
     }
 
-    /* Display */
+    /* ============================================================
+     * ChronoLink V4 Display Subsystem
+     * ============================================================
+     * Order matters: Router -> Manager -> GFX -> Concrete Display
+     * Adjust if your generated code uses a different init sequence.
+     */
+#ifdef CONFIG_CHRONOLINK_V4_DISPLAY
+    /* 1. Display Router (hybrid driver resolution) */
+    // hs = HAL_DisplayRouter_Init();
+    // if (hs != HAL_OK) {
+    //     ESP_LOGE(TAG, "HAL_DisplayRouter_Init failed (%d)", (int)hs);
+    //     return hs;
+    // }
+
+    /* 2. Display Manager (if applicable) */
+    // hs = HAL_DisplayManager_Init();
+    // if (hs != HAL_OK) {
+    //     ESP_LOGE(TAG, "HAL_DisplayManager_Init failed (%d)", (int)hs);
+    //     return hs;
+    // }
+
+    /* 3. GFX runtime resolution (64 min, 480 max) */
+    /* TODO: Replace with runtime-detected or Kconfig-derived width/height */
+    // const uint16_t gfx_width  = CONFIG_CHRONOLINK_GFX_WIDTH;
+    // const uint16_t gfx_height = CONFIG_CHRONOLINK_GFX_HEIGHT;
+    // if (gfx_width < 64 || gfx_width > 480 || gfx_height < 64 || gfx_height > 480) {
+    //     ESP_LOGE(TAG, "GFX dimensions out of bounds: %dx%d", gfx_width, gfx_height);
+    //     return HAL_ERR_INIT;
+    // }
+    // hs = HAL_GFX_Init(gfx_width, gfx_height);
+    // if (hs != HAL_OK) {
+    //     ESP_LOGE(TAG, "HAL_GFX_Init(%d,%d) failed (%d)", gfx_width, gfx_height, (int)hs);
+    //     return hs;
+    // }
+    // ESP_LOGI(TAG, "GFX initialized @ %dx%d", gfx_width, gfx_height);
+
+    /* 4. Concrete display driver (ST7796S built-in, JSON executor, etc.) */
     hs = HAL_Display_Init();
     if (hs != HAL_OK) {
         ESP_LOGE(TAG, "HAL_Display_Init failed (%d)", (int)hs);
         return hs;
     }
+#else
+    /* Legacy display init path */
+    hs = HAL_Display_Init();
+    if (hs != HAL_OK) {
+        ESP_LOGE(TAG, "HAL_Display_Init failed (%d)", (int)hs);
+        return hs;
+    }
+#endif /* CONFIG_CHRONOLINK_V4_DISPLAY */
 
 #ifdef CONFIG_DEBUG_DISPLAY_CAPS
     log_display_caps();
 #endif
 
     /* Sensors (optional) */
+    (void)HAL_Sensor_Register(&HAL_SENSOR_BME280_DRIVER);
+    (void)HAL_Sensor_Register(&HAL_SENSOR_SHT4X_DRIVER);
+    (void)HAL_Sensor_Register(&HAL_SENSOR_VEML7700_DRIVER);
+
     hs = HAL_Sensors_Init();
     if (hs != HAL_OK) {
         ESP_LOGE(TAG, "HAL_Sensors_Init failed (%d)", (int)hs);

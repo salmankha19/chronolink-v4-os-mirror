@@ -183,3 +183,64 @@ hal_status_t HAL_I2C_Write(uint8_t dev_addr, uint8_t reg, const uint8_t *data, u
 
     return HAL_OK;
 }
+
+hal_status_t HAL_I2C_Transmit(uint8_t dev_addr,
+                              const uint8_t *data,
+                              uint16_t len)
+{
+    if (i2c_disabled) return HAL_ERR_INIT;
+    if (len > 0 && !data) return HAL_ERR_DEV;
+    if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
+
+    esp_err_t err = i2c_master_write_to_device(
+        HAL_I2C_PORT, dev_addr, data, len,
+        pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Transmit failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
+        return HAL_ERR_DEV;
+    }
+    return HAL_OK;
+}
+
+hal_status_t HAL_I2C_Receive(uint8_t dev_addr,
+                             uint8_t *buf,
+                             uint16_t len)
+{
+    if (i2c_disabled) return HAL_ERR_INIT;
+    if (!buf || len == 0) return HAL_ERR_DEV;
+    if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
+
+    esp_err_t err = i2c_master_read_from_device(
+        HAL_I2C_PORT, dev_addr, buf, len,
+        pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Receive failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
+        return HAL_ERR_DEV;
+    }
+    return HAL_OK;
+}
+
+hal_status_t HAL_I2C_TransmitReceive(uint8_t dev_addr,
+                                      const uint8_t *tx_data,
+                                      uint16_t tx_len,
+                                      uint8_t *rx_buf,
+                                      uint16_t rx_len)
+{
+    if (i2c_disabled) return HAL_ERR_INIT;
+    if ((tx_len > 0 && !tx_data) || !rx_buf || rx_len == 0) return HAL_ERR_DEV;
+    if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
+
+    esp_err_t err = i2c_master_write_read_device(
+        HAL_I2C_PORT,
+        dev_addr,
+        tx_data,
+        tx_len,
+        rx_buf,
+        rx_len,
+        pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "TransmitReceive failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
+        return HAL_ERR_DEV;
+    }
+    return HAL_OK;
+}
