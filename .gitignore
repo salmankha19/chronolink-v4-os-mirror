@@ -24,3 +24,18 @@ build/
 *.map
 *.bak
 sdkconfig.defaults
+
+# Build output text files and logs
+build_*.txt
+pio_build_*.txt
+pio_verbose*.txt
+
+# Compiled/binary archives
+*.zip
+
+# Patch files (applied upstream)
+*.patch
+
+# Ninja compile database
+ninja_compdb.json
+compile_commands.json
