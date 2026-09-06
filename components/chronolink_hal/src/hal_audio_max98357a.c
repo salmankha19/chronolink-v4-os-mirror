@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "HAL_AUDIO";
 
@@ -37,14 +39,17 @@ hal_status_t HAL_Audio_Init(void)
     if (s_inited) return HAL_OK;
 
     /* Optional SD_MODE (shutdown) pin */
-    if (PDL_PIN_AUDIO_SD_MODE >= 0) {
-        gpio_config_t cfg = {
-            .pin_bit_mask = (1ULL << PDL_PIN_AUDIO_SD_MODE),
-            .mode = GPIO_MODE_OUTPUT,
-        };
-        gpio_config(&cfg);
-        gpio_set_level(PDL_PIN_AUDIO_SD_MODE, 1);
-    }
+    #if defined(PDL_PIN_AUDIO_SD_MODE) && PDL_PIN_AUDIO_SD_MODE >= 0
+	    gpio_config_t sd_mode_conf = {
+	        .pin_bit_mask = (1ULL << PDL_PIN_AUDIO_SD_MODE),
+	        .mode = GPIO_MODE_OUTPUT,
+	        .pull_up_en = GPIO_PULLUP_DISABLE,
+	        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+	        .intr_type = GPIO_INTR_DISABLE,
+	    };
+	    gpio_config(&sd_mode_conf);
+	    gpio_set_level(PDL_PIN_AUDIO_SD_MODE, 1);
+	#endif
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
@@ -81,9 +86,11 @@ hal_status_t HAL_Audio_Deinit(void)
         i2s_del_channel(s_tx_chan);
         s_tx_chan = NULL;
     }
-    if (PDL_PIN_AUDIO_SD_MODE >= 0) {
+
+    #if PDL_PIN_AUDIO_SD_MODE >= 0
         gpio_set_level(PDL_PIN_AUDIO_SD_MODE, 0);
-    }
+    #endif
+
     s_inited = false;
     return HAL_OK;
 }
@@ -102,5 +109,5 @@ hal_status_t HAL_Audio_SetVolume(uint8_t vol)
        Gain is set by resistor on GAIN pin. */
     ESP_LOGW(TAG, "Volume control not supported on MAX98357A (use analog gain pin)");
     (void)vol;
-    return HAL_OK;
+    return HAL_OK;  // ← This tells the caller "success" even though no volume control exists
 }

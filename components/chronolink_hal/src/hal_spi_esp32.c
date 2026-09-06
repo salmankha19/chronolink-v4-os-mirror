@@ -3,9 +3,36 @@
 #include "esp_log.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <string.h>
 
 static const char *TAG = "HAL_SPI";
+
+/* Guards bus init, device-slot registration, and transfers. The ST7796S
+   display driver and any future SPI peripheral (e.g. MAX7219 chain) share
+   this bus and may run from different tasks/cores. */
+static SemaphoreHandle_t s_spi_mutex = NULL;
+
+#define SPI_LOCK_TIMEOUT_MS 500
+
+static inline bool spi_lock(void)
+{
+    if (!s_spi_mutex) {
+        s_spi_mutex = xSemaphoreCreateMutex();
+        if (!s_spi_mutex) {
+            return false;
+        }
+    }
+    return xSemaphoreTake(s_spi_mutex, pdMS_TO_TICKS(SPI_LOCK_TIMEOUT_MS)) == pdTRUE;
+}
+
+static inline void spi_unlock(void)
+{
+    if (s_spi_mutex) {
+        xSemaphoreGive(s_spi_mutex);
+    }
+}
 
 #ifndef HAL_SPI_HOST
 #define HAL_SPI_HOST SPI2_HOST
@@ -77,7 +104,13 @@ static hal_status_t hal_spi_bus_init(void)
  * -------------------------------------------------------------------------- */
 hal_status_t HAL_SPI_Init(void)
 {
-    return hal_spi_bus_init();
+    if (!spi_lock()) {
+        ESP_LOGW(TAG, "SPI bus busy, init timed out");
+        return HAL_ERR_BUS;
+    }
+    hal_status_t hs = hal_spi_bus_init();
+    spi_unlock();
+    return hs;
 }
 
 /* --------------------------------------------------------------------------
@@ -155,14 +188,21 @@ hal_status_t HAL_SPI_Transfer(uint8_t cs_pin,
         return HAL_OK;
     }
 
+    if (!spi_lock()) {
+        ESP_LOGW(TAG, "SPI bus busy, transfer timed out (CS=%d len=%u)", cs_pin, (unsigned)len);
+        return HAL_ERR_BUS;
+    }
+
     hal_status_t hs = hal_spi_bus_init();
     if (hs != HAL_OK) {
+        spi_unlock();
         return hs;
     }
 
     spi_device_handle_t dev;
     hs = hal_spi_ensure_device(cs_pin, speed_hz, &dev);
     if (hs != HAL_OK) {
+        spi_unlock();
         return hs;
     }
 
@@ -173,6 +213,8 @@ hal_status_t HAL_SPI_Transfer(uint8_t cs_pin,
     t.rx_buffer = rx;
 
     esp_err_t err = spi_device_polling_transmit(dev, &t);
+    spi_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Transfer failed (CS=%d len=%u): %s",
                  cs_pin, (unsigned)len, esp_err_to_name(err));

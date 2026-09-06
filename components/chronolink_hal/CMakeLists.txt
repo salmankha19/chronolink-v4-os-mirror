@@ -14,6 +14,7 @@ set(CHRONOLINK_HAL_SRCS
     "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_bme280.c"
     "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_sht4x.c"
     "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_veml7700.c"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hal_audio_max98357a.c"
     "${CMAKE_CURRENT_LIST_DIR}/src/pdl_board_esp32.c"
     "${CMAKE_SOURCE_DIR}/src/platformDependentLayer/pdl_board.c"
 )
@@ -45,6 +46,7 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_gpio
         esp_driver_spi
+        esp_driver_i2s
         esp_timer
         esp_system
         freertos

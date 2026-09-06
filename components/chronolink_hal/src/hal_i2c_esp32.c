@@ -3,12 +3,37 @@
 #include "pdl_pins.h"
 #include "esp_log.h"
 #include "driver/i2c.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "HAL_I2C";
 static bool i2c_ready = false;
 static bool i2c_disabled = false;
 static int s_i2c_sda = -1;
 static int s_i2c_scl = -1;
+
+/* Guards every transaction on the shared I2C bus (RTC, SHT4x, VEML7700, ...).
+   Sensors are polled from the UI task on Core 1 while the RTC or other
+   services may touch the bus from Core 0 — without this, interleaved
+   transactions can corrupt each other's register reads. */
+static SemaphoreHandle_t s_i2c_mutex = NULL;
+
+#define I2C_LOCK_TIMEOUT_MS 200
+
+static inline bool i2c_lock(void)
+{
+    if (!s_i2c_mutex) {
+        return true; /* mutex not yet created (shouldn't happen post-init) */
+    }
+    return xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(I2C_LOCK_TIMEOUT_MS)) == pdTRUE;
+}
+
+static inline void i2c_unlock(void)
+{
+    if (s_i2c_mutex) {
+        xSemaphoreGive(s_i2c_mutex);
+    }
+}
 
 #ifndef HAL_I2C_PORT
 #define HAL_I2C_PORT I2C_NUM_0
@@ -82,6 +107,14 @@ hal_status_t HAL_I2C_Init(void)
         return HAL_OK;
     }
 
+    if (!s_i2c_mutex) {
+        s_i2c_mutex = xSemaphoreCreateMutex();
+        if (!s_i2c_mutex) {
+            ESP_LOGE(TAG, "Failed to create I2C bus mutex");
+            return HAL_ERR_INIT;
+        }
+    }
+
     const i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = s_i2c_sda,
@@ -126,6 +159,11 @@ hal_status_t HAL_I2C_Read(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint16_t 
         return HAL_ERR_INIT;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "I2C bus busy, read timed out (addr=0x%02x reg=0x%02x)", dev_addr, reg);
+        return HAL_ERR_BUS;
+    }
+
     const esp_err_t err = i2c_master_write_read_device(
         HAL_I2C_PORT,
         dev_addr,
@@ -135,6 +173,8 @@ hal_status_t HAL_I2C_Read(uint8_t dev_addr, uint8_t reg, uint8_t *buf, uint16_t 
         len,
         pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS)
     );
+    i2c_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C read failed (addr=0x%02x reg=0x%02x): %s", dev_addr, reg, esp_err_to_name(err));
         return HAL_ERR_DEV;
@@ -169,6 +209,11 @@ hal_status_t HAL_I2C_Write(uint8_t dev_addr, uint8_t reg, const uint8_t *data, u
         tx[i + 1] = data[i];
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "I2C bus busy, write timed out (addr=0x%02x reg=0x%02x)", dev_addr, reg);
+        return HAL_ERR_BUS;
+    }
+
     const esp_err_t err = i2c_master_write_to_device(
         HAL_I2C_PORT,
         dev_addr,
@@ -176,6 +221,8 @@ hal_status_t HAL_I2C_Write(uint8_t dev_addr, uint8_t reg, const uint8_t *data, u
         tx_len,
         pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS)
     );
+    i2c_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C write failed (addr=0x%02x reg=0x%02x): %s", dev_addr, reg, esp_err_to_name(err));
         return HAL_ERR_DEV;
@@ -192,9 +239,16 @@ hal_status_t HAL_I2C_Transmit(uint8_t dev_addr,
     if (len > 0 && !data) return HAL_ERR_DEV;
     if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "I2C bus busy, transmit timed out (addr=0x%02x)", dev_addr);
+        return HAL_ERR_BUS;
+    }
+
     esp_err_t err = i2c_master_write_to_device(
         HAL_I2C_PORT, dev_addr, data, len,
         pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    i2c_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Transmit failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
         return HAL_ERR_DEV;
@@ -210,9 +264,16 @@ hal_status_t HAL_I2C_Receive(uint8_t dev_addr,
     if (!buf || len == 0) return HAL_ERR_DEV;
     if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "I2C bus busy, receive timed out (addr=0x%02x)", dev_addr);
+        return HAL_ERR_BUS;
+    }
+
     esp_err_t err = i2c_master_read_from_device(
         HAL_I2C_PORT, dev_addr, buf, len,
         pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    i2c_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Receive failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
         return HAL_ERR_DEV;
@@ -230,6 +291,11 @@ hal_status_t HAL_I2C_TransmitReceive(uint8_t dev_addr,
     if ((tx_len > 0 && !tx_data) || !rx_buf || rx_len == 0) return HAL_ERR_DEV;
     if (HAL_I2C_Init() != HAL_OK) return HAL_ERR_INIT;
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "I2C bus busy, transmit/receive timed out (addr=0x%02x)", dev_addr);
+        return HAL_ERR_BUS;
+    }
+
     esp_err_t err = i2c_master_write_read_device(
         HAL_I2C_PORT,
         dev_addr,
@@ -238,6 +304,8 @@ hal_status_t HAL_I2C_TransmitReceive(uint8_t dev_addr,
         rx_buf,
         rx_len,
         pdMS_TO_TICKS(HAL_I2C_TIMEOUT_MS));
+    i2c_unlock();
+
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "TransmitReceive failed (addr=0x%02x): %s", dev_addr, esp_err_to_name(err));
         return HAL_ERR_DEV;
