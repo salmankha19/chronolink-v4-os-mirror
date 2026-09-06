@@ -8,6 +8,8 @@
 #include "hal_sensor_bme280.h"
 #include "hal_sensor_sht4x.h"
 #include "hal_sensor_veml7700.h"
+#include "hal_audio.h"
+#include "pdl_capabilities.h"
 #include "pdl_compat.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -96,16 +98,15 @@ hal_status_t HAL_Init(void)
                  PDL_PIN_I2C_SCL, PDL_PIN_I2C_SDA);
     }
 
-    /* SPI wrapper does not strictly require an init on some platforms,
-       but if you implement HAL_SPI_Init later, check it here. If no init exists,
-       we still rely on HAL_SPI_Transfer to initialize the bus as needed. */
-#ifdef HAVE_HAL_SPI_INIT
+    /* SPI bus init. HAL_SPI_Init() is idempotent (tolerates ESP_ERR_INVALID_STATE
+       if a display driver, e.g. ST7796S, already brought the bus up first), so
+       it's always safe to call here explicitly rather than relying on lazy
+       init inside whichever driver happens to touch SPI first. */
     hs = HAL_SPI_Init();
     if (hs != HAL_OK) {
         ESP_LOGE(TAG, "HAL_SPI_Init failed (%d)", (int)hs);
         return hs;
     }
-#endif
 
     /* RTC */
     hs = HAL_RTC_Init();
@@ -169,16 +170,34 @@ hal_status_t HAL_Init(void)
     log_display_caps();
 #endif
 
-    /* Sensors (optional) */
+    /* Sensors (optional) — only register drivers for hardware actually
+       present on this board, per pdl_capabilities.h. Registering a driver
+       for a chip that isn't populated wastes a registry slot and produces
+       misleading "Init FAIL" log noise every boot. */
+#if PDL_HAS_SENSOR_BME280
     (void)HAL_Sensor_Register(&HAL_SENSOR_BME280_DRIVER);
+#endif
+#if PDL_HAS_SENSOR_SHT4X
     (void)HAL_Sensor_Register(&HAL_SENSOR_SHT4X_DRIVER);
+#endif
+#if PDL_HAS_SENSOR_VEML7700
     (void)HAL_Sensor_Register(&HAL_SENSOR_VEML7700_DRIVER);
+#endif
 
     hs = HAL_Sensors_Init();
     if (hs != HAL_OK) {
         ESP_LOGE(TAG, "HAL_Sensors_Init failed (%d)", (int)hs);
         return hs;
     }
+
+    /* Audio (optional). Not fatal if it fails — a clock without a working
+       amp should still boot and show the time. */
+#if PDL_HAS_AUDIO_MAX98357A
+    hs = HAL_Audio_Init();
+    if (hs != HAL_OK) {
+        ESP_LOGW(TAG, "HAL_Audio_Init failed (%d) — continuing without audio", (int)hs);
+    }
+#endif
 
     ESP_LOGI(TAG, "HAL initialized successfully");
     return HAL_OK;
