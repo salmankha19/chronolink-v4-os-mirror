@@ -20,10 +20,16 @@ extern "C" {
 
 /**
  * @brief Initialize audio subsystem for mono playback
- * 
- * In simulation mode, this just prints configuration info.
- * On real hardware, it would configure GPIO1 and I2S.
- * 
+ *
+ * When CONFIG_AUDIO_TEST_SIMULATION is set, this only prints the pin/
+ * config info that would be used (no hardware touched — useful for CI
+ * builds and machines with no speaker wired up).
+ *
+ * Otherwise this calls straight into the real chronolink_hal audio
+ * driver (HAL_Audio_Init -> hal_audio_max98357a.c), so a pass here means
+ * the actual I2S channel + MAX98357A path came up, not just that this
+ * test component compiled.
+ *
  * @return ESP_OK on success
  */
 esp_err_t audio_test_init(void);
