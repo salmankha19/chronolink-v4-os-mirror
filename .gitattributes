@@ -1,0 +1,24 @@
+# Default: normalize to LF in the repo, let Git decide on checkout
+* text=auto
+
+# C/C++ / headers — force LF in repo AND working tree (embedded toolchains prefer LF)
+*.c    text eol=lf
+*.h    text eol=lf
+*.cpp  text eol=lf
+*.hpp  text eol=lf
+
+# Build / config
+CMakeLists.txt  text eol=lf
+*.cmake         text eol=lf
+Kconfig*        text eol=lf
+*.projbuild     text eol=lf
+
+# PowerShell scripts need CRLF on Windows
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Treat these as binary (no conversion, no diff noise)
+*.png  binary
+*.jpg  binary
+*.pdf  binary
