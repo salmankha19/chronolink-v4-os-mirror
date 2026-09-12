@@ -53,8 +53,8 @@
   #elif defined(CONFIG_BOARD_I2C_SDA)
     #define BOARD_I2C_SDA CONFIG_BOARD_I2C_SDA
   #else
-    /* safe dev default */
-    #define BOARD_I2C_SDA 21
+    /* PCB default: I2C SDA on IO18 */
+    #define BOARD_I2C_SDA 18
   #endif
 #endif
 
@@ -65,8 +65,8 @@
   #elif defined(CONFIG_BOARD_I2C_SCL)
     #define BOARD_I2C_SCL CONFIG_BOARD_I2C_SCL
   #else
-    /* safe dev default */
-    #define BOARD_I2C_SCL 26
+    /* PCB default: I2C SCL on IO17 */
+    #define BOARD_I2C_SCL 17
   #endif
 #endif
 
