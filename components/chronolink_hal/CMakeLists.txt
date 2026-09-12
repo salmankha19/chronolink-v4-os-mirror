@@ -16,7 +16,6 @@ set(CHRONOLINK_HAL_SRCS
     "${CMAKE_CURRENT_LIST_DIR}/src/hal_sensor_veml7700.c"
     "${CMAKE_CURRENT_LIST_DIR}/src/hal_audio_max98357a.c"
     "${CMAKE_CURRENT_LIST_DIR}/src/pdl_board_esp32.c"
-    "${CMAKE_SOURCE_DIR}/src/platformDependentLayer/pdl_board.c"
 )
 
 # Conditionally add display backend sources based on Kconfig
@@ -78,7 +77,6 @@ if(NOT DEFINED IDF_PATH)
     set(IDF_PATH $ENV{IDF_PATH})
 endif()
 target_include_directories(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_SOURCE_DIR}/src/platformDependentLayer"
     "${IDF_PATH}/components/driver/include"
     "${IDF_PATH}/components/esp_driver_gpio/include"
     "${IDF_PATH}/components/esp_driver_spi/include"
