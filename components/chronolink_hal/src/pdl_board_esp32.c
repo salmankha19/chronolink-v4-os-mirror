@@ -10,7 +10,7 @@
 
 static const char *TAG = "pdl_board";
 
-#if defined(PDL_PIN_LED_STATUS)
+#if defined(PDL_PIN_LED_STATUS) && (PDL_PIN_LED_STATUS >= 0)
 #define PINDBG_LED_STATUS PDL_PIN_LED_STATUS
 #else
 #define PINDBG_LED_STATUS -1
@@ -70,7 +70,7 @@ static const char *TAG = "pdl_board";
 #define PINDBG_DISPLAY_BL -1
 #endif
 
-#if defined(PDL_PIN_RTC_INT)
+#if defined(PDL_PIN_RTC_INT) && (PDL_PIN_RTC_INT >= 0)
 #define PINDBG_RTC_INT PDL_PIN_RTC_INT
 #else
 #define PINDBG_RTC_INT -1
@@ -118,7 +118,7 @@ static const char *TAG = "pdl_board";
 #define PINDBG_MOSFET_GATE -1
 #endif
 
-#if defined(PDL_PIN_SAFE_MODE)
+#if defined(PDL_PIN_SAFE_MODE) && (PDL_PIN_SAFE_MODE >= 0)
 #define PINDBG_SAFE_MODE PDL_PIN_SAFE_MODE
 #else
 #define PINDBG_SAFE_MODE -1
@@ -127,6 +127,35 @@ static const char *TAG = "pdl_board";
 #ifndef GPIO_PIN_COUNT
 #define GPIO_PIN_COUNT 48
 #endif
+
+/* ------------------------------------------------------------------ */
+/* Board info table — ported from legacy src/platformDependentLayer/  */
+/* pdl_board.c. This is the single source of truth for board identity */
+/* and feature flags.                                                 */
+/* ------------------------------------------------------------------ */
+static const pdl_board_info_t g_board_info = {
+    .id = PDL_BOARD_CHRONOLINK_V4,
+    .name = "ChronoLink V4 (ESP32-S3)",
+    .has_rtc = true,
+    .has_dfplayer = false,      /* v4 PCB has no DFPlayer */
+    .has_sensors = true,
+};
+
+const pdl_board_info_t *pdl_board_get_info(void)
+{
+    return &g_board_info;
+}
+
+/* ------------------------------------------------------------------ */
+/* Conservative ESP32-S3 GPIO validity guard.                         */
+/* Used by hal_init.c to skip peripheral init if pins are invalid.    */
+/* Note: 35..37 are PSRAM-connected on WROOM-1 N16R8 variants and     */
+/* GPIO_IS_VALID_GPIO() correctly rejects them at runtime.            */
+/* ------------------------------------------------------------------ */
+bool valid_gpio(int pin)
+{
+    return (pin >= 0 && pin <= 47) && GPIO_IS_VALID_GPIO(pin);
+}
 
 static bool validate_pin(int pin, const char *name)
 {
@@ -212,7 +241,7 @@ static esp_err_t validate_pdl_pins(void)
 {
     bool ok = true;
 
-#ifdef PDL_PIN_LED_STATUS
+#if defined(PDL_PIN_LED_STATUS) && (PDL_PIN_LED_STATUS >= 0)
     ok = validate_output_pin(PDL_PIN_LED_STATUS, "LED_STATUS") && ok;
 #endif
 #ifdef PDL_PIN_I2C_SDA
@@ -242,7 +271,7 @@ static esp_err_t validate_pdl_pins(void)
 #ifdef PDL_PIN_DISPLAY_BL
     ok = validate_output_pin(PDL_PIN_DISPLAY_BL, "DISPLAY_BL") && ok;
 #endif
-#ifdef PDL_PIN_RTC_INT
+#if defined(PDL_PIN_RTC_INT) && (PDL_PIN_RTC_INT >= 0)
     ok = validate_pin(PDL_PIN_RTC_INT, "RTC_INT") && ok;
 #endif
 #ifdef PDL_PIN_DF_TX
@@ -287,7 +316,7 @@ static esp_err_t pdl_board_config_pins(void)
     memset(&io_conf, 0, sizeof(io_conf));
 
     /* Status LED */
-#ifdef PDL_PIN_LED_STATUS
+#if defined(PDL_PIN_LED_STATUS) && (PDL_PIN_LED_STATUS >= 0)
     memset(&io_conf, 0, sizeof(io_conf));
     {
         uint64_t led_mask = safe_pin_mask(PDL_PIN_LED_STATUS, "LED_STATUS");
@@ -385,7 +414,7 @@ static esp_err_t pdl_board_config_pins(void)
 #endif
 
     /* RTC interrupt pin */
-#ifdef PDL_PIN_RTC_INT
+#if defined(PDL_PIN_RTC_INT) && (PDL_PIN_RTC_INT >= 0)
     memset(&io_conf, 0, sizeof(io_conf));
     {
         uint64_t rtc_mask = safe_pin_mask(PDL_PIN_RTC_INT, "RTC_INT");

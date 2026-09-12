@@ -86,15 +86,15 @@ menu "Chronolink HAL Pin Overrides"
 
 config PDL_PIN_I2C_SCL
     int "I2C SCL pin"
-    default 22
+    default 17
     help
-      GPIO number for I2C SCL. Override for your board.
+      GPIO number for I2C SCL. PCB: IO17.
 
 config PDL_PIN_I2C_SDA
     int "I2C SDA pin"
-    default 21
+    default 18
     help
-      GPIO number for I2C SDA. Override for your board.
+      GPIO number for I2C SDA. PCB: IO18.
 
 config PDL_I2C_FREQ_HZ
     int "I2C frequency (Hz)"
