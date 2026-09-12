@@ -20,7 +20,7 @@
 #define PDL_PIN_SPI_CS_DISPLAY    7
 #define PDL_PIN_DISPLAY_DC       10
 #define PDL_PIN_DISPLAY_RST      16
-#define PDL_PIN_DISPLAY_BL        2
+#define PDL_PIN_DISPLAY_BL        8
 
 /* --- SD card --- */
 #define PDL_PIN_SD_CS             9
