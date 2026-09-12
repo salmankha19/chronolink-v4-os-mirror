@@ -2,5 +2,5 @@
     SRCS "main.c"
     INCLUDE_DIRS "include"
     REQUIRES boot_manager ui_producer font
-    PRIV_REQUIRES core_os
+    PRIV_REQUIRES core_os audio_test
 )
