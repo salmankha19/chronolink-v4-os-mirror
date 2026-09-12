@@ -24,9 +24,9 @@ config BOARD_LCD_RST
 config BOARD_LCD_BL
     int "LCD Backlight GPIO"
     range -1 48
-    default 2
+    default 8
     help
-        Backlight control pin for ST7796S display. PCB: IO2.
+        Backlight control pin for ST7796S display. PCB: IO8.
 
 config BOARD_I2C_SDA
     int "I2C SDA GPIO"
