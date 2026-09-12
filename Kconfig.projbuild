@@ -42,6 +42,37 @@ config BOARD_I2C_SCL
     help
         SCL pin for HAL I2C master.
 
+config BOARD_AUDIO_I2S_BCLK
+    int "Audio I2S BCLK GPIO"
+    range 0 48
+    default 26
+    help
+        I2S bit clock pin for the MAX98357A amplifier.
+        Was previously a hardcoded fallback #define inside
+        hal_audio_max98357a.c with no Kconfig control at all.
+
+config BOARD_AUDIO_I2S_WS
+    int "Audio I2S WS (LRCLK) GPIO"
+    range 0 48
+    default 25
+    help
+        I2S word-select (LRCLK) pin for the MAX98357A amplifier.
+
+config BOARD_AUDIO_I2S_DOUT
+    int "Audio I2S DOUT GPIO"
+    range 0 48
+    default 27
+    help
+        I2S data-out pin for the MAX98357A amplifier.
+
+config BOARD_AUDIO_SD_MODE
+    int "Audio SD_MODE GPIO (-1 to disable)"
+    range -1 48
+    default -1
+    help
+        Optional shutdown/mode-select pin for the MAX98357A.
+        Set to -1 if not wired (amplifier is always enabled).
+
 endmenu
 
 
