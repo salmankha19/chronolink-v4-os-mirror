@@ -1,43 +1,61 @@
-﻿.pio/
+﻿# ============================================================
+# ChronoLink V4 — .gitignore
+# ============================================================
+
+# ---------- ESP-IDF / PlatformIO generated config ----------
+# These are BUILD ARTIFACTS. Never commit.
+# The source of truth is sdkconfig.defaults (committed).
+sdkconfig
+sdkconfig.old
+sdkconfig.single_mcu
+sdkconfig.split_mcu_main
+sdkconfig.display_mcu
+sdkconfig.esp32s3
+
+# ---------- Build outputs ----------
+build/
+.pio/
 .pioenvs/
 .pio/build/
 .pio/.cache/
+
+# ---------- Compiled binaries and maps ----------
 *.bin
 *.elf
 *.map
 *.hex
-.vscode/
-core_os.bak
-build/
-*.bin
-sdkconfig
-# Local build scripts and logs
-build_idf.ps1
-build_step_fullclean.log
-
-# Build artifacts
-*.log
-build/
-.pio/
-*.bin
-*.elf
-*.map
 *.bak
-sdkconfig.defaults
-
-# Build output text files and logs
+*.log
 build_*.txt
 pio_build_*.txt
 pio_verbose*.txt
 
-# Compiled/binary archives
+# ---------- IDE / editor ----------
+.vscode/
+
+# ---------- Build helper scripts and local logs ----------
+build_idf.ps1
+build_step_fullclean.log
+
+# ---------- Compiled/binary archives ----------
 *.zip
 
-# Patch files (applied upstream)
+# ---------- Patch files (applied upstream) ----------
 *.patch
 
-# Ninja compile database
+# ---------- CMake / Ninja ----------
+CMakeCache.txt
+CMakeFiles/
 ninja_compdb.json
 compile_commands.json
 
-sdkconfig.old
+# ---------- Cached Python ----------
+__pycache__/
+*.pyc
+*.pyo
+
+# ============================================================
+# IMPORTANT: sdkconfig.defaults is NOT ignored — it is the
+# single source of truth for pin configuration. Keep it
+# committed.
+# ============================================================
