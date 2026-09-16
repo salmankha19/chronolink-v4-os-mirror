@@ -66,6 +66,46 @@ typedef enum {
 } hal_display_backend_t;
 
 /* --------------------------------------------------------------------------
+ * Backend ops table
+ *
+ * Each backend exports exactly one const instance of this struct. The
+ * router stores a pointer to the active one and dispatches all public
+ * HAL_Display_* calls through it.
+ *
+ * Field names intentionally match chronolink_display_driver_t from
+ * chronolink_driver_sdk.h so the custom-driver path can reuse this shape.
+ *
+ * Any function pointer may be NULL. The router returns HAL_ERR_DEV if
+ * the active backend doesn't implement a given operation (e.g. MAX7219
+ * has no set_madctl).
+ *
+ * IMPORTANT: this typedef must appear AFTER hal_display_cap_t above,
+ * because it references hal_display_cap_t as a parameter type.
+ * -------------------------------------------------------------------------- */
+typedef struct display_backend_ops_s {
+    const char *name;   /* human-readable, e.g. "st7796s" */
+
+    hal_status_t (*init)(void);
+    hal_status_t (*deinit)(void);
+
+    hal_status_t (*draw_pixel)(uint16_t x, uint16_t y, uint32_t color);
+    hal_status_t (*fill)(uint32_t color);
+    hal_status_t (*fill_rect)(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color);
+    hal_status_t (*blit_row)(uint16_t x, uint16_t y, const uint32_t *pixels24, uint16_t len);
+    hal_status_t (*clear)(void);
+    hal_status_t (*show)(void);
+    hal_status_t (*write_text)(const char *text);
+
+    hal_status_t (*has_capability)(hal_display_cap_t cap);
+    hal_status_t (*set_madctl)(uint8_t madctl);
+    hal_status_t (*set_scroll_area)(uint16_t tfa, uint16_t vsa, uint16_t bfa);
+    hal_status_t (*set_scroll_start)(uint16_t vss);
+
+    int (*get_width)(void);
+    int (*get_height)(void);
+} display_backend_ops_t;
+
+/* --------------------------------------------------------------------------
  * Public HAL Display API (backend-agnostic)
  *
  * All functions return HAL_OK on success, or an appropriate hal_status_t

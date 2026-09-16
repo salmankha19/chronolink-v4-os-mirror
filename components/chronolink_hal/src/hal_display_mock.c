@@ -90,3 +90,38 @@ hal_status_t HAL_Display_Mock_SetScrollStart(uint16_t vss)
     (void)vss;
     return HAL_OK;
 }
+
+/* --------------------------------------------------------------------------
+ * Runtime panel dimensions (mock: report 0 — headless)
+ * -------------------------------------------------------------------------- */
+int HAL_Display_Mock_GetWidth(void)
+{
+    return 0;
+}
+
+int HAL_Display_Mock_GetHeight(void)
+{
+    return 0;
+}
+
+/* --------------------------------------------------------------------------
+ * Ops table exported to the router
+ * -------------------------------------------------------------------------- */
+const display_backend_ops_t HAL_DISPLAY_MOCK_OPS = {
+    .name              = "mock",
+    .init              = HAL_Display_Mock_Init,
+    .deinit            = HAL_Display_Mock_Deinit,
+    .draw_pixel        = HAL_Display_Mock_DrawPixel,
+    .fill              = HAL_Display_Mock_Fill,
+    .fill_rect         = HAL_Display_Mock_FillRect,
+    .blit_row          = HAL_Display_Mock_BlitRow,
+    .clear             = HAL_Display_Mock_Clear,
+    .show              = HAL_Display_Mock_Show,
+    .write_text        = HAL_Display_Mock_WriteText,
+    .has_capability    = HAL_Display_Mock_HasCapability,
+    .set_madctl        = HAL_Display_Mock_SetMadctl,
+    .set_scroll_area   = HAL_Display_Mock_SetScrollArea,
+    .set_scroll_start  = HAL_Display_Mock_SetScrollStart,
+    .get_width         = HAL_Display_Mock_GetWidth,
+    .get_height        = HAL_Display_Mock_GetHeight,
+};
