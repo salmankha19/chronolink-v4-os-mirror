@@ -1,0 +1,11 @@
+# Temporary developer defaults to reduce boot noise and allow local UI bring-up
+CONFIG_I2C_SUPPRESS_DEPRECATE_WARN=y
+# Optional during transition when legacy/new I2C APIs coexist
+CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y
+
+# Match the PlatformIO flash size to the actual module flash so build warnings disappear
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+# CONFIG_ESPTOOLPY_FLASHSIZE_2MB is not set
+
+# Enable mock display backend for dev module bring-up/testing
+CONFIG_CHRONOLINK_USE_MOCK_DISPLAY=y
