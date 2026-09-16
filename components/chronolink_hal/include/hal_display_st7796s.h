@@ -4,14 +4,15 @@
  * ChronoLink V4 OS — Hardware Abstraction Layer
  * ST7796S 320x480 TFT LCD Display Driver (Header)
  *
- * This header exposes the public HIL API for the ST7796S display backend.
- * All functions here are implemented in hal_display_st7796s.c.
+ * This header exposes the public HIL API for the ST7796S display backend
+ * and exports its ops table for the router.
  *
  * Features:
  *  - DMA-safe SPI operations
  *  - MADCTL orientation control (low-level)
  *  - Pixel, fill, clear, and show operations
  *  - Capability reporting for HAL router
+ *  - Hardware vertical scroll (VSCRDEF + VSCSAD)
  */
 
 #pragma once
@@ -60,6 +61,13 @@ hal_status_t HAL_Display_ST7796S_SetScrollStart(uint16_t vss);
 
 /* Capability query */
 hal_status_t HAL_Display_ST7796S_HasCapability(hal_display_cap_t cap);
+
+/* Panel dimensions (runtime accessors) */
+int HAL_Display_ST7796S_GetWidth(void);
+int HAL_Display_ST7796S_GetHeight(void);
+
+/* Ops table exported to the router (defined in hal_display_st7796s.c) */
+extern const display_backend_ops_t HAL_DISPLAY_ST7796S_OPS;
 
 #ifdef __cplusplus
 }
