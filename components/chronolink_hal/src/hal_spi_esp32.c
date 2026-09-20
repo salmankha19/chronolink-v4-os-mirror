@@ -46,8 +46,19 @@ static inline void spi_unlock(void)
 #define HAL_SPI_DEFAULT_SPEED_HZ 1000000
 #endif
 
+/* Shared SPI bus transfer size cap.
+
+   This must be >= the largest single transaction any consumer on the
+   bus needs to submit. The ST7796S display driver submits 8 KB chunks
+   for clear/fill (see ST7796S_DMA_CHUNK_BYTES); if this cap is lower,
+   spi_master rejects the transfer with ESP_ERR_INVALID_ARG and the
+   panel never clears.
+
+   If a future SPI peripheral needs larger transactions, raise this —
+   not the per-consumer limit — so ownership of the bus config stays
+   in one place. */
 #ifndef HAL_SPI_MAX_TRANSFER_SZ
-#define HAL_SPI_MAX_TRANSFER_SZ 4096
+#define HAL_SPI_MAX_TRANSFER_SZ 8192
 #endif
 
 /* --------------------------------------------------------------------------
@@ -111,6 +122,11 @@ hal_status_t HAL_SPI_Init(void)
     hal_status_t hs = hal_spi_bus_init();
     spi_unlock();
     return hs;
+}
+
+int HAL_SPI_GetMaxTransferSize(void)
+{
+    return HAL_SPI_MAX_TRANSFER_SZ;
 }
 
 /* --------------------------------------------------------------------------
