@@ -6,10 +6,7 @@
 static const char *TAG = "event_bus";
 static QueueHandle_t g_event_queue = NULL;
 
-/* If the caller doesn't provide a queue, create an internal one with this size.
-   Tune as needed for your workload. */
 #define DEFAULT_EVENT_QUEUE_LEN 64
-#define ENQUEUE_TIMEOUT_MS 10
 
 void event_bus_init(QueueHandle_t queue)
 {
@@ -19,15 +16,20 @@ void event_bus_init(QueueHandle_t queue)
         return;
     }
 
-    /* Create an internal queue if none provided */
     g_event_queue = xQueueCreate(DEFAULT_EVENT_QUEUE_LEN, sizeof(event_t));
     if (!g_event_queue) {
         ESP_LOGE(TAG, "event_bus_init: failed to create internal queue");
     } else {
-        ESP_LOGI(TAG, "Event Bus initialized (internal queue=%p, len=%d)", (void*)g_event_queue, DEFAULT_EVENT_QUEUE_LEN);
+        ESP_LOGI(TAG, "Event Bus initialized (internal queue=%p, len=%d)",
+                 (void*)g_event_queue, DEFAULT_EVENT_QUEUE_LEN);
     }
 }
 
+/* Publish policy: never block the caller.
+ *
+ * Old version waited up to 10 ms for space, which stalled the FreeRTOS
+ * timer service task once the 32-slot queue filled (~32 s at 1 Hz).
+ * New policy: zero-timeout send; on full, evict oldest and retry once. */
 void event_bus_publish(const event_t *evt)
 {
     if (!evt) return;
@@ -37,15 +39,29 @@ void event_bus_publish(const event_t *evt)
         return;
     }
 
-    /* Try to enqueue with a short timeout to provide brief backpressure.
-       This avoids immediate drops during short bursts; increase timeout
-       or queue length if needed. Consider coalescing frequent events. */
-    if (xQueueSend(g_event_queue, evt, pdMS_TO_TICKS(ENQUEUE_TIMEOUT_MS)) != pdPASS) {
-        static uint32_t s_drop_count = 0;
+    static uint32_t s_drop_count = 0;
+
+    if (xQueueSend(g_event_queue, evt, 0) == pdPASS) {
+        return;
+    }
+
+    event_t discarded;
+    if (xQueueReceive(g_event_queue, &discarded, 0) == pdPASS) {
         s_drop_count++;
         if ((s_drop_count % 100U) == 1U) {
-            ESP_LOGD(TAG, "event_bus_publish: queue full, event dropped (count=%lu)", (unsigned long)s_drop_count);
+            ESP_LOGW(TAG, "event_bus_publish: queue full, dropped oldest "
+                          "(total dropped=%lu, last dropped type=%d)",
+                     (unsigned long)s_drop_count, (int)discarded.type);
         }
+        if (xQueueSend(g_event_queue, evt, 0) == pdPASS) {
+            return;
+        }
+    }
+
+    s_drop_count++;
+    if ((s_drop_count % 100U) == 1U) {
+        ESP_LOGD(TAG, "event_bus_publish: queue full, event dropped "
+                      "(total dropped=%lu)", (unsigned long)s_drop_count);
     }
 }
 
