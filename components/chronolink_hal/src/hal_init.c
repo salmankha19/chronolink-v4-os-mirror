@@ -98,10 +98,10 @@ hal_status_t HAL_Init(void)
                  PDL_PIN_I2C_SCL, PDL_PIN_I2C_SDA);
     }
 
-    /* SPI bus init. HAL_SPI_Init() is idempotent (tolerates ESP_ERR_INVALID_STATE
-       if a display driver, e.g. ST7796S, already brought the bus up first), so
-       it's always safe to call here explicitly rather than relying on lazy
-       init inside whichever driver happens to touch SPI first. */
+    /* SPI bus init. HAL_SPI_Init() is the single owner of the shared SPI
+       bus configuration and must run before any driver that uses the bus
+       (e.g. the ST7796S display backend). It's idempotent, so calling it
+       here explicitly is safe even if a driver also tries to init later. */
     hs = HAL_SPI_Init();
     if (hs != HAL_OK) {
         ESP_LOGE(TAG, "HAL_SPI_Init failed (%d)", (int)hs);

@@ -19,6 +19,7 @@
 #include "hal.h"
 #include "hal_display.h"
 #include "hal_display_st7796s.h"
+#include "hal_spi.h"
 #include "board_pins.h"
 
 #include "driver/gpio.h"
@@ -301,6 +302,19 @@ static hal_status_t st7796s_spi_init(void)
     esp_err_t err = spi_bus_initialize(ST7796S_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
     if (err == ESP_ERR_INVALID_STATE) {
         ESP_LOGI(TAG, "SPI bus already initialized, reusing shared bus");
+
+        /* In normal boot, HAL_SPI_Init() owns the bus and runs before us.
+           Verify the bus was sized to accommodate our largest transfer
+           (ST7796S_DMA_CHUNK_BYTES, used for clear/fill). If not, we'd
+           fail at transfer time with a confusing ESP_ERR_INVALID_ARG —
+           fail fast here instead. */
+        int bus_max = HAL_SPI_GetMaxTransferSize();
+        if (bus_max < (int)ST7796S_DMA_CHUNK_BYTES) {
+            ESP_LOGE(TAG, "Shared SPI bus max_transfer_sz (%d) < ST7796S needs (%d). "
+                          "Raise HAL_SPI_MAX_TRANSFER_SZ in hal_spi_esp32.c.",
+                     bus_max, (int)ST7796S_DMA_CHUNK_BYTES);
+            return HAL_ERR_INIT;
+        }
         err = ESP_OK;
     }
     if (err != ESP_OK) {
