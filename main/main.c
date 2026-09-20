@@ -11,7 +11,6 @@
  *
  * Copyright (c) 2026 ChronoLink Project
  */
-#include "project_config.h"
 #include "core_os.h"
 #include "esp_log.h"
 #include "boot_manager.h"
