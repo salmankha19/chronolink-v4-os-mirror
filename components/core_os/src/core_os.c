@@ -30,13 +30,7 @@ static void heartbeat_timer_cb(TimerHandle_t xTimer)
 
     event_t evt;
     boot_event_payload_u p;
-    memset(&evt, 0, sizeof(evt));
-    memset(&p, 0, sizeof(p));
-
-    p.health.uptime_ms = get_uptime_ms();
-    p.health.current_stage = (uint8_t)BOOT_STAGE_NONE;
-    p.health.error_count = 0;
-
+    boot_event_init_health(&p, BOOT_STAGE_NONE, 0, get_uptime_ms(), 0);
     event_init_payload(&evt, EVENT_BOOT_HEALTH, &p, sizeof(p));
     event_bus_publish(&evt);
 

@@ -43,7 +43,6 @@ typedef struct {
     uint16_t error_count;
 } boot_health_t;
 
-/* Compatibility aliases for existing call sites. */
 typedef boot_health_t boot_health_payload_t;
 
 typedef struct {
@@ -58,7 +57,6 @@ typedef struct {
     uint32_t fail_flags;
 } boot_fail_t;
 
-/* Compatibility aliases for existing call sites. */
 typedef boot_fail_t boot_fail_payload_t;
 
 typedef struct {
@@ -73,13 +71,9 @@ typedef union {
     uint8_t raw[32];
 } boot_event_payload_u;
 
-#define EVENT_BOOT_NONE        0
-#define EVENT_BOOT_START       1
-#define EVENT_BOOT_READY       2
-#define EVENT_BOOT_ERROR       3
-#define EVENT_BOOT_HEALTH      4
-#define EVENT_BOOT_FAIL        5
-#define EVENT_BOOT_STAGE       6
+/* Event IDs live in event_bus.h (event_type_t). EVENT_BOOT_* used to be
+   #defines here with values 1..6 and collided with EVENT_STATE_CHANGE and
+   EVENT_UI_REQUEST. They are now enumerators in event_type_t. */
 
 static inline void boot_event_init_health(boot_event_payload_u *p, boot_stage_t stage, uint8_t err, uint32_t uptime_ms, uint16_t error_count)
 {
@@ -106,7 +100,6 @@ static inline void boot_event_init_fail(boot_event_payload_u *p, boot_stage_t st
     p->fail.fail_flags = flags;
 }
 
-/* prototypes for helpers (single declaration visible to all TUs) */
 const char *boot_stage_to_str(boot_stage_t stage);
 const char *boot_status_to_str(boot_status_t status);
 
