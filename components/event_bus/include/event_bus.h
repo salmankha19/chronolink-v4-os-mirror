@@ -28,6 +28,14 @@ typedef enum {
     EVENT_BOOT_HEALTH      = 35,
     EVENT_BOOT_FAIL        = 36,
     EVENT_BOOT_STAGE       = 37,
+
+    /* Network lifecycle events (svc_network). Range 64..95 reserved for
+       network-related events; svc_http / svc_ota should NOT reuse these
+       slots -- give them their own range in the 96..127 band. */
+    EVENT_NETWORK_STARTING     = 64,
+    EVENT_NETWORK_CONNECTED    = 65,  /* associated + got IP */
+    EVENT_NETWORK_DISCONNECTED = 66,
+    EVENT_NETWORK_ERROR        = 67,
 } event_type_t;
 
 typedef struct {
