@@ -17,6 +17,7 @@
 #include "ui_producer.h"
 #include "font_engine.h"
 #include "font_builtin_8x8.h"
+#include "svc_network.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -39,6 +40,15 @@ void app_main(void)
     font_engine_register(&FONT_BUILTIN_8X8);
 
     ui_producer_start();
+
+    /* svc_network is non-fatal: no AP reachable still leaves the clock
+       running off the RTC. Errors surface via EVENT_NETWORK_ERROR. */
+    esp_err_t net_err = svc_network_start();
+    
+    if (net_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_network_start failed: %s -- continuing without WiFi",
+                 esp_err_to_name(net_err));
+    }
 
     ESP_LOGI(TAG, "ChronoLink initialized successfully");
 
