@@ -1,10 +1,4 @@
-
----
-
-## `docs/Architecture.md`
-
-```markdown
-# ChronoLink V4 OS — Architecture
+# ChronoLink V4 OS - Architecture
 
 This is the single canonical architecture document. It supersedes the
 earlier "4-layer", "6-layer" and "HDL/HIL" descriptions, which
@@ -20,9 +14,9 @@ it, through their public headers.
 | # | Layer | Components (this repo) | Role |
 |---|---|---|---|
 | 0 | Flash layout | `partitions.csv` (root) | Partition table, OTA slots, `/storage` FATFS |
-| 1 | PDL — Platform/Board Definition | `pdl_*.h`, `board_pins.h`, `pdl_board_esp32.c` (inside `chronolink_hal`) | Pin map, board identity, capability flags, pin validation, initial pin configuration |
-| 2 | HAL — Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
-| 3 | HIL — Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
+| 1 | PDL - Platform/Board Definition | `pdl_*.h`, `board_pins.h`, `pdl_board_esp32.c` (inside `chronolink_hal`) | Pin map, board identity, capability flags, pin validation, initial pin configuration |
+| 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
+| 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
 | 5 | Services | `state_manager`, `svc_network`, `display_manager`, `ui_producer`, `font_engine`, `font`, `remote_bridge` | Logic and engines |
 | 6 | Application | `main/` (UI code lives here today), future `src/app/*` | UI, display cycle, web config, theme |
@@ -87,3 +81,55 @@ flowchart TB
     HILC --> FE
     HALC --> SDK
     HALC --> PDL
+
+---
+
+## 4. Runtime model
+
+- `app_main()` (`main/main.c`) calls `boot_manager_init(0)`, registers
+  the built-in 8x8 font, starts `ui_producer`, then starts
+  `svc_network` (non-fatal if Wi-Fi fails; the clock keeps running from
+  the RTC).
+- `core_os_init()` creates the event bus and calls
+  `display_manager_init()`.
+- `core_os_start()` starts a state-queue task, a `core0_task`
+  (system / network) and a `core1_task` (UI / clock). `core1_task`
+  calls `display_manager_process_frame()` about every 16 ms.
+- In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
+  service tasks.
+
+---
+
+## 5. Known deviations from the rules
+
+These exist in the code today. They are documented here so nobody
+mistakes them for intended design. Each has an entry in
+[STATUS.md](STATUS.md).
+
+**Type** column: `Dev` = genuine deviation to be fixed. `Exc` =
+accepted exception, written into the Constitution and expected to
+stay.
+
+| Type | Deviation | Where | Intended fix / rationale |
+|---|---|---|---|
+| Dev | Kernel calls a service (`display_manager`) | `core_os.c` | Have `display_manager` register itself with the kernel, or start it from `app_main` |
+| Dev | A service calls the HAL directly, bypassing HIL | `display_manager`, `json_display_executor` call `HAL_GFX_*` / `HAL_Display_*` | Route through a HIL graphics adapter, or formally allow services to use the display HAL |
+| Dev | `hal_gfx` (drawing primitives) lives in the HAL | `chronolink_hal/src/hal_gfx.c` | Move to its own graphics component above the HAL |
+| Exc | `boot_manager` calls `HAL_Init()` and reads the BOOT pin | `boot_manager.c` | Accepted exception today. The BOOT-pin read is expected to be removed in favour of a config-driven reset; see STATUS.md "Planned boot work" |
+| Dev | HAL reads pin settings from `main/Kconfig.projbuild` | `board_pins.h` uses `CONFIG_BOARD_*` | Move the pin Kconfig into `chronolink_hal` |
+| Dev | `chronolink_driver_sdk` includes HAL headers privately | its `CMakeLists.txt` | Extract shared types into a small common component |
+
+---
+
+## 6. How to add things
+
+- **A new display panel** - implement a `display_backend_ops_t`, export
+  `HAL_DISPLAY_<NAME>_OPS`, add a Kconfig choice and one line in
+  `hal_display_select_ops()`. Details in [hal.md](hal.md) section 6.
+- **A new sensor** - implement a `hal_sensor_driver_t`, add a
+  capability flag in `pdl_capabilities.h`, register it in `hal_init.c`
+  under that flag.
+- **A new service** - new component; depend on `hil` (not
+  `chronolink_hal`); talk to other services through the event bus.
+- **A new HIL adapter** - a thin `bool`-returning wrapper over the HAL.
+  Add hardware logic to the HAL first, then wrap it here.
