@@ -1,54 +1,45 @@
-# Copilot Agent Rules for ChronoLink V4 OS
+# Rules for AI Coding Agents — ChronoLink V4 OS
 
-Copilot Agent must follow all rules defined in:
+Authoritative sources, in order:
 
-- `/docs/CHRONOLINK_CONSTITUTION.md`
-- `/docs/Architecture.md`
-- `/docs/boot.md`
-- `/docs/hal.md`
-- `/partitions.csv`
+1. **the code**,
+2. `CHRONOLINK_CONSTITUTION.md`,
+3. `Architecture.md`, `boot.md`, `hal.md`, `hil.md`,
+4. `partitions.csv` (root),
+5. `STATUS.md`.
 
-These documents define the architecture, boot sequence, HAL responsibilities, filesystem rules, and component boundaries for ChronoLink V4 OS.
-
-### Mandatory Agent Behavior
-
-- Follow the 6‑layer architecture strictly  
-- Respect boot sequence ordering  
-- Use FATFS only (never SPIFFS or LittleFS)  
-- Use valid ESP‑IDF 6 component names  
-- Avoid circular dependencies  
-- Validate CMakeLists.txt correctness  
-- Validate PlatformIO compatibility  
-- Validate header resolution  
-- Never generate code outside architecture boundaries  
-- Never introduce unsupported components  
-
-### Filesystem Enforcement
-
-Only FATFS is allowed.  
-Forbidden: SPIFFS, esp_spiffs, spiffs, esp_littlefs, littlefs, vfs_littlefs.
-
-### Boot Manager Enforcement
-
-`boot_manager.c` must only initialize NVS, FATFS, OTA, logging, and hand off to `core_os`.
-
-### Kernel Enforcement
-
-`core_os` must only manage tasks, queues, timers, and dual‑core scheduling.
-
-### HAL Enforcement
-
-HAL must only contain hardware access and expose clean APIs.
-
-### Services Enforcement
-
-Services must only contain logic engines and use HAL APIs.
-
-### Application Enforcement
-
-Application must only contain UI and display logic.
+If a document disagrees with the code, say so and update the
+document. Do not leave the disagreement in place.
 
 ---
 
-Copilot Agent must comply with these rules for all fixes, refactors, and code generation.
+## Always
 
+- Respect the layer order: Flash (0), PDL (1), HAL (2), HIL (3),
+  Kernel (4), Services (5), Application (6). Call downward only.
+- FATFS on `/storage` only. Never SPIFFS or LittleFS.
+- Use valid ESP-IDF 6 component names (`log`, not `esp_log`).
+- Services and the application use `hil`; only the HAL touches
+  hardware.
+- Check every `hal_status_t` / `bool`. Stubs return errors, never
+  success (Constitution §12).
+- Keep boot order: logging, factory-reset check, NVS, FATFS, OTA log,
+  `HAL_Init`, `core_os_init`, `core_os_start`.
+- Pins come from `pdl_pins.h`. Do not invent pins or add a second
+  Kconfig entry for a pin that already has one.
+- Config-driven behaviour: the intended user-facing control path is
+  the web UI (not built). Buttons on the PCB are development-only.
+
+## Never
+
+- Add hardware access to services, HIL, or the application.
+- Add `boot_manager` features beyond provisioning and hand-off.
+- Reference APIs that do not exist (`HAL_RegisterDevice`,
+  `hal_read_role`, `os_get_temperature`, `HAL_HealthCheck`, and
+  similar). Check `hal.md` and `hil.md` for what is real.
+- Introduce circular dependencies or rely on global `-I` flags.
+
+## Before finishing a change
+
+Validate CMake `REQUIRES`, header resolution, dependency direction,
+and update the relevant doc and `STATUS.md` in the same change.

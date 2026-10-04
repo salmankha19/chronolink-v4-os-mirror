@@ -1,100 +1,135 @@
-# ChronoLink V4 — System Architecture
+# ChronoLink V4 OS - Architecture
 
-ChronoLink V4 uses a clean 4‑layer architecture:
-
-1. **PDL Board Layer** — board profile, pin macros, partition notes  
-2. **PIL / HAL Layer** — stable C ABI + MCU‑specific drivers  
-3. **Service / Engine Layer** — pure logic (state, prayer engine, scheduler, events)  
-4. **Application Layer** — UI, display cycle, web config
+This is the single canonical architecture document. It supersedes the
+earlier "4-layer", "6-layer" and "HDL/HIL" descriptions, which
+disagreed with each other and with the code.
 
 ---
 
+## 1. Layer model
+
+Layers are numbered bottom-up. A layer may only call layers **below**
+it, through their public headers.
+
+| # | Layer | Components (this repo) | Role |
+|---|---|---|---|
+| 0 | Flash layout | `partitions.csv` (root) | Partition table, OTA slots, `/storage` FATFS |
+| 1 | PDL - Platform/Board Definition | `pdl_*.h`, `board_pins.h`, `pdl_board_esp32.c` (inside `chronolink_hal`) | Pin map, board identity, capability flags, pin validation, initial pin configuration |
+| 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
+| 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
+| 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
+| 5 | Services | `state_manager`, `svc_network`, `display_manager`, `ui_producer`, `font_engine`, `font`, `remote_bridge` | Logic and engines |
+| 6 | Application | `main/` (UI code lives here today), future `src/app/*` | UI, display cycle, web config, theme |
+
+`boot_manager` is **not a layer**. It is the startup orchestrator that
+runs once, before the kernel's tasks exist. See [boot.md](boot.md).
+
+PDL is not a separate component today: its headers and one `.c` file
+live in `chronolink_hal` and are logically the bottom of that
+component.
+
+`src/app/*` and `src/svc/*` contain placeholder stubs. They are **not
+compiled**: `platformio.ini` sets `src_dir = main`. Treat them as
+reserved for future work, not as active code.
+
+---
+
+## 2. Rules (short form)
+
+1. Lower layers never call higher layers. No circular dependencies.
+2. Services and the application use the HIL where an adapter exists.
+3. Only the HAL touches hardware registers or ESP-IDF peripheral
+   drivers (`driver/i2c.h`, `driver/spi_master.h`, I2S, GPIO).
+4. Filesystem is FATFS on `/storage` only. No SPIFFS, no LittleFS.
+5. The full rule set, including documented exceptions, is in
+   [CHRONOLINK_CONSTITUTION.md](CHRONOLINK_CONSTITUTION.md).
+
+---
+
+## 3. Dependency diagram (as built)
+
 ```mermaid
 flowchart TB
+    subgraph SVC["Services (5)"]
+        DM[display_manager]
+        UIP[ui_producer]
+        NET[svc_network]
+        SM[state_manager]
+        FE[font_engine / font]
+    end
+    subgraph KERN["Kernel (4)"]
+        CORE[core_os]
+        EB[event_bus]
+    end
+    subgraph HIL["HIL (3)"]
+        HILC[hil adapters]
+    end
+    subgraph HAL["HAL (2) + PDL (1)"]
+        HALC[chronolink_hal]
+        SDK[chronolink_driver_sdk]
+        PDL[pdl_* / board_pins]
+    end
+    BOOT[boot_manager<br/>startup orchestrator]
 
-%% ============================
-%% APPLICATION LAYER
-%% ============================
-subgraph APP["Application Layer"]
-    CLOCK_APP["Clock App"]
-    WEB_CONFIG["Web Config App"]
-    DISPLAY_CYCLE["Display Cycle"]
-    THEME_ENGINE["Theme Engine"]
-    ERROR_UI["Error Display"]
-end
+    BOOT --> HALC
+    BOOT --> CORE
+    BOOT --> EB
+    CORE --> EB
+    CORE --> DM
+    DM --> HALC
+    HILC --> HALC
+    HILC --> FE
+    HALC --> SDK
+    HALC --> PDL
 
-%% ============================
-%% SERVICE / ENGINE LAYER
-%% ============================
-subgraph SERVICE["Service / Engine Layer"]
-    STATE_MANAGER["State Manager"]
-    EVENT_BUS["Event Bus"]
-    PRAYER_ENGINE["Prayer Engine"]
-    TIME_ENGINE["Time Engine"]
-    SCHEDULER["Scheduler"]
-    CONFIG_SERVICE["Config Service"]
-    THEME_REGISTRY["Theme Registry"]
-end
+---
 
-%% ============================
-%% PIL / HAL LAYER
-%% ============================
-subgraph HAL["PIL / HAL Layer"]
-    PIL_GPIO["PIL GPIO"]
-    PIL_I2C["PIL I2C"]
-    PIL_SPI["PIL SPI"]
-    PIL_SENSOR["PIL Sensor API"]
-    PIL_CONFIG["PIL Config Loader"]
+## 4. Runtime model
 
-    HAL_GPIO["HAL GPIO Driver"]
-    HAL_I2C["HAL I2C Driver"]
-    HAL_SPI["HAL SPI Driver"]
-    HAL_SENSOR["HAL Sensor Driver"]
-    HAL_BUS["HAL Bus Manager"]
-    HAL_HEALTH["HAL Health Monitor"]
-end
+- `app_main()` (`main/main.c`) calls `boot_manager_init(0)`, registers
+  the built-in 8x8 font, starts `ui_producer`, then starts
+  `svc_network` (non-fatal if Wi-Fi fails; the clock keeps running from
+  the RTC).
+- `core_os_init()` creates the event bus and calls
+  `display_manager_init()`.
+- `core_os_start()` starts a state-queue task, a `core0_task`
+  (system / network) and a `core1_task` (UI / clock). `core1_task`
+  calls `display_manager_process_frame()` about every 16 ms.
+- In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
+  service tasks.
 
-%% ============================
-%% PDL BOARD LAYER
-%% ============================
-subgraph PDL["PDL Board Layer"]
-    BOARD_PROFILE["Board Profile"]
-    PIN_MAP["Pin Map"]
-    PARTITIONS["Partition Table"]
-    CAPABILITIES["Board Capabilities"]
-end
+---
 
-%% ============================
-%% CONNECTIONS
-%% ============================
+## 5. Known deviations from the rules
 
-%% Application → Service
-CLOCK_APP --> STATE_MANAGER
-WEB_CONFIG --> CONFIG_SERVICE
-DISPLAY_CYCLE --> EVENT_BUS
-THEME_ENGINE --> THEME_REGISTRY
-ERROR_UI --> STATE_MANAGER
+These exist in the code today. They are documented here so nobody
+mistakes them for intended design. Each has an entry in
+[STATUS.md](STATUS.md).
 
-%% Service → PIL/HAL
-TIME_ENGINE --> PIL_CONFIG
-TIME_ENGINE --> HAL_GPIO
-PRAYER_ENGINE --> PIL_CONFIG
-PRAYER_ENGINE --> HAL_SENSOR
-SCHEDULER --> EVENT_BUS
-CONFIG_SERVICE --> PIL_CONFIG
-STATE_MANAGER --> HAL_HEALTH
+**Type** column: `Dev` = genuine deviation to be fixed. `Exc` =
+accepted exception, written into the Constitution and expected to
+stay.
 
-%% PIL → HAL
-PIL_GPIO --> HAL_GPIO
-PIL_I2C --> HAL_I2C
-PIL_SPI --> HAL_SPI
-PIL_SENSOR --> HAL_SENSOR
+| Type | Deviation | Where | Intended fix / rationale |
+|---|---|---|---|
+| Dev | Kernel calls a service (`display_manager`) | `core_os.c` | Have `display_manager` register itself with the kernel, or start it from `app_main` |
+| Dev | A service calls the HAL directly, bypassing HIL | `display_manager`, `json_display_executor` call `HAL_GFX_*` / `HAL_Display_*` | Route through a HIL graphics adapter, or formally allow services to use the display HAL |
+| Dev | `hal_gfx` (drawing primitives) lives in the HAL | `chronolink_hal/src/hal_gfx.c` | Move to its own graphics component above the HAL |
+| Exc | `boot_manager` calls `HAL_Init()` and reads the BOOT pin | `boot_manager.c` | Accepted exception today. The BOOT-pin read is expected to be removed in favour of a config-driven reset; see STATUS.md "Planned boot work" |
+| Dev | HAL reads pin settings from `main/Kconfig.projbuild` | `board_pins.h` uses `CONFIG_BOARD_*` | Move the pin Kconfig into `chronolink_hal` |
+| Dev | `chronolink_driver_sdk` includes HAL headers privately | its `CMakeLists.txt` | Extract shared types into a small common component |
 
-%% HAL → PDL
-HAL_GPIO --> PIN_MAP
-HAL_I2C --> PIN_MAP
-HAL_SPI --> PIN_MAP
-HAL_SENSOR --> CAPABILITIES
-HAL_BUS --> BOARD_PROFILE
-HAL_HEALTH --> BOARD_PROFILE
+---
 
+## 6. How to add things
+
+- **A new display panel** - implement a `display_backend_ops_t`, export
+  `HAL_DISPLAY_<NAME>_OPS`, add a Kconfig choice and one line in
+  `hal_display_select_ops()`. Details in [hal.md](hal.md) section 6.
+- **A new sensor** - implement a `hal_sensor_driver_t`, add a
+  capability flag in `pdl_capabilities.h`, register it in `hal_init.c`
+  under that flag.
+- **A new service** - new component; depend on `hil` (not
+  `chronolink_hal`); talk to other services through the event bus.
+- **A new HIL adapter** - a thin `bool`-returning wrapper over the HAL.
+  Add hardware logic to the HAL first, then wrap it here.

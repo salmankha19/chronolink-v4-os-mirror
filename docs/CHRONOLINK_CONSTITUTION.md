@@ -1,187 +1,184 @@
 # ChronoLink V4 OS — Project Constitution
 
-This document defines the mandatory architectural, boot, filesystem, and component rules for ChronoLink V4 OS. All development, fixes, refactors, and code generation must comply with this constitution.
+Mandatory rules for all development, fixes, refactors and generated
+code. Amended 2026-10-04 to match the code at commit `65dd77d`:
+layers are aligned with [Architecture.md](Architecture.md), and real,
+accepted exceptions are written down instead of hidden.
+
+If a rule below disagrees with the code, the code wins — report the
+discrepancy and fix the document, or fix the code. Do not leave the
+two in disagreement.
 
 ---
 
-## 1. Architecture Layers (Mandatory)
+## 1. Architecture layers
 
-ChronoLink V4 OS uses a strict 6‑layer architecture:
+Bottom-up: Flash layout (0), PDL (1), HAL (2), HIL (3), Kernel (4),
+Services (5), Application (6). `boot_manager` is the startup
+orchestrator, not a layer.
 
-1. Partition Table  
-2. Boot Sequence (`boot_manager`)  
-3. Kernel (`core_os`)  
-4. HAL (drivers)  
-5. Services (engines)  
-6. Application (UI + logic)
+- Lower layers never call higher layers.
+- Higher layers call lower layers only through public headers.
+- No circular dependencies.
+- Services and the application use the HIL where an adapter exists.
 
-### Rules
-- Lower layers must never call higher layers.  
-- Higher layers may only call lower layers through public APIs.  
-- No circular dependencies are allowed.
+The canonical mapping of layers to components is in
+[Architecture.md](Architecture.md) §1.
 
 ---
 
-## 2. Boot Sequence Rules (Mandatory)
+## 2. Boot rules
 
-`boot_manager.c` must:
+`boot_manager` must:
 
-- Initialize NVS first  
-- Mount FATFS on `/storage`  
-- Initialize OTA partition selection  
-- Initialize logging  
-- Call `core_os_init()` then `core_os_start()`
+- configure logging first (so later failures are visible),
+- handle factory reset when the boot flags request it,
+- initialise NVS, then mount FATFS on `/storage`, then log OTA state,
+- call `HAL_Init()`, then `core_os_init()` and `core_os_start()`.
 
-### Forbidden in `boot_manager.c`
-- Starting tasks  
-- Accessing hardware directly  
-- Accessing UI or display  
-- Accessing services or HAL  
-- Mounting any filesystem except FATFS  
+**Forbidden in `boot_manager`:** starting its own tasks, UI/display
+access, touching services, mounting any filesystem other than FATFS.
 
----
+**Accepted exceptions (documented):**
 
-## 3. Filesystem Rules (Mandatory)
-
-ESP‑IDF 6.0.1 under PlatformIO supports **only FATFS**.
-
-### Allowed
-- Component: `fatfs`  
-- Header: `esp_vfs_fat.h`  
-- API: `esp_vfs_fat_spiflash_mount()`  
-- Partition type: `fat`  
-- Partition name: `storage`  
-- Base path: `/storage`
-
-### Forbidden
-- SPIFFS  
-- `esp_spiffs`  
-- `spiffs`  
-- `esp_littlefs`  
-- `littlefs`  
-- `vfs_littlefs`
-
-Never generate code referencing these.
+- It calls `HAL_Init()` once, as the provisioning step.
+- It reads the BOOT pin (GPIO0) at startup to detect a
+  factory-reset request held for 3 s. This is a development
+  convenience, and it is the only hardware access permitted in
+  `boot_manager`. It drives nothing and opens no bus. It is expected
+  to be removed in favour of a config-driven reset produced by the
+  web UI. See [boot.md](boot.md) §"Reset mechanisms" and
+  [STATUS.md](STATUS.md).
 
 ---
 
-## 4. CMake Rules (Mandatory)
+## 3. Filesystem rules
 
-### Valid ESP‑IDF 6 component names
-- `esp_common`  
-- `nvs_flash`  
-- `fatfs`  
-- `app_update`  
-- `esp_timer`  
-- `esp_event`  
-- `esp_system`  
-- `log` (correct component for `esp_log.h`)
+ESP-IDF 6.0.1 under PlatformIO: **FATFS only**.
 
-### Invalid component names
-- `esp_log`  
-- `esp_littlefs`  
-- `littlefs`  
-- `vfs_littlefs`  
-- `spiffs`  
-- `esp_spiffs`
-
-All components must declare `REQUIRES` using only valid names.
+- **Allowed:** component `fatfs`, header `esp_vfs_fat.h`, partition
+  type `fat`, partition name `storage`, base path `/storage`,
+  wear-levelled mount.
+- **Forbidden:** SPIFFS, `esp_spiffs`, LittleFS, `esp_littlefs`,
+  `vfs_littlefs`.
 
 ---
 
-## 5. PlatformIO Rules (Mandatory)
+## 4. CMake rules
 
-`platformio.ini` must contain:
+All components declare `REQUIRES` / `PRIV_REQUIRES` using valid
+ESP-IDF 6 component names, e.g. `esp_common`, `nvs_flash`, `fatfs`,
+`app_update`, `esp_timer`, `esp_event`, `esp_system`, `log`, `driver`,
+`esp_driver_gpio`, `esp_driver_i2c`, `esp_driver_spi`,
+`esp_driver_i2s`.
 
-- `framework = espidf`  
-- `board_build.filesystem = fatfs`  
-- No SPIFFS or LittleFS flags  
-- No references to removed components  
+Invalid names: `esp_log` (use `log`), and any SPIFFS/LittleFS name.
 
----
-
-## 6. Partition Table Rules (Mandatory)
-
-`partitions.csv` must contain:
-storage,data,fat,0x820000,0x7E0000,
-
-Rules:
-- Must not overlap app partitions  
-- Must not use SPIFFS or LittleFS  
+Do not rely on global include paths (`-I` in `platformio.ini`) to hide
+a missing `REQUIRES`.
 
 ---
 
-## 7. Kernel Rules (Mandatory)
+## 5. PlatformIO rules
 
-`core_os` must:
+`platformio.ini` must contain `framework = espidf` and
+`board_build.filesystem = fatfs`, with no SPIFFS/LittleFS flags and no
+references to removed components.
 
-- Create FreeRTOS tasks  
-- Create queues  
-- Create timers  
-- Manage dual‑core scheduling  
-- Start core0 (system/network)  
-- Start core1 (UI/clock)
-
-### Forbidden in `core_os`
-- Mounting filesystems  
-- Initializing NVS  
-- Accessing hardware directly  
+Do not define fake `CONFIG_*` macros in `build_flags`.
 
 ---
 
-## 8. HAL Rules (Mandatory)
+## 6. Partition table rules
 
-HAL drivers must:
+`partitions.csv` (root) must contain
+`storage,data,fat,0x820000,0x7E0000,`, must not overlap app
+partitions, and must not use SPIFFS or LittleFS.
 
-- Contain **only** hardware access  
-- Expose clean APIs  
-- Never call services or application  
+Current layout: see [partitions.csv](partitions.csv).
 
----
-
-## 9. Services Rules (Mandatory)
-
-Services must:
-
-- Contain logic engines (prayer engine, sensor engine, theme engine)  
-- Use HAL APIs  
-- Never call `boot_manager`  
-- Never mount filesystems  
+`docs/partitions.csv` is a copy of the root file for reader
+convenience and must stay identical to it.
 
 ---
 
-## 10. Application Rules (Mandatory)
+## 7. Kernel rules
 
-Application must:
+`core_os` creates FreeRTOS tasks, queues and timers, manages dual-core
+scheduling (core 0 system / network, core 1 UI / clock), and owns the
+event bus.
 
-- Contain UI logic  
-- Contain display logic  
-- Use services  
-- Never call HAL directly  
+**Forbidden in `core_os`:** mounting filesystems, initialising NVS,
+touching hardware directly.
+
+**Known violation (to be fixed, not a precedent):** `core_os`
+currently calls `display_manager_init()` and
+`display_manager_process_frame()`, which is a kernel-to-service call.
+See [STATUS.md](STATUS.md).
 
 ---
 
-## 11. Agent Behavior Rules (Mandatory)
+## 8. HAL and PDL rules
 
-Copilot Agent must:
+HAL drivers contain only hardware access, expose clean APIs, and never
+call services or the application. The PDL holds board facts (pins,
+capabilities) and nothing else.
 
-- Stay inside this architecture  
-- Never generate code outside these boundaries  
-- Never introduce unsupported components  
-- Never propose SPIFFS or LittleFS  
-- Always validate CMake component names  
-- Always validate ESP‑IDF 6 compatibility  
-- Always validate PlatformIO compatibility  
-- Always validate boot sequence order  
-- Always validate dependency graphs  
-- Always validate header resolution  
-- Always avoid circular dependencies  
+**Known violation (to be fixed):** `hal_gfx` (drawing primitives) is
+rendering logic and belongs above the HAL.
+
+---
+
+## 9. HIL rules
+
+HIL adapters contain no hardware logic and no ESP-IDF peripheral
+headers. Functions that cannot be honoured (for example MP3 playback
+or brightness) must return failure, never pretend to succeed.
+
+---
+
+## 10. Services rules
+
+Services contain logic engines, use the HIL, never call
+`boot_manager`, and never mount filesystems. They communicate through
+the event bus.
+
+---
+
+## 11. Application rules
+
+The application contains UI and display logic, uses services, and
+never calls the HAL directly.
+
+---
+
+## 12. Honest-stub rule
+
+A function that is not implemented returns an error (`HAL_ERR_DEV` or
+`false`) and is listed in [STATUS.md](STATUS.md).
+
+Returning success from a stub is **forbidden**. Existing MAX7219 and
+remote display backends, and `HAL_Audio_SetVolume`, violate this rule
+today and are tracked in STATUS.md.
+
+---
+
+## 13. Agent behaviour rules
+
+An AI coding agent must:
+
+- stay inside this architecture,
+- never propose SPIFFS / LittleFS,
+- validate CMake component names, ESP-IDF 6 and PlatformIO
+  compatibility, boot order, header resolution, and the dependency
+  graph,
+- avoid circular dependencies,
+- treat documents as secondary to the code — if they disagree, report
+  it and fix the document.
 
 ---
 
 ## Goal
 
-Maintain ChronoLink V4 OS architecture integrity and produce code that compiles cleanly under PlatformIO ESP‑IDF 6.0.1 with FATFS.
-
-
-
+Keep the architecture honest and the build clean under PlatformIO with
+ESP-IDF 6.0.1 and FATFS.
