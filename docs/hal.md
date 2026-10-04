@@ -1,41 +1,39 @@
----
+# HAL and PDL Reference
 
-### docs/hal.md
+Covers `components/chronolink_hal` (the HAL, which also contains the
+PDL headers) and `components/chronolink_driver_sdk`.
 
-```markdown
-# HAL Layer Reference
-
-## Purpose
-
-This document defines the HAL responsibilities, API, memory strategy, PSRAM handling, bus initialisation, device registry, and health check flow for ChronoLink V4 OS on the ESP32‑S3‑WROOM‑1‑N16R2.
+Everything here describes the code as it is. Planned work is in
+[STATUS.md](STATUS.md), not here. If a statement disagrees with the
+code, the code wins — fix the document.
 
 ---
 
-## HAL responsibilities
+## 1. Responsibilities
 
-- Initialise CPU clock and frequency.
-- Initialise memory and PSRAM.
-- Initialise bus controllers (I2C, SPI, UART) and GPIO.
-- Mount NVS and filesystem.
-- Load hardware profile (`hw_profile.json`) and configuration.
-- Register drivers into a thread‑safe device registry.
-- Run startup health checks and post events to the State Manager.
-- Signal readiness to the kernel to start the Service Layer.
+**PDL (Platform/Board Definition)** — pin numbers, board identity,
+capability flags, pin validation, initial pin direction and level.
+
+Files: `pdl_pins.h`, `pdl_capabilities.h`, `pdl_partitions.h`,
+`pdl_board.h`, `pdl_compat.h`, `board_pins.h`, `pdl_board_esp32.c`.
+
+**HAL (Hardware Abstraction Layer)** — drivers that touch hardware.
+Never calls services, kernel, or application code.
+
+The HAL does **not** currently do memory / PSRAM setup, hardware-profile
+loading, a general device registry (other than sensors), or health
+checks. Earlier docs listed `HAL_MemoryInit`, `HAL_BusInit`,
+`HAL_LoadConfig`, `HAL_RegisterDevice`, `HAL_HealthCheck`, `HAL_Ready`.
+**None of these exist.**
 
 ---
 
-## Recommended HAL API
+## 2. Status codes
 
 ```c
-// hal.h
-typedef enum { HAL_OK = 0, HAL_ERR } hal_status_t;
-
-hal_status_t HAL_Init(void);
-hal_status_t HAL_MemoryInit(void);
-hal_status_t HAL_BusInit(void);
-hal_status_t HAL_LoadConfig(void);
-hal_status_t HAL_RegisterDevice(const char* name, const char* type, void* ops);
-hal_status_t HAL_HealthCheck(void);
-hal_status_t HAL_Ready(void);
-
-
+typedef enum {
+    HAL_OK        =  0,
+    HAL_ERR_INIT  = -1,   /* init failed, not initialised, or resource/slot problem */
+    HAL_ERR_BUS   = -2,   /* bus busy / lock timeout / transfer timeout */
+    HAL_ERR_DEV   = -3    /* device failure, invalid argument, or "not supported" */
+} hal_status_t;

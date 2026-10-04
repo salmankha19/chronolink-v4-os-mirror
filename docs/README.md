@@ -1,28 +1,45 @@
-# ChronoLink V4 OS
+# ChronoLink V4 OS — Documentation Index
 
-**ChronoLink V4 OS** — HAL, boot, and partition reference for ESP32‑S3‑WROOM‑1‑N16R2.
+ChronoLink V4 OS is the firmware for the ChronoLink V4 clock.
+Target: ESP32-S3 module, ESP-IDF 6.0.1, built with PlatformIO, FATFS only.
 
-This repository contains the HAL and boot documentation, partition table, and example configuration used by ChronoLink V4 OS. Use these files as the canonical reference for implementing the bootloader, HAL, and service startup sequence.
+**Last reviewed against code: commit 65dd77d (2026-10-04).**
+If a document disagrees with the code, the code wins — the document is a
+bug. Please fix the document, and add an entry to `STATUS.md` if the
+gap is worth tracking.
 
-## Quick links
+---
 
-- **Boot documentation**: `docs/boot.md`  
-- **HAL documentation**: `docs/hal.md`  
-- **Partition table**: `partitions.csv`  
-- **Example hardware profile**: `assets/hw_profile.json`  
-- **PSRAM linker snippet**: `components/ld/psram.ld`
+## Design intent (short)
 
-## Quick Start
+- **No user-facing buttons.** The BOOT and EN buttons on the PCB are
+  development aids only. Users never touch them.
+- **Everything is configured through a web UI** — WiFi, time, prayer
+  settings, display preferences, firmware updates, factory reset.
+  The web UI is *not built yet*; see `STATUS.md`.
+- **Config drives behavior.** Where the code reads a "boot flag" or
+  similar, the producer is expected to be the web UI in a future PR.
 
-Prerequisites:
+---
 
-- **ESP‑IDF** (recommended version documented in `CONTRIBUTING.md`)  
-- Python 3.x and `idf.py` toolchain
+## Read in this order
 
-Build and flash:
+| Doc | Answers |
+|---|---|
+| [Architecture.md](Architecture.md) | The canonical layer model, dependency rules, component map, known deviations |
+| [boot.md](boot.md) | What `boot_manager` does at startup, exactly, in order |
+| [hal.md](hal.md) | PDL + HAL reference: init order, APIs, status codes, pins, drivers |
+| [hil.md](hil.md) | HIL adapters (`components/hil`) — the API services use |
+| [partitions.csv](partitions.csv) | Flash layout (identical to root `partitions.csv`) |
+| [CHRONOLINK_CONSTITUTION.md](CHRONOLINK_CONSTITUTION.md) | Mandatory rules, including documented exceptions |
+| [rules.md](rules.md) | Short rule summary for AI coding agents |
+| [STATUS.md](STATUS.md) | Implemented vs stubbed vs planned; known issues; open decisions |
+
+---
+
+## Build quick start
 
 ```bash
-idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/ttyUSB0 flash
-
+pio run -e single_mcu          # build
+pio run -e single_mcu -t upload
+pio device monitor             # 115200 baud
