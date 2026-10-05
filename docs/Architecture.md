@@ -115,7 +115,7 @@ stay.
 | Dev | Kernel calls a service (`display_manager`) | `core_os.c` | Have `display_manager` register itself with the kernel, or start it from `app_main` |
 | Dev | A service calls the HAL directly, bypassing HIL | `display_manager`, `json_display_executor` call `HAL_GFX_*` / `HAL_Display_*` | Route through a HIL graphics adapter, or formally allow services to use the display HAL |
 | Dev | `hal_gfx` (drawing primitives) lives in the HAL | `chronolink_hal/src/hal_gfx.c` | Move to its own graphics component above the HAL |
-| Exc | `boot_manager` calls `HAL_Init()` and reads the BOOT pin | `boot_manager.c` | Accepted exception today. The BOOT-pin read is expected to be removed in favour of a config-driven reset; see STATUS.md "Planned boot work" |
+| Exc | `boot_manager` calls `HAL_Init()` | `boot_manager.c` | Accepted exception; provisioning step only. The BOOT-pin read that used to be here was removed in `refactor/remove-boot-button` |
 | Dev | HAL reads pin settings from `main/Kconfig.projbuild` | `board_pins.h` uses `CONFIG_BOARD_*` | Move the pin Kconfig into `chronolink_hal` |
 | Dev | `chronolink_driver_sdk` includes HAL headers privately | its `CMakeLists.txt` | Extract shared types into a small common component |
 

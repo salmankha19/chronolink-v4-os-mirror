@@ -10,8 +10,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
-#include "driver/gpio.h"
-#include "pdl_pins.h"
+#include "esp_system.h"
 
 static const char *TAG = "boot_manager";
 static boot_stage_t s_last_stage = BOOT_STAGE_NONE;
@@ -22,12 +21,6 @@ static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 #define CHRONOLINK_STORAGE_MOUNT_POINT "/storage"
 #define CHRONOLINK_STORAGE_PARTITION   "storage"
-
-/* BOOT button on the ChronoLink V4 PCB is GPIO0 (active low, external
-   pull-up). PDL_PIN_SAFE_MODE resolves to 0 in pdl_pins.h. Hold time
-   to trigger factory reset at startup -- long enough that a bounced
-   contact or a quick tap doesn't wipe config. */
-#define FACTORY_RESET_HOLD_MS  3000
 
 /* --------------------------------------------------------------------------
  * Boot-order init helpers
@@ -43,13 +36,12 @@ static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
  * until core_os_init() runs (see the ordering-constraint comment further
  * down). HAL_Init() still runs first among the hardware-facing steps.
  *
- * The one hardware touch in this file is boot_button_held_at_startup(),
- * which reads GPIO0 to detect a factory-reset request. This is a boot-
- * time decision input, not hardware provisioning -- nothing is driven,
- * no bus is opened, no peripheral is configured. Keeping it here rather
- * than a service avoids booting the entire OS just to decide whether to
- * wipe. This is a deliberate, documented exception to "boot_manager
- * must not access hardware" and is called out in the PR description.
+ * This file performs no direct hardware access. Hardware is brought up
+ * only through HAL_Init(). A factory reset is requested through
+ * boot_flags_t (BOOT_FLAG_FACTORY_RESET), never through a button: the
+ * BOOT/EN buttons on the PCB are enclosed inside the case and are
+ * development/recovery aids only. GPIO0 held low through reset enters
+ * the ROM download mode before this code runs.
  * -------------------------------------------------------------------------- */
 
 static void init_logging(void)
@@ -60,70 +52,16 @@ static void init_logging(void)
     ESP_LOGI(TAG, "Log level configured");
 }
 
-/* Returns true if the BOOT button is being held at startup.
-   GPIO0 is active-low with an external pull-up on the PCB; a LOW read
-   means the button is pressed. We poll for FACTORY_RESET_HOLD_MS and
-   require the level to stay LOW the whole time -- a short tap does not
-   trigger a reset.
-
-   Idempotent and side-effect free if the button is not held: it takes
-   no longer than the poll loop's first sample (~10 ms). Only if the
-   button IS low do we spend the full hold duration waiting. */
-static bool boot_button_held_at_startup(void)
-{
-#if defined(PDL_PIN_SAFE_MODE) && (PDL_PIN_SAFE_MODE >= 0)
-    const gpio_num_t pin = (gpio_num_t)PDL_PIN_SAFE_MODE;
-
-    gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << pin),
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,   /* belt-and-braces; PCB has external PU */
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&cfg);
-
-    /* Settle: let the pin stabilize after power-on before sampling. */
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    if (gpio_get_level(pin) != 0) {
-        return false;   /* not pressed */
-    }
-
-    ESP_LOGW(TAG, "BOOT button held, waiting %d ms for factory reset...",
-             FACTORY_RESET_HOLD_MS);
-
-    /* Sample in small slices so we bail out fast if the user releases. */
-    const int slice_ms = 100;
-    int held_ms = 0;
-    while (held_ms < FACTORY_RESET_HOLD_MS) {
-        vTaskDelay(pdMS_TO_TICKS(slice_ms));
-        held_ms += slice_ms;
-        if (gpio_get_level(pin) != 0) {
-            ESP_LOGI(TAG, "BOOT button released after %d ms, no reset", held_ms);
-            return false;
-        }
-    }
-
-    ESP_LOGW(TAG, "BOOT button held for %d ms, factory reset confirmed",
-             held_ms);
-    return true;
-#else
-    return false;   /* no BOOT pin defined for this board revision */
-#endif
-}
-
 /* Returns true if a factory reset has been requested for this boot.
-   Two triggers, ORed together:
-     - BOOT_FLAG_FACTORY_RESET flag (used by the eventual web UI)
-     - BOOT button (GPIO0) held at startup for FACTORY_RESET_HOLD_MS */
+   The only trigger is BOOT_FLAG_FACTORY_RESET (to be produced by the
+   web UI). There is no hardware trigger. */
 static bool factory_reset_requested(boot_flags_t flags)
 {
     if (flags & BOOT_FLAG_FACTORY_RESET) {
         ESP_LOGW(TAG, "Factory reset requested via boot flag");
         return true;
     }
-    return boot_button_held_at_startup();
+    return false;
 }
 
 /* Wipe every persistent store that is user-owned, then reboot.

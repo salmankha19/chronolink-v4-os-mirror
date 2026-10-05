@@ -60,7 +60,10 @@
 /* --- RTC INT: not wired on v4 PCB --- */
 #define PDL_PIN_RTC_INT         (-1)
 
-/* --- Safe mode (active low) — BOOT button on IO0 --- */
+/* --- BOOT button on IO0 (active low). Development/recovery only:
+       the ROM bootloader samples GPIO0 at reset to enter serial-download
+       mode. No firmware path reads it; kept so PDL pin validation and the
+       pin debug dump still cover GPIO0. --- */
 #define PDL_PIN_SAFE_MODE         0
 
 /* --- Legacy aliases --- */
