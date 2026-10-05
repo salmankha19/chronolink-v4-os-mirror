@@ -10,5 +10,4 @@ idf_component_register(
         fatfs
         app_update
         esp_partition
-        esp_driver_gpio
 )

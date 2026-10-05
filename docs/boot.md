@@ -102,11 +102,29 @@ boot to a known-good image without USB reflashing.
 
 See STATUS.md "Planned boot work".
 
-### Development-only note
+### The BOOT and EN buttons (schematic SW1 and SW2)
 
-The BOOT and EN buttons on the PCB are development aids. EN resets
-the chip. BOOT enters the ROM serial-download mode (a chip-level
-feature, not firmware logic). Neither is a user-facing control.
+- **SW1 "Reset"** pulls the ESP32-S3 `EN` pin low, through a 10K
+  pull-up (R12) and a 100 nF debounce capacitor (C10). Pressing it
+  resets the chip.
+- **SW2 "Boot"** pulls GPIO0 (net `BOOT_IO0`, module pin 27) low,
+  through a 10K pull-up (R13), with no debounce capacitor. GPIO0 has
+  no other connection on the PCB. Pressing it low *during a chip
+  reset* puts the ESP32-S3 into ROM serial-download mode. That is a
+  chip-level feature that runs before any firmware, used by
+  `esptool.py` and similar tools.
+
+The switches are enclosed inside the ChronoLink V4 case and require
+disassembly to reach. They are not user-accessible in the shipped
+product.
+
+**No firmware path reads these pins.** An earlier `boot_manager.c`
+read GPIO0 at boot to detect "hold for 3 s to factory reset". It was
+removed because the path was effectively unreachable: holding GPIO0
+through a reset enters ROM download mode (firmware never runs), and
+pressing it only after reset leaves a window of tens of milliseconds
+to begin a 3 s hold. A factory reset is now requested only through
+`BOOT_FLAG_FACTORY_RESET`.
 
 `boot_manager.c` currently reads GPIO0 at startup to detect a
 "BOOT button held for 3 s" factory-reset request. This is a

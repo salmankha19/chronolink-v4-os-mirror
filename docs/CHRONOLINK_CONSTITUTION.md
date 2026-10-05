@@ -1,11 +1,11 @@
-# ChronoLink V4 OS — Project Constitution
+# ChronoLink V4 OS - Project Constitution
 
 Mandatory rules for all development, fixes, refactors and generated
 code. Amended 2026-10-04 to match the code at commit `65dd77d`:
 layers are aligned with [Architecture.md](Architecture.md), and real,
 accepted exceptions are written down instead of hidden.
 
-If a rule below disagrees with the code, the code wins — report the
+If a rule below disagrees with the code, the code wins - report the
 discrepancy and fix the document, or fix the code. Do not leave the
 two in disagreement.
 
@@ -23,7 +23,7 @@ orchestrator, not a layer.
 - Services and the application use the HIL where an adapter exists.
 
 The canonical mapping of layers to components is in
-[Architecture.md](Architecture.md) §1.
+[Architecture.md](Architecture.md) section 1.
 
 ---
 
@@ -37,18 +37,12 @@ The canonical mapping of layers to components is in
 - call `HAL_Init()`, then `core_os_init()` and `core_os_start()`.
 
 **Forbidden in `boot_manager`:** starting its own tasks, UI/display
-access, touching services, mounting any filesystem other than FATFS.
+access, touching services, mounting any filesystem other than FATFS,
+and reading or driving any GPIO or other peripheral directly.
 
-**Accepted exceptions (documented):**
-
-- It calls `HAL_Init()` once, as the provisioning step.
-- It reads the BOOT pin (GPIO0) at startup to detect a
-  factory-reset request held for 3 s. This is a development
-  convenience, and it is the only hardware access permitted in
-  `boot_manager`. It drives nothing and opens no bus. It is expected
-  to be removed in favour of a config-driven reset produced by the
-  web UI. See [boot.md](boot.md) §"Reset mechanisms" and
-  [STATUS.md](STATUS.md).
+**Accepted exception (documented):** `boot_manager` calls `HAL_Init()`
+once, as the provisioning step. Beyond that call, `boot_manager` has
+no hardware access.
 
 ---
 
@@ -95,10 +89,7 @@ Do not define fake `CONFIG_*` macros in `build_flags`.
 `storage,data,fat,0x820000,0x7E0000,`, must not overlap app
 partitions, and must not use SPIFFS or LittleFS.
 
-Current layout: see [partitions.csv](partitions.csv).
-
-`docs/partitions.csv` is a copy of the root file for reader
-convenience and must stay identical to it.
+Current layout: see [partitions.md](partitions.md).
 
 ---
 
@@ -173,7 +164,7 @@ An AI coding agent must:
   compatibility, boot order, header resolution, and the dependency
   graph,
 - avoid circular dependencies,
-- treat documents as secondary to the code — if they disagree, report
+- treat documents as secondary to the code - if they disagree, report
   it and fix the document.
 
 ---
