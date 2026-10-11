@@ -7,6 +7,20 @@ config CHRONOLINK_USE_MOCK_DISPLAY
       When enabled, the mock display driver will be compiled in addition to
       the real drivers for local builds without hardware.
 
+config CHRONOLINK_HAL_ALLOW_STUB_BACKENDS
+    bool "Allow stub display backends (MAX7219, remote)"
+    default n
+    help
+      The MAX7219 and remote-display backends are unimplemented stubs:
+      every function returns HAL_ERR_DEV and nothing is drawn or sent.
+      They exist so the router's ops-table contract can be satisfied and
+      so developers can compile-test against them.
+
+      Enable this option only if you are actively working on one of those
+      drivers. With it disabled (the default), the stubs are compiled but
+      not offered in the display backend choice below, so a production
+      build cannot accidentally select a do-nothing backend.
+
 choice CHRONOLINK_HAL_DISPLAY_BACKEND
     prompt "Display Backend"
     default CHRONOLINK_HAL_DISPLAY_BACKEND_NONE
@@ -29,14 +43,22 @@ choice CHRONOLINK_HAL_DISPLAY_BACKEND
             and SPI MOSI/MISO/SCLK pins in board_pins.h.
 
     config CHRONOLINK_HAL_DISPLAY_BACKEND_MAX7219
-        bool "MAX7219 LED Matrix"
+        bool "MAX7219 LED Matrix (STUB)"
+        depends on CHRONOLINK_HAL_ALLOW_STUB_BACKENDS
         help
-            MAX7219 8x8 LED matrix chain.
+            MAX7219 8x8 LED matrix chain. NOT IMPLEMENTED: this backend
+            is a stub that returns HAL_ERR_DEV on every call. Enable
+            CHRONOLINK_HAL_ALLOW_STUB_BACKENDS above to expose this
+            option; the compiled code still refuses at runtime.
 
     config CHRONOLINK_HAL_DISPLAY_BACKEND_REMOTE
-        bool "Remote Display"
+        bool "Remote Display (STUB)"
+        depends on CHRONOLINK_HAL_ALLOW_STUB_BACKENDS
         help
-            Remote display over network/BLE.
+            Remote display over network/BLE. NOT IMPLEMENTED: this
+            backend is a stub that returns HAL_ERR_DEV on every call.
+            Enable CHRONOLINK_HAL_ALLOW_STUB_BACKENDS above to expose
+            this option; the compiled code still refuses at runtime.
 endchoice
 
 config CHRONOLINK_HAL_DISPLAY_MUTEX

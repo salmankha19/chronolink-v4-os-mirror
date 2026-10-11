@@ -67,7 +67,15 @@ hal_status_t HAL_Display_Mock_WriteText(const char *text)
 
 hal_status_t HAL_Display_Mock_HasCapability(hal_display_cap_t cap)
 {
-    (void)cap;
+    /* The mock backend accepts every drawing call and does nothing.
+     * From the router's perspective it "supports" everything. But
+     * HAL_CAP_COUNT is not a capability -- it's the enum terminator.
+     * An earlier version returned HAL_OK for it, which means
+     * HasCapability(HAL_CAP_COUNT) claimed a valid capability that
+     * doesn't exist. Reject it. */
+    if (cap >= HAL_CAP_COUNT) {
+        return HAL_ERR_DEV;
+    }
     return HAL_OK;
 }
 

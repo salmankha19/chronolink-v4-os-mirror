@@ -82,9 +82,9 @@ contract.
 
 | Item | State |
 |---|---|
-| MAX7219 display backend | returns OK, draws nothing |
-| Remote display backend | returns OK, sends nothing |
-| `HAL_Audio_SetVolume` | returns OK, does nothing |
+| MAX7219 display backend | returns `HAL_ERR_DEV`, draws nothing; Kconfig-gated behind `ALLOW_STUB_BACKENDS` |
+| Remote display backend | returns `HAL_ERR_DEV`, sends nothing; Kconfig-gated behind `ALLOW_STUB_BACKENDS` |
+| `HAL_Audio_SetVolume` | returns `HAL_ERR_DEV`, does nothing |
 | `display_set_brightness` | always returns `false` |
 | `audio_play_mp3` | always returns `false` |
 | ST7796S `write_text` | not implemented in backend |
