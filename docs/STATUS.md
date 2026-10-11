@@ -25,13 +25,56 @@ not.** Where another doc mentions a gap, this file has the detail.
 - **PDL:** pin map, capability flags, pin validation and
   pre-configuration.
 - **HAL:** GPIO, I2C (mutex-guarded), shared SPI (mutex-guarded),
-  DS3231M RTC with oscillator-stop detection, display router, ST7796S
+  DS3231M RTC with oscillator-stop detection and ISO-8601 weekday
+  computation on write, RTC-absent short-circuit, and hour/date/year
+  validation on set, display router, ST7796S
   backend, `hal_gfx`, sensor registry with SHT4x/BME280/VEML7700
   drivers, MAX98357A audio, driver SDK for one custom display driver.
 - **HIL adapters** for display, RTC, sensors, audio, GPIO, I2C, SPI.
 - **Kernel:** event bus, tasks, safe-mode skip.
 - **Services:** `svc_network` (WiFi station), `state_manager`,
   `display_manager`, `ui_producer`, `font_engine`, `font`.
+
+---
+
+## Planned services (design decided, not built)
+
+### `svc_time`
+
+Component does not exist yet. Design decisions taken 2026-10-11:
+
+- **RTC stores UTC.** The DS3231M register is written with UTC and
+  read as UTC. It is never written with a DST-adjusted or local-time
+  value -- the register would then be meaningless without out-of-band
+  metadata, and a device that missed a DST transition while offline
+  (brownout, no network, powered off across the change) would have no
+  way to recover. Linux (`timedatectl set-local-rtc 0`), Android
+  (system clock is UTC; zone applied at display) and ESP-IDF's own
+  SNTP example all use this model. See `hal_rtc.h` for the same note
+  at the driver level.
+
+- **DST applied at read time, in `svc_time`, via the POSIX TZ mechanism.**
+  On zone change or boot, `svc_time` calls
+  `setenv("TZ", "<posix_tz>", 1)` followed by `tzset()`, then uses
+  `localtime_r()` on the UTC time for display. Newlib's TZ handling
+  applies the DST rule automatically; no "midnight transition handler"
+  code is required. A timer at the next transition instant may be
+  registered purely to trigger a UI redraw -- it does not perform any
+  correction itself.
+
+- **Zones come from a small POSIX TZ string table**, not a bundled IANA
+  tzdata. The dropdown covers ~5-6 zones with their TZ strings hardcoded
+  in `svc_time`. For zones outside the dropdown, the web-config side
+  resolves a pasted Olson ID (`Europe/London`) to a POSIX TZ string and
+  pushes that; the device never parses IANA tzdata.
+
+- **NTP is the only sync source.** It provides UTC; `svc_time` writes
+  UTC to the RTC and re-derives local on the display path.
+
+The `hal_rtc.h` timezone contract comment records the same decision at
+the HAL boundary, so a future contributor editing the driver cannot
+add local-time or DST logic there without contradicting a written
+contract.
 
 ---
 
@@ -72,21 +115,19 @@ Verify each against hardware or datasheet before fixing.
 7. **`HAL_GPIO_Init`** still configures GPIO2 as an output (leftover
    example). Mask-versus-index handling in `hal_gpio_safe.c` is
    ambiguous, and `GPIO_PIN_COUNT` 48 rejects GPIO48.
-8. **RTC** writes weekday 0 (DS3231 expects 1–7) and does not
-   range-check input.
-9. **Sensors:** failed probe is permanent; `HAL_Sensors_Init` always
+8. **Sensors:** failed probe is permanent; `HAL_Sensors_Init` always
    returns OK; SHT4x CRC not checked.
-10. **I2C** uses the legacy driver with deprecation checks
+9. **I2C** uses the legacy driver with deprecation checks
     suppressed, and lazy init is not under the lock. No bus recovery.
-11. **Audio:** `i2s_new_channel` result unchecked; no stop/abort;
+10. **Audio:** `i2s_new_channel` result unchecked; no stop/abort;
     blocking writes with no timeout.
-12. **Display router:** custom SDK driver unreachable when a built-in
+11. **Display router:** custom SDK driver unreachable when a built-in
     backend is selected; mock replaces rather than adds; lock has no
     timeout.
-13. **HAL failure policy:** a display or SPI init failure aborts the
+12. **HAL failure policy:** a display or SPI init failure aborts the
     whole boot. Consider degrading instead (the clock should keep
     time).
-14. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
+13. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
     global `-I` in `platformio.ini`, fake
     `CONFIG_AUDIO_TEST_SIMULATION` define, app rollback off, coredump
     off.
