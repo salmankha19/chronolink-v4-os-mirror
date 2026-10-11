@@ -96,26 +96,51 @@ The constitution also forbids SPIFFS / LittleFS partition types.
 
 ---
 
-## What is not here yet
+## Factory partition: not planned
 
-The following are **planned**, not implemented. See
-[STATUS.md](STATUS.md).
+The 16 MB budget ends exactly at `0x1000000`. The current layout gives
+two symmetric 4 MB OTA slots for firmware updates and ~7.9 MB FATFS for
+user data. There is no `factory` partition, and none is planned.
 
-- **A `factory` partition.** Adding one would give the device a
-  known-good slot to fall back to if both OTA slots are corrupt. Cost:
-  the 16 MB budget means `app0` and `app1` would need to shrink to
-  make room, unless the `factory` image is much smaller. Not yet
-  designed.
-- **A separate "user data" partition** distinct from NVS. Currently
-  user config lives in NVS and user files live in `/storage`; if
-  configuration ever needs a structured format (e.g. JSON), a
-  dedicated partition might be cleaner. Not needed today.
+**Why not:**
 
----
+- Adding a 4 MB `factory` slot would require shrinking `app0` / `app1`
+  to ~3.5 MB each, reducing the maximum OTA image size.
+- Shrinking `/storage` instead would take space away from the FATFS
+  volume, which is the only user-writable filesystem on the device.
+- Espressif's own OTA documentation treats the `factory` partition as
+  optional: "If you want to conserve flash usage in an OTA project, you
+  can remove the factory partition and use `ota_0` instead."
+- The device has an exposed USB port, so the recovery path for a
+  bricked-software state is USB reflash. End users are expected to
+  contact the vendor rather than perform this themselves, but the
+  hardware path exists.
+
+**Recovery mechanisms that are used instead:**
+
+- **App rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) reverts a
+  bad OTA image to the previous slot on next reset. Currently off; must
+  be enabled in the first firmware that ships.
+- **Data reset** (`BOOT_FLAG_FACTORY_RESET` in `boot_manager.c`) wipes
+  NVS and reformats `/storage`, then reboots. This is not an image
+  reset — the running firmware is unchanged.
+- **USB reflash** via `esptool.py` for the case where both OTA slots are
+  unbootable.
+
+Full reasoning and terminology is in
+[STATUS.md](STATUS.md) under "Planned boot work".
+
+## A separate "user data" partition
+
+Not planned. User configuration lives in NVS; user files live in
+`/storage` (FATFS). If configuration ever needs a structured format
+(e.g. JSON with schema validation), a dedicated partition might be
+cleaner — but that is not needed today, and NVS handles the current
+key-value model well.
 
 ## Reading this alongside `boot.md`
 
 [boot.md](boot.md) describes the boot sequence. It mentions the
-partition table in its "Flash layout" and "Reset mechanisms" sections
-- both should agree with the table above. If they don't, the CSV is
-still the source of truth and the docs need fixing.
+partition table in its "Flash layout" and "Reset mechanisms" sections —
+both should agree with the table above. If they don't, the CSV is still
+the source of truth and the docs need fixing.
