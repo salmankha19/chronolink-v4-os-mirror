@@ -47,7 +47,6 @@ not.** Where another doc mentions a gap, this file has the detail.
 | ST7796S `write_text` | not implemented in backend |
 | `src/app/*`, `src/svc/*` | empty placeholders; **not built** (`platformio.ini` sets `src_dir = main`) |
 | Prayer engine, scheduler, config service, theme registry, web config | do not exist |
-| `split_mcu_main`, `display_mcu` environments | no implementation or config |
 | SD card | pin defined, no driver |
 | Boot manifest, `hw_profile.json`, signature checks | not implemented |
 | OTA update service | only partition logging |
