@@ -126,12 +126,6 @@ pressing it only after reset leaves a window of tens of milliseconds
 to begin a 3 s hold. A factory reset is now requested only through
 `BOOT_FLAG_FACTORY_RESET`.
 
-`boot_manager.c` currently reads GPIO0 at startup to detect a
-"BOOT button held for 3 s" factory-reset request. This is a
-development convenience that is expected to be removed in favour of
-the config-driven reset above. Until it is removed, the hold-to-reset
-path is still reachable on a dev board.
-
 ---
 
 ## `HAL_Init()` order
@@ -177,7 +171,11 @@ Total ends exactly at 16 MB. The `storage` line must stay as above
   `hw_profile.json`.
 - Safe-mode trigger and policy beyond "skip service tasks".
 - Boot-failure events before the event bus exists.
-- OTA update service (only partition logging exists).
-- App rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`).
-- `factory` partition for boot fallback.
+- OTA update service (only partition logging exists — see `STATUS.md`).
+- **App rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) — currently
+  off. Must be enabled in the first firmware that ships with the
+  two-slot partition table, because the bootloader cannot be updated by
+  OTA. See `STATUS.md` "Planned boot work".
+- `factory` partition — **not planned**. See `partitions.md` for the
+  decision and `STATUS.md` for the recovery model.
 - Producer of `BOOT_FLAG_FACTORY_RESET` (needs the web UI).
