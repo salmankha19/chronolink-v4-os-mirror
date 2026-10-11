@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include <string.h>
+#include "soc/soc_caps.h"
 
 static const char *TAG = "pdl_board";
 
@@ -124,8 +125,8 @@ static const char *TAG = "pdl_board";
 #define PINDBG_SAFE_MODE -1
 #endif
 
-#ifndef GPIO_PIN_COUNT
-#define GPIO_PIN_COUNT 48
+#ifndef CONFIG_SOC_GPIO_PIN_COUNT
+#error "CONFIG_SOC_GPIO_PIN_COUNT not defined -- soc/soc_caps.h should provide it"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -154,12 +155,12 @@ const pdl_board_info_t *pdl_board_get_info(void)
 /* ------------------------------------------------------------------ */
 bool valid_gpio(int pin)
 {
-    return (pin >= 0 && pin <= 47) && GPIO_IS_VALID_GPIO(pin);
+        return (pin >= 0 && pin < CONFIG_SOC_GPIO_PIN_COUNT) && GPIO_IS_VALID_GPIO(pin);
 }
 
 static bool validate_pin(int pin, const char *name)
 {
-    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
+    if (pin >= 0 && pin < CONFIG_SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_GPIO(pin)) {
         return true;
     }
 
@@ -183,10 +184,11 @@ static bool validate_output_pin(int pin, const char *name)
 
 static bool validate_pin_optional(int pin, const char *name)
 {
-    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
+    if (pin >= 0 && pin < CONFIG_SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_GPIO(pin)) {
         return true;
     }
 
+    ESP_LOGD("PINCHK", "optional pin %s=%d not valid on this chip", name, pin);
     return false;
 }
 
@@ -205,7 +207,8 @@ static uint64_t safe_pin_mask(int pin, const char *name)
 
 static uint64_t safe_pin_mask_optional(int pin, const char *name)
 {
-    if (pin >= 0 && pin <= 47 && GPIO_IS_VALID_GPIO(pin)) {
+    (void)name;
+    if (pin >= 0 && pin < CONFIG_SOC_GPIO_PIN_COUNT && GPIO_IS_VALID_GPIO(pin)) {
         return (1ULL << pin);
     }
 
