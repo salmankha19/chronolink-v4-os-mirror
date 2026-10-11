@@ -125,9 +125,19 @@ hal_status_t HAL_Audio_Play(const int16_t *pcm, size_t samples)
 
 hal_status_t HAL_Audio_SetVolume(uint8_t vol)
 {
-    /* MAX98357A has no digital volume control.
-       Gain is set by resistor on GAIN pin. */
+    /* MAX98357A has no digital volume control. Gain is set by a
+     * resistor on the GAIN pin, decided at PCB design time.
+     *
+     * Constitution section 12 (honest-stub rule): returning HAL_OK
+     * from a function that does nothing is forbidden. An earlier
+     * version returned HAL_OK here; callers that checked the result
+     * would conclude volume had been set. Return HAL_ERR_DEV so the
+     * failure is visible.
+     *
+     * If a future revision adds PWM control of a variable-gain stage
+     * (or replaces the amp with a digitally controlled one), this
+     * function becomes real. Until then, it is a stub. */
     ESP_LOGW(TAG, "Volume control not supported on MAX98357A (use analog gain pin)");
     (void)vol;
-    return HAL_OK;  // ← This tells the caller "success" even though no volume control exists
+    return HAL_ERR_DEV;
 }
