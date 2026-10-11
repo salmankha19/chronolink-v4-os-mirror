@@ -47,10 +47,6 @@ pio run -e single_mcu -t upload
 pio device monitor # 115200 baud
 
 
-`split_mcu_main` and `display_mcu` environments exist in
-`platformio.ini` but have no implementation behind them. See
-`STATUS.md`.
-
 Notes: an older README mentioned `idf.py`, `assets/hw_profile.json`
 and `components/ld/psram.ld`. Those files do not exist in the repo.
 The build is PlatformIO-first.

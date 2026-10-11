@@ -4,7 +4,7 @@ on: [push, pull_request]
 
 jobs:
   platformio-build:
-    name: PlatformIO build (single_mcu, split_mcu_main)
+    name: PlatformIO build (single_mcu)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -30,10 +30,6 @@ jobs:
 
       - name: Build single_mcu
         run: python -m platformio run -e single_mcu
-        working-directory: ${{ github.workspace }}
-
-      - name: Build split_mcu_main
-        run: python -m platformio run -e split_mcu_main
         working-directory: ${{ github.workspace }}
 
       - name: Upload PlatformIO artifacts

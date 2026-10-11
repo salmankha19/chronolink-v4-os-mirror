@@ -1,7 +1,7 @@
 # Default: normalize to LF in the repo, let Git decide on checkout
 * text=auto
 
-# C/C++ / headers — force LF in repo AND working tree (embedded toolchains prefer LF)
+# C/C++ / headers -- force LF in repo AND working tree (embedded toolchains prefer LF)
 *.c    text eol=lf
 *.h    text eol=lf
 *.cpp  text eol=lf
@@ -12,6 +12,15 @@ CMakeLists.txt  text eol=lf
 *.cmake         text eol=lf
 Kconfig*        text eol=lf
 *.projbuild     text eol=lf
+*.ini           text eol=lf
+
+# CI / docs / data
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.csv   text eol=lf
+*.json  text eol=lf
 
 # PowerShell scripts need CRLF on Windows
 *.ps1  text eol=crlf
