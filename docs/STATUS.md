@@ -164,18 +164,72 @@ Additional issues:
 
 ## Planned boot work (not started)
 
-- **App rollback** (ESP-IDF `BOOTLOADER_APP_ROLLBACK_ENABLE`): off.
-  A bad OTA that prevents `boot_manager` from running cannot recover
-  without USB reflash.
-- **Factory partition:** no `factory` slot exists. Cannot revert to
-  as-shipped firmware from the device.
-- **Full factory reset:** current reset wipes NVS + `/storage` only.
-  Does not touch `otadata`, does not force a firmware revert, does
-  not clear `phy_init`. Tracked as three separate future PRs.
-- **Remove BOOT-button reset code** from `boot_manager.c`: a
-  development convenience that does not belong in the shipped
-  product. Replace with a config-driven trigger (see "Planned web /
-  config work").
+### Factory partition: not planned (decision 2026-10-11)
+
+The 16 MB flash is fully allocated: two 4 MB OTA slots (`app0` / `app1`),
+NVS, `otadata`, `phy_init`, and ~7.9 MB FATFS at `/storage`. Adding a
+`factory` partition would require shrinking the OTA slots (reducing the
+maximum OTA image size) or `/storage`, and no concrete failure mode has
+been identified that justifies the cost.
+
+This matches Espressif's own guidance: the `factory` partition is
+optional in an OTA project. Two OTA slots and `otadata` are sufficient.
+
+**Recovery model:**
+
+| Failure mode | Recovery |
+|---|---|
+| Healthy device, new firmware available | OTA update into the inactive slot |
+| OTA wrote a bad image | App rollback reverts to the previous slot (see below) |
+| Both slots unbootable (e.g. power loss mid-OTA) | USB reflash — accepted limitation; USB is exposed |
+| User wants to start over | Data reset: `BOOT_FLAG_FACTORY_RESET` wipes NVS + `/storage`, reboots |
+
+**Terminology — four distinct mechanisms, four different names.** Do not
+use "factory reset" as a catch-all; it means different things to different
+readers.
+
+| Name | What it does | Status |
+|---|---|---|
+| `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + reformat `/storage`, reboot. **Not an image reset.** | Exists in `boot_manager.c`; no producer yet (needs `svc_http`) |
+| `factory` partition | Known-good golden image slot | Not present, **not planned** |
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | Currently **off**; must be enabled in the first firmware that ships with the two-slot table |
+| USB reflash | Manual recovery via `esptool.py` | Always available |
+
+### App rollback: must ship in the first firmware (not started)
+
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is currently `not set`. This must
+flip before the first firmware ships, because:
+
+- The bootloader is written at flash time and is **never updated by OTA**.
+- Enabling rollback later requires a USB reflash of every deployed device.
+- Without rollback, an OTA image that fails to boot leaves the device in a
+  reset loop; the only recovery is USB reflash.
+
+The code change is small:
+
+1. Set `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` in `sdkconfig.defaults`.
+2. Call `esp_ota_mark_app_valid_cancel_rollback()` in `boot_manager` once
+   the new image has proven itself — after `core_os_start()` returns and
+   the event bus is alive. Without this call, the new image never gets
+   marked valid and the next reset rolls back.
+
+The `factory` partition conversation reopens only if the USB-reflash
+limitation becomes unacceptable for a specific deployment. A 4 MB
+`factory` slot would require shrinking `app0` / `app1` to ~3.5 MB each
+(or reducing `/storage`), which changes the max OTA image size.
+
+### Other planned boot work
+
+- **Remove BOOT-button reset code** from `boot_manager.c` — a
+  development convenience that does not belong in the shipped product.
+  Replace with a config-driven trigger (see "Planned web / config work").
+- **Full factory reset:** current data reset wipes NVS + `/storage` only.
+  Does not touch `otadata`, does not force a firmware revert, does not
+  clear `phy_init`. Tracked as three separate future PRs.
+- **Boot manifest** (hardware-profile hash, signature checks) and
+  `hw_profile.json`. Not implemented.
+- **Safe-mode trigger and policy** beyond "skip service tasks".
+- **Boot-failure events** before the event bus exists.
 
 ---
 
