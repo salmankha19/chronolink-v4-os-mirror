@@ -99,8 +99,12 @@ static uint16_t st7796s_win_y2 = ST7796S_HEIGHT - 1;
 
 static uint8_t st7796s_current_madctl = ST7796S_DEFAULT_MADCTL;
 
-/* Dedicated reusable DMA buffer used only for fills/clears.
-   It is never reused for arbitrary transfers to avoid races. */
+/* Shared DMA scratch buffer, used by Fill, FillRect and BlitRow.
+   All access is serialized by the router's display mutex, so a
+   second caller cannot stomp the buffer mid-transfer. (An earlier
+   comment claimed this buffer was "only for fills/clears, never
+   reused for arbitrary transfers" -- that was wrong; BlitRow uses
+   it too, and the mutex is what makes it safe.) */
 static uint8_t *st7796s_fill_dma_buf = NULL;
 static size_t st7796s_fill_dma_bytes = 0;
 
@@ -345,35 +349,39 @@ static hal_status_t st7796s_spi_init(void)
 /* --------------------------------------------------------------------------
  * Address window and memory write
  * -------------------------------------------------------------------------- */
-static void st7796s_set_address_window(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
+static esp_err_t st7796s_set_address_window(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
 {
     uint8_t colbuf[4] = {
         (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFF),
         (uint8_t)(x2 >> 8), (uint8_t)(x2 & 0xFF)
     };
-    st7796s_send_cmd_with_data(ST7796S_CASET, colbuf, sizeof(colbuf));
+    esp_err_t e = st7796s_send_cmd_with_data(ST7796S_CASET, colbuf, sizeof(colbuf));
+    if (e != ESP_OK) return e;
 
     uint8_t rowbuf[4] = {
         (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFF),
         (uint8_t)(y2 >> 8), (uint8_t)(y2 & 0xFF)
     };
-    st7796s_send_cmd_with_data(ST7796S_RASET, rowbuf, sizeof(rowbuf));
+    e = st7796s_send_cmd_with_data(ST7796S_RASET, rowbuf, sizeof(rowbuf));
+    if (e != ESP_OK) return e;
 
     st7796s_win_x1 = x1;
     st7796s_win_y1 = y1;
     st7796s_win_x2 = x2;
     st7796s_win_y2 = y2;
+
+    return ESP_OK;
 }
 
-static void st7796s_write_memory_prepare(void)
+static esp_err_t st7796s_write_memory_prepare(void)
 {
-    st7796s_send_command_raw(ST7796S_RAMWR);
+    return st7796s_send_command_raw(ST7796S_RAMWR);
 }
 
 /* --------------------------------------------------------------------------
  * Optional ID read (useful for bring-up). Returns ESP_OK on success.
  * -------------------------------------------------------------------------- */
-static esp_err_t __attribute__((unused)) st7796s_read_id(uint8_t *out, size_t out_len)
+static esp_err_t st7796s_read_id(uint8_t *out, size_t out_len)
 {
     if (!st7796s_spi || !out || out_len == 0 || out_len > 4)
         return ESP_ERR_INVALID_ARG;
@@ -476,8 +484,10 @@ static hal_status_t st7796s_run_init_sequence(void)
     e = st7796s_send_data_raw(gamma_neg, sizeof(gamma_neg));
     if (e != ESP_OK) { ESP_LOGE(TAG, "GMCTRN1 data failed: %s", esp_err_to_name(e)); return map_esp_err(e); }
 
-    st7796s_set_address_window(0, 0, ST7796S_WIDTH - 1, ST7796S_HEIGHT - 1);
-    st7796s_write_memory_prepare();
+    e = st7796s_set_address_window(0, 0, ST7796S_WIDTH - 1, ST7796S_HEIGHT - 1);
+    if (e != ESP_OK) return map_esp_err(e);
+    e = st7796s_write_memory_prepare();
+    if (e != ESP_OK) return map_esp_err(e);
 
     size_t chunk_pixels = FILL_CHUNK_PIXELS;
     size_t chunk_bytes = chunk_pixels * 2;
@@ -537,6 +547,26 @@ hal_status_t HAL_Display_ST7796S_Init(void)
         return HAL_ERR_INIT;
     }
 
+     /* Read and log the panel ID. Not fatal: some ST7796S clones
+     * return a slightly different value from RDDID and still work.
+     * But a wildly different ID (or all zeros, or all 0xFF) usually
+     * means the SPI bus is miswired or the panel isn't an ST7796S at
+     * all, and having the value in the boot log saves bring-up time. */
+    {
+        uint8_t id[4] = {0};
+        esp_err_t id_err = st7796s_read_id(id, sizeof(id));
+        if (id_err == ESP_OK) {
+            ESP_LOGI(TAG, "Panel ID (RDDID): %02X %02X %02X %02X",
+                     id[0], id[1], id[2], id[3]);
+            if (id[0] == 0x00 && id[1] == 0x00 &&
+                id[2] == 0x00 && id[3] == 0x00) {
+                ESP_LOGW(TAG, "Panel ID all zero -- SPI miswired, or no panel");
+            }
+        } else {
+            ESP_LOGW(TAG, "Panel ID read failed: %s", esp_err_to_name(id_err));
+        }
+    }
+
     if ((int)BOARD_LCD_BL >= 0 && (int)BOARD_LCD_BL <= 63) {
         gpio_set_level((gpio_num_t)BOARD_LCD_BL, 1);
     }
@@ -554,9 +584,11 @@ hal_status_t HAL_Display_ST7796S_DrawPixel(uint16_t x, uint16_t y, uint32_t colo
     uint16_t rgb565 = rgb24_to_rgb565(color);
     uint8_t pix[2] = { (uint8_t)(rgb565 >> 8), (uint8_t)(rgb565 & 0xFF) };
 
-    st7796s_set_address_window(x, y, x, y);
-    st7796s_write_memory_prepare();
-    esp_err_t e = st7796s_send_data_raw(pix, 2);
+    esp_err_t e = st7796s_set_address_window(x, y, x, y);
+    if (e != ESP_OK) return map_esp_err(e);
+    e = st7796s_write_memory_prepare();
+    if (e != ESP_OK) return map_esp_err(e);
+    e = st7796s_send_data_raw(pix, 2);
     return map_esp_err(e);
 }
 
@@ -581,8 +613,10 @@ hal_status_t HAL_Display_ST7796S_Fill(uint32_t color)
         st7796s_fill_dma_buf[2 * i + 1] = (uint8_t)(rgb565 & 0xFF);
     }
 
-    st7796s_set_address_window(0, 0, ST7796S_WIDTH - 1, ST7796S_HEIGHT - 1);
-    st7796s_write_memory_prepare();
+    esp_err_t addr_err = st7796s_set_address_window(0, 0, ST7796S_WIDTH - 1, ST7796S_HEIGHT - 1);
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
+    addr_err = st7796s_write_memory_prepare();
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
 
     int total_pixels = ST7796S_WIDTH * ST7796S_HEIGHT;
     int remaining = total_pixels;
@@ -719,8 +753,10 @@ hal_status_t HAL_Display_ST7796S_FillRect(uint16_t x, uint16_t y, uint16_t w, ui
         st7796s_fill_dma_buf[2 * i + 1] = (uint8_t)(rgb565 & 0xFF);
     }
 
-    st7796s_set_address_window(x, y, (uint16_t)x2, (uint16_t)y2);
-    st7796s_write_memory_prepare();
+    esp_err_t addr_err = st7796s_set_address_window(x, y, (uint16_t)x2, (uint16_t)y2);
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
+    addr_err = st7796s_write_memory_prepare();
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
 
     int total_pixels = (int)((x2 - x + 1u) * (y2 - y + 1u));
     int remaining = total_pixels;
@@ -761,8 +797,10 @@ hal_status_t HAL_Display_ST7796S_BlitRow(uint16_t x, uint16_t y, const uint32_t 
         st7796s_fill_dma_buf[2 * i + 1] = (uint8_t)(c & 0xFF);
     }
 
-    st7796s_set_address_window(x, y, (uint16_t)(x + len - 1u), y);
-    st7796s_write_memory_prepare();
+    esp_err_t addr_err = st7796s_set_address_window(x, y, (uint16_t)(x + len - 1u), y);
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
+    addr_err = st7796s_write_memory_prepare();
+    if (addr_err != ESP_OK) return map_esp_err(addr_err);
 
     esp_err_t e = st7796s_send_data_raw(st7796s_fill_dma_buf, need_bytes);
     if (e != ESP_OK) {
