@@ -148,9 +148,7 @@ never calls the HAL directly.
 A function that is not implemented returns an error (`HAL_ERR_DEV` or
 `false`) and is listed in [STATUS.md](STATUS.md).
 
-Returning success from a stub is **forbidden**. Existing MAX7219 and
-remote display backends, and `HAL_Audio_SetVolume`, violate this rule
-today and are tracked in STATUS.md.
+Returning success from a stub is **forbidden**.
 
 ---
 
