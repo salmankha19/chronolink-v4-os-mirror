@@ -18,11 +18,12 @@ static SemaphoreHandle_t s_spi_mutex = NULL;
 
 static inline bool spi_lock(void)
 {
+    /* Fail closed if the mutex was never created. Creation now happens
+       once, in HAL_SPI_Init(). A NULL mutex means HAL_SPI_Init() was not
+       called -- any transfer attempt would proceed unguarded. Return
+       false; callers already treat false as HAL_ERR_BUS. See PR 4. */
     if (!s_spi_mutex) {
-        s_spi_mutex = xSemaphoreCreateMutex();
-        if (!s_spi_mutex) {
-            return false;
-        }
+        return false;
     }
     return xSemaphoreTake(s_spi_mutex, pdMS_TO_TICKS(SPI_LOCK_TIMEOUT_MS)) == pdTRUE;
 }
@@ -115,6 +116,18 @@ static hal_status_t hal_spi_bus_init(void)
  * -------------------------------------------------------------------------- */
 hal_status_t HAL_SPI_Init(void)
 {
+    /* Create the bus mutex once, before any locking. Mirrors HAL_I2C_Init().
+       Doing this here (not lazily in spi_lock()) avoids the race where two
+       concurrent first-callers both observe NULL and both create a mutex,
+       leaking one handle. */
+    if (!s_spi_mutex) {
+        s_spi_mutex = xSemaphoreCreateMutex();
+        if (!s_spi_mutex) {
+            ESP_LOGE(TAG, "Failed to create SPI bus mutex");
+            return HAL_ERR_INIT;
+        }
+    }
+
     if (!spi_lock()) {
         ESP_LOGW(TAG, "SPI bus busy, init timed out");
         return HAL_ERR_BUS;
