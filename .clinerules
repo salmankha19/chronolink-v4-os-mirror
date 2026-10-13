@@ -1,0 +1,128 @@
+# Chronolink V4 OS — Cline Rules
+
+Authoritative sources, in order:
+1. The code
+2. docs/CHRONOLINK_CONSTITUTION.md
+3. docs/Architecture.md, docs/boot.md, docs/hal.md, docs/hil.md
+4. partitions.csv (root)
+5. docs/STATUS.md
+
+If a document disagrees with the code, say so and fix the document in the
+same change. Do not leave the disagreement in place.
+
+---
+
+## Project shape
+
+- Target: ESP32-S3 (16 MB flash, no PSRAM in current sdkconfig)
+- Framework: ESP-IDF 6.0.1 under PlatformIO (`framework = espidf`)
+- Filesystem: FATFS on /storage ONLY. Never SPIFFS, never LittleFS.
+- Build: PlatformIO. `src_dir = main`. `components/` holds all components.
+- The build uses the PlatformIO-penv PIO core. The system-Python PIO core
+  is obsolete — do NOT invoke `python -m platformio` or bare `pio`.
+
+## Layer order (call downward only, never up)
+
+Flash (0) → PDL (1) → HAL (2) → HIL (3) → Kernel (4) → Services (5) → App (6)
+
+- `boot_manager` is the startup orchestrator, NOT a layer.
+- Kernel (`core_os`) must not call services directly.
+- Services use HIL, not HAL. (Known violation being fixed incrementally.)
+- Only HAL touches ESP-IDF peripheral drivers (`driver/i2c.h`,
+  `driver/spi_master.h`, I2S, GPIO).
+
+## Hard rules
+
+- Never use SPIFFS or LittleFS.
+- Never define fake `CONFIG_*` macros in `platformio.ini` `build_flags`.
+  If a build-time option is needed, use a real Kconfig entry.
+- Every `hal_status_t` / `bool` return must be checked.
+- Stubs must return an error (`HAL_ERR_DEV` or `false`), never success.
+- Use valid ESP-IDF 6 component names in `REQUIRES` (`log`, not `esp_log`).
+- Do not add new Kconfig entries for a pin that already has one. See
+  "Pin sources" below.
+
+---
+
+## Working protocol (IMPORTANT — read this every task)
+
+The human owns the terminal. Cline owns the file edits.
+
+**Cline does:**
+- Read files
+- Propose edits with clear diffs
+- Explain reasoning before acting
+
+**Cline does NOT:**
+- Run `pio run` or any build command
+- Run any `git` command (no add, commit, push, branch)
+- Create branches
+- Touch `.pio/` or `sdkconfig.*` files directly
+
+The human runs those in their own PowerShell terminal after Cline stops.
+If Cline believes a build or git command is needed, it stops and asks the
+human to run it.
+
+**Prompt structure:** Each task comes with numbered steps. Follow them in
+order. If a step's precondition does not match the actual file state,
+STOP and report — do not improvise.
+
+**Mode:** Prefer Plan mode for reading. Only Act (edits) when the human's
+prompt explicitly says to edit.
+
+## Shell language
+
+The human's terminal is PowerShell on Windows.
+- Never use `grep`, `sed`, `awk`, `cat`, `ls`, `rm`, `cp`, `mv`.
+- Never use `&&`, `||`, `2>/dev/null`.
+- Use `Select-String`, `Get-Content`, `Get-ChildItem`, `Remove-Item`,
+  `Copy-Item`, `Move-Item`, `Tee-Object`.
+- Prefer the plain form when possible (e.g. `git ls-files` alone rather
+  than piped through PowerShell filters — the human can filter).
+
+## Build gotchas
+
+- Changing `platformio.ini` `build_flags` invalidates every `.o`. Expect
+  a full rebuild (4–8 minutes on this machine).
+- Changing `sdkconfig.defaults` does NOT take effect immediately: the
+  persisted `sdkconfig.single_mcu` wins. The human must delete
+  `sdkconfig.single_mcu` (and ideally `.pio/build/single_mcu`) before
+  rebuilding. Flag this whenever a change touches `sdkconfig.defaults`.
+- If a build appears hung and no `pio`/`ninja` process is running, do not
+  re-run it. Stop and ask the human to check Task Manager.
+
+## Pin sources (as of this writing — being consolidated in PR 3)
+
+Known duplication: `pdl_pins.h`, `components/chronolink_hal/Kconfig`,
+`main/Kconfig.projbuild`, `board_pins.h`, `pdl_compat.h`,
+`components/hil/include/pin_config.h`, and some `#ifndef` fallbacks in
+`hal_audio_max98357a.c`. Treat `pdl_pins.h` as the reference until the
+consolidation PR merges. Do not add a new source. If asked to touch a
+pin, check all of the above first.
+
+---
+
+## Current project state
+
+See `docs/STATUS.md` for the authoritative list of what is implemented,
+stubbed, and planned. When your work changes any item there, update it in
+the same change.
+
+Recent merged work (kept here so you do not re-litigate it):
+- PR 1: removed dead build flags, moved orphaned `json_display_executor.*`
+  to `deprecated/`, fixed stale `docs/hal.md` and Constitution §12 rows.
+- PR 2: real `components/audio_test/Kconfig`, gated `audio_test.c` on
+  `CONFIG_AUDIO_TEST_ENABLE`, aligned `sdkconfig.defaults` partition
+  table with `platformio.ini` `board_build.partitions`.
+- Planned PR 3: pin source-of-truth consolidation.
+- Planned PR 4: HAL SPI/I2C mutex fixes.
+- Planned PR 5: event bus consumer (`svc_time` first).
+
+## Anti-patterns to reject immediately
+
+- Adding `-DCONFIG_X=1` to `platformio.ini` build_flags
+- Adding a new `Kconfig` entry that duplicates an existing pin
+- Putting drawing primitives (Bresenham, clipping) in the HAL
+- Kernel calling services
+- Services calling HAL when a HIL adapter exists
+- Referencing APIs that do not exist (check `docs/hal.md`, `docs/hil.md`)
