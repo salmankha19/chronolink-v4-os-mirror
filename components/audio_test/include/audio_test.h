@@ -4,19 +4,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "pdl_pins.h"
+
+/* Audio pin numbers come from pdl_pins.h
+   (PDL_PIN_I2S_BCLK / PDL_PIN_I2S_WS / PDL_PIN_I2S_DOUT /
+   PDL_PIN_AUDIO_SD_MODE). The previous AUDIO_*_PIN macros were
+   hardcoded literals duplicating the pin map; AUDIO_SD_MODE_PIN=1
+   also contradicted pdl_pins.h's -1. On the shipped PCB, GPIO1 is
+   routed to a solder jumper (JP2) that is NOT bridged to the
+   amplifier's SD_MODE, so firmware does not drive SD_MODE. */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/**
- * @brief Audio pin definitions for MAX98357A
- * Based on Chronolink-v4-os PCB design
- */
-#define AUDIO_BCLK_PIN    47  // I2S Bit Clock
-#define AUDIO_LRCK_PIN    48  // I2S Word Select (LRCLK)
-#define AUDIO_DOUT_PIN    21  // I2S Data Out
-#define AUDIO_SD_MODE_PIN 1   // GPIO1 (pulled LOW via R15)
 
 /**
  * @brief Initialize audio subsystem for mono playback

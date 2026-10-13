@@ -42,32 +42,8 @@ extern "C" {
 #define PIN_I2C_FREQ_HZ  100000
 #endif
 
-/* Audio (MAX98357A) -- source: BOARD_AUDIO_* (see Kconfig.projbuild;
-   previously these had NO Kconfig entry at all -- fixed alongside
-   this file, not just aliased). */
-#ifdef CONFIG_BOARD_AUDIO_I2S_BCLK
-#define PIN_AUDIO_BCLK   CONFIG_BOARD_AUDIO_I2S_BCLK
-#else
-#define PIN_AUDIO_BCLK   26
-#endif
-
-#ifdef CONFIG_BOARD_AUDIO_I2S_WS
-#define PIN_AUDIO_LRCK   CONFIG_BOARD_AUDIO_I2S_WS
-#else
-#define PIN_AUDIO_LRCK   25
-#endif
-
-#ifdef CONFIG_BOARD_AUDIO_I2S_DOUT
-#define PIN_AUDIO_DOUT   CONFIG_BOARD_AUDIO_I2S_DOUT
-#else
-#define PIN_AUDIO_DOUT   27
-#endif
-
-#ifdef CONFIG_BOARD_AUDIO_SD_MODE
-#define PIN_AUDIO_SD_MODE CONFIG_BOARD_AUDIO_SD_MODE
-#else
-#define PIN_AUDIO_SD_MODE (-1)
-#endif
+/* Audio pins (I2S BCLK/WS/DOUT, SD_MODE) are defined in pdl_pins.h.
+   This header intentionally does not duplicate them. */
 
 #ifdef __cplusplus
 }

@@ -104,8 +104,12 @@ Verify each against hardware or datasheet before fixing.
    gain / integration config. Verify against the datasheet.
 2. **I2C frequency** setting is ignored (driver defaults to 400 kHz,
    Kconfig says 100 kHz).
-3. **I2C and audio fallback pins** (21/26, 25/26/27) can collide with
-   the I2S data pin and flash pins. Should fail instead of guessing.
+3. **I2C fallback pins** (18/17) are a last-resort runtime bailout used
+   only if both BOARD_I2C_* and PDL_PIN_I2C_* resolve to invalid GPIOs.
+   The values now match pdl_pins.h, so a bailout lands on the correct
+   pads, but the correct long-term behavior is to fail cleanly instead
+   of silently substituting pins. Audio fallbacks were removed in PR 3
+   (they were dead -- the HAL audio driver reads pdl_pins.h directly).
 4. **Backlight** is switched on in `pdl_board_init`, before the panel
    is initialised.
 5. **SD_CS (IO9)** is never driven high, so it may float on the
@@ -130,6 +134,13 @@ Verify each against hardware or datasheet before fixing.
 13. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
     global `-I` in `platformio.ini`, app rollback off, coredump
     off.
+14. **main/Kconfig.projbuild `CONFIG_BOARD_AUDIO_*` entries are dead.**
+    BOARD_AUDIO_I2S_BCLK, BOARD_AUDIO_I2S_WS, BOARD_AUDIO_I2S_DOUT,
+    and BOARD_AUDIO_SD_MODE are not read by any driver. The HAL audio
+    driver reads pins from pdl_pins.h (PDL_PIN_I2S_*), not from these
+    Kconfig entries. Leave the entries in place for now (removing them
+    changes the menuconfig menu tree and would need a migration note);
+    either delete them or wire them into the HAL in a future PR.
 
 ---
 

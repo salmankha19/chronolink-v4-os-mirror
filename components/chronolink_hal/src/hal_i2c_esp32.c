@@ -47,12 +47,19 @@ static inline void i2c_unlock(void)
 #define HAL_I2C_TIMEOUT_MS 100
 #endif
 
+/* Last-resort runtime fallback used only if both BOARD_I2C_* and
+   PDL_PIN_I2C_* resolve to invalid GPIOs (should never happen on this
+   PCB). Values match pdl_pins.h so that even a wrong-pin bailout
+   lands on the correct physical pads. The longer-term fix is to fail
+   cleanly instead of substituting different pins; tracked in
+   docs/STATUS.md. */
+
 #ifndef I2C_FALLBACK_SDA
-#define I2C_FALLBACK_SDA 21
+#define I2C_FALLBACK_SDA 18
 #endif
 
 #ifndef I2C_FALLBACK_SCL
-#define I2C_FALLBACK_SCL 26
+#define I2C_FALLBACK_SCL 17
 #endif
 
 static bool is_valid_i2c_gpio(int pin)
