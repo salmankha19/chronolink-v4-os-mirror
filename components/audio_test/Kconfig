@@ -1,0 +1,23 @@
+menu "Audio Test"
+
+config AUDIO_TEST_ENABLE
+    bool "Enable audio test component"
+    default n
+    help
+      When enabled, the audio_test component is compiled and app_main()
+      runs the audio self-test at boot. Leave disabled for normal builds.
+
+config AUDIO_TEST_SIMULATION
+    bool "Simulation mode (no hardware)"
+    depends on AUDIO_TEST_ENABLE
+    default n
+    help
+      When enabled, audio_test does not touch I2S hardware -- it logs
+      the pins and configuration that would be used and sleeps for the
+      duration of each tone. Useful for CI builds and development on
+      machines without a speaker attached.
+
+      When disabled, audio_test runs the real HAL_Audio_Init /
+      HAL_Audio_Play path against the MAX98357A amplifier.
+
+endmenu

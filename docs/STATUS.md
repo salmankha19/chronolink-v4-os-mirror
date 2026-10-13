@@ -128,8 +128,7 @@ Verify each against hardware or datasheet before fixing.
     whole boot. Consider degrading instead (the clock should keep
     time).
 13. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
-    global `-I` in `platformio.ini`, fake
-    `CONFIG_AUDIO_TEST_SIMULATION` define, app rollback off, coredump
+    global `-I` in `platformio.ini`, app rollback off, coredump
     off.
 
 ---

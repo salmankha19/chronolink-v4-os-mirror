@@ -9,3 +9,10 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
 # CONFIG_CHRONOLINK_USE_MOCK_DISPLAY is not set
 CONFIG_CHRONOLINK_HAL_DISPLAY_BACKEND_ST7796S=y
+
+# Align the Kconfig partition-table choice with platformio.ini's
+# board_build.partitions = partitions.csv. Without this, an
+# ESP-IDF-native build (idf.py build) uses the built-in
+# partitions_singleapp.csv instead of our two-slot OTA layout.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
