@@ -22,8 +22,12 @@ static SemaphoreHandle_t s_i2c_mutex = NULL;
 
 static inline bool i2c_lock(void)
 {
+    /* Fail closed if the mutex was never created. A missing mutex means
+       HAL_I2C_Init() did not run (or ran with invalid pins and disabled
+       the bus), so any transfer attempt would proceed unguarded. Return
+       false -- callers already treat false as HAL_ERR_BUS. See PR 4. */
     if (!s_i2c_mutex) {
-        return true; /* mutex not yet created (shouldn't happen post-init) */
+        return false;
     }
     return xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(I2C_LOCK_TIMEOUT_MS)) == pdTRUE;
 }
