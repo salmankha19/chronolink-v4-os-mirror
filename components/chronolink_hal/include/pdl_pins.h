@@ -51,7 +51,32 @@
 #endif
 
 /* --- Audio (MAX98357A I2S) ---
- * Schematic marks SD_MODE as "Not using SD_Mode pin". */
+ * SD_MODE (MAX98357A pin 4) is held HIGH on the shipped PCB by R21
+ * (0R) to +3V3, so the amplifier is always enabled (right-channel
+ * output). The amplifier is not under firmware control.
+ *
+ * ESP32-S3 GPIO1 is routed to JP2 (a 3-pad solder jumper, "Bridged12"
+ * by default). JP2 pad 1 = R21 to +3V3, pad 2 = amplifier *SD_MODE,
+ * pad 3 = GPIO1's trace. R15 (10kR) sits on the SD_MODE net (pad 2),
+ * not on GPIO1's trace. With pads 1-2 bridged (default), GPIO1 is
+ * isolated from the amplifier and from R15 -- GPIO1 floats.
+ *
+ * To enable firmware control of SD_MODE:
+ *   1. Cut the JP2 1-2 bridge (open the solder). This disconnects
+ *      R21 (0R) from SD_MODE. R21 stays on pad 1, which is now
+ *      isolated -- no desoldering of R21 is required.
+ *   2. Solder the JP2 2-3 bridge, connecting amplifier *SD_MODE
+ *      (pad 2) to GPIO1's trace (pad 3).
+ *   3. Keep R15 (10kR) in place: it is on the SD_MODE net and pulls
+ *      SD_MODE low when GPIO1 is not driven, which is the desired
+ *      shutdown state.
+ *   4. In firmware: change PDL_PIN_AUDIO_SD_MODE from -1 to 1, and
+ *      re-enable the output config in HAL_Audio_Init().
+ *      A HAL/HIL setter for enable/shutdown would also be needed --
+ *      this codebase does not have one today.
+ *
+ * The default (-1) reflects the shipped hardware and keeps the
+ * amplifier permanently enabled. See docs/hal.md for the full note. */
 #define PDL_PIN_I2S_BCLK         47
 #define PDL_PIN_I2S_WS           48
 #define PDL_PIN_I2S_DOUT         21

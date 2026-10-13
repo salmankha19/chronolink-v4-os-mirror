@@ -17,39 +17,19 @@
 
 static const char *TAG = "HAL_AUDIO";
 
-/* Audio I2S pins: now real Kconfig options (idf.py menuconfig ->
-   ChronoLink HAL Board Pins). Previously these were hardcoded fallback
-   #defines with no Kconfig entry backing them at all -- see
-   Kconfig.projbuild's BOARD_AUDIO_I2S_* / BOARD_AUDIO_SD_MODE. */
-#ifndef PDL_PIN_AUDIO_SD_MODE
-#ifdef CONFIG_BOARD_AUDIO_SD_MODE
-#define PDL_PIN_AUDIO_SD_MODE CONFIG_BOARD_AUDIO_SD_MODE
-#else
-#define PDL_PIN_AUDIO_SD_MODE (-1)
-#endif
-#endif
+/* I2S and SD_MODE pins come from pdl_pins.h (included via board_pins.h
+   at the top of this file). PDL_PIN_I2S_BCLK=47, PDL_PIN_I2S_WS=48,
+   PDL_PIN_I2S_DOUT=21, PDL_PIN_AUDIO_SD_MODE=-1 on the shipped PCB.
 
-#ifndef PDL_PIN_I2S_BCLK
-#ifdef CONFIG_BOARD_AUDIO_I2S_BCLK
-#define PDL_PIN_I2S_BCLK CONFIG_BOARD_AUDIO_I2S_BCLK
-#else
-#define PDL_PIN_I2S_BCLK 26
-#endif
-#endif
-#ifndef PDL_PIN_I2S_WS
-#ifdef CONFIG_BOARD_AUDIO_I2S_WS
-#define PDL_PIN_I2S_WS CONFIG_BOARD_AUDIO_I2S_WS
-#else
-#define PDL_PIN_I2S_WS   25
-#endif
-#endif
-#ifndef PDL_PIN_I2S_DOUT
-#ifdef CONFIG_BOARD_AUDIO_I2S_DOUT
-#define PDL_PIN_I2S_DOUT CONFIG_BOARD_AUDIO_I2S_DOUT
-#else
-#define PDL_PIN_I2S_DOUT 27
-#endif
-#endif
+   An earlier #ifndef fallback block lived here with values 26/25/27,
+   routed through CONFIG_BOARD_AUDIO_*. It was unreachable: board_pins.h
+   already pulls in pdl_pins.h, which unconditionally defines every
+   PDL_PIN_I2S_* and PDL_PIN_AUDIO_SD_MODE macro, so the fallback
+   branch never compiled in. The 26/25/27 values did not match this
+   PCB anyway. Removed in PR 3.
+
+   If software SD_MODE control is ever wanted, see the procedure
+   documented in pdl_pins.h next to PDL_PIN_AUDIO_SD_MODE. */
 
 static i2s_chan_handle_t s_tx_chan = NULL;
 static bool s_inited = false;

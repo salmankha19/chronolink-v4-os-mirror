@@ -112,15 +112,15 @@ esp_err_t audio_test_init(void) {
 #if CONFIG_AUDIO_TEST_SIMULATION
     ESP_LOGI(TAG, "AUDIO TEST - SIMULATION MODE");
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "GPIO1 (SD_MODE) would be: INPUT_PULLDOWN");
-    ESP_LOGI(TAG, "  -> SD_MODE = LOW (selects RIGHT channel)");
-    ESP_LOGI(TAG, "  -> External R15 (10K) pulls to GND");
+    ESP_LOGI(TAG, "GPIO1 -> JP2 pad 3. Shipped default: JP2 1-2 bridged,");
+    ESP_LOGI(TAG, "  -> pad 3 isolated; GPIO1 floats, not connected to SD_MODE");
+    ESP_LOGI(TAG, "  -> SD_MODE held HIGH via R21 (0R) to 3V3; amp always on");
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "I2S Pins (would be configured):");
-    ESP_LOGI(TAG, "  -> BCLK  = GPIO%d", AUDIO_BCLK_PIN);
-    ESP_LOGI(TAG, "  -> LRCK  = GPIO%d", AUDIO_LRCK_PIN);
-    ESP_LOGI(TAG, "  -> DOUT  = GPIO%d", AUDIO_DOUT_PIN);
-    ESP_LOGI(TAG, "  -> SD_MODE = GPIO%d", AUDIO_SD_MODE_PIN);
+    ESP_LOGI(TAG, "  -> BCLK  = GPIO%d", PDL_PIN_I2S_BCLK);
+    ESP_LOGI(TAG, "  -> LRCK  = GPIO%d", PDL_PIN_I2S_WS);
+    ESP_LOGI(TAG, "  -> DOUT  = GPIO%d", PDL_PIN_I2S_DOUT);
+    ESP_LOGI(TAG, "  -> SD_MODE = GPIO%d", PDL_PIN_AUDIO_SD_MODE);
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "MAX98357A Configuration:");
     ESP_LOGI(TAG, "  -> Channel: RIGHT (mono output)");
