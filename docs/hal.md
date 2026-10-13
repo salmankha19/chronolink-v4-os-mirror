@@ -147,8 +147,8 @@ real backend (the Kconfig help text says "in addition"; the code says
 | Backend | Status |
 |---|---|
 | ST7796S 320x480 (SPI, RGB565) | Implemented: fill, fill-rect, pixel, row blit, MADCTL, hardware scroll. Text rendering is not implemented in the backend (use the font layer) |
-| MAX7219 | **Stub: returns `HAL_OK`, draws nothing** |
-| Remote | **Stub: returns `HAL_OK`, sends nothing** |
+| MAX7219 | **Stub: returns `HAL_ERR_DEV`, draws nothing** |
+| Remote | **Stub: returns `HAL_ERR_DEV`, sends nothing** |
 | Mock | For host-less builds (`CONFIG_CHRONOLINK_USE_MOCK_DISPLAY`) |
 | Custom (SDK) | Works; one driver at a time, register before `HAL_Display_Init()` |
 | None (headless) | `HAL_Display_Init()` returns `HAL_OK`; later draw calls return `HAL_ERR_INIT` |

@@ -56,6 +56,7 @@ __pycache__/
 
 # ---------- Local logs ----------
 bootlog.txt
+chronolink_selected_dump.txt
 
 # ---------- Local commit-message temp files ----------
 commit-msg.txt
