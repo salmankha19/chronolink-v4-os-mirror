@@ -126,3 +126,39 @@ Recent merged work (kept here so you do not re-litigate it):
 - Kernel calling services
 - Services calling HAL when a HIL adapter exists
 - Referencing APIs that do not exist (check `docs/hal.md`, `docs/hil.md`)
+
+## Git workflow (enforced)
+
+Never commit directly to main. This applies to every change:
+new features, fixes, CI config, docs, typo corrections, one-line
+edits. There are no exceptions.
+
+Every change goes through:
+
+  1. `git checkout -b <type>/<short-name>`
+     type is one of: feat, fix, chore, docs, ci, refactor, test
+  2. edit + build + verify on hardware where applicable
+  3. `git add -A`
+     `git commit -m "<type>(<scope>): <subject>"`
+  4. `git push -u origin <branch>`
+  5. Open PR on GitHub (title + description with summary,
+     scope, and verification section)
+  6. Wait for CI. Do not merge with a red CI.
+  7. Merge (squash and merge for multi-commit branches; regular
+     merge commit is fine for single-commit branches)
+  8. `git checkout main`
+     `git pull origin main`
+  9. `git push mirror main`
+     `git fetch --prune`
+ 10. `git branch -d <branch>`
+ 11. Delete the remote branch on GitHub
+
+If `git branch -d` refuses with "not fully merged", that is the
+safety net doing its job — the commit is only on that branch.
+Push it, open the PR, merge, then delete. Never use -D unless
+the work is deliberately discarded.
+
+Why this rule exists: on 2026-10-14 a CI config change was
+committed directly to main in the interest of speed. It worked,
+but it skipped CI-before-merge, broke the PR audit trail, and
+set a precedent. Do not repeat.
