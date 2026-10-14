@@ -35,8 +35,12 @@ not.** Where another doc mentions a gap, this file has the detail.
   `event_dispatch_task` created first in `core_os_start()`.
 - **Event bus consumer:** `event_dispatch_task` (`core_os`) drains the
   kernel event queue, so publishes no longer fill the queue and evict
-  older entries. It is drain-only today (each event is logged at DEBUG
-  level); subscriber fan-out arrives in PR 5b with `svc_time`.
+  older entries. It logs each event at DEBUG and then calls
+  `event_bus_dispatch()`. `event_bus_subscribe(q, type)` registers a
+  queue to receive copies of selected events; `event_bus_dispatch()`
+  forwards matching events non-blocking, up to
+  `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. No subscriber is registered
+  yet; `svc_time` becomes the first in PR 5b-2.
 - **Services:** `svc_network` (WiFi station), `state_manager`,
   `display_manager`, `ui_producer`, `font_engine`, `font`.
 

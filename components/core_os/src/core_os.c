@@ -99,9 +99,9 @@ void core_os_init(boot_flags_t boot_flags)
  *
  * Drains the kernel event queue. Nothing consumed the bus before this task,
  * so the 32-slot queue filled up and event_bus_publish() evicted its oldest
- * entries (typically the 1 Hz heartbeat). Drain-only for now: each event is
- * logged at DEBUG level. Subscriber fan-out (queue-forward) arrives in
- * PR 5b together with svc_time.
+ * entries (typically the 1 Hz heartbeat). Each event is logged at DEBUG and
+ * then forwarded to any registered subscriber queues via event_bus_dispatch()
+ * (mechanism only as of PR 5b-1; no subscriber is registered yet).
  * -------------------------------------------------------------------------- */
 static void event_dispatch_task(void *arg)
 {
@@ -113,6 +113,7 @@ static void event_dispatch_task(void *arg)
     for (;;) {
         if (event_bus_receive(&e, portMAX_DELAY)) {
             ESP_LOGD(TAG, "event type=%d", (int)e.type);
+            event_bus_dispatch(&e);
         }
     }
 }
