@@ -73,8 +73,9 @@ typedef struct {
  *
  * Returns ESP_FAIL only if the mailbox, the locks or the task could not be
  * created. A missing NVS namespace or a missing RTC is logged and
- * tolerated: the service then runs on the built-in defaults ("GMT0" and the
- * three default NTP servers) and stays UNSYNCED until NTP succeeds.
+ * tolerated: the service then runs on the built-in defaults (the UK TZ
+ * "GMT0BST,M3.5.0/1,M10.5.0" and the three default NTP servers) and stays
+ * UNSYNCED until NTP succeeds.
  */
 esp_err_t svc_time_start(void);
 

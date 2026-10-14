@@ -15,7 +15,8 @@
  * see docs/STATUS.md ("svc_time") and hal_rtc.h for the contract.
  *
  * Threading:
- *   worker task  svc_time_worker   -- mailbox drain, syncs, status print
+ *   worker task  svc_time_worker   -- mailbox drain, 1 Hz clock tick, syncs,
+ *                                    status print
  *   esp_timer    backoff_timer_cb  -- retry after a failed sync; it calls
  *                                    run_ntp_sync() directly (design note in
  *                                    docs/STATUS.md), which blocks that task
@@ -63,7 +64,14 @@ static const char *TAG = "svc_time";
 #define NVS_KEY_NTP_PREFIX     "ntp_server_"   /* + "0" .. "2" */
 
 #define SVC_TIME_NTP_HOST_MAX  64              /* incl. NUL */
-#define SVC_TIME_DEFAULT_TZ    "GMT0"
+
+/* Default TZ: UK (GMT/BST with automatic DST).
+ * This is the dev/QA target while svc_http is being built.
+ * When the web UI exists it writes the user's chosen POSIX
+ * TZ string into NVS namespace "time" key "tz", overriding
+ * this default. Users outside the UK should change this or
+ * (once the UI exists) select their zone. */
+#define SVC_TIME_DEFAULT_TZ    "GMT0BST,M3.5.0/1,M10.5.0"
 
 static const char *const k_ntp_defaults[SVC_TIME_NTP_SLOTS] = {
     "time.google.com",
@@ -89,7 +97,8 @@ static const uint32_t k_backoff_ms[] = {
 #define SVC_TIME_TASK_STACK         4096
 #define SVC_TIME_TASK_PRIO          (tskIDLE_PRIORITY + 3)
 #define SVC_TIME_TASK_CORE          0
-#define SVC_TIME_STATUS_PERIOD_MS   5000  /* TEMPORARY status print period */
+#define SVC_TIME_TICK_PERIOD_MS     1000  /* worker wake-up: one clock tick */
+#define SVC_TIME_STATUS_TICKS       5     /* TEMPORARY: print every 5th tick (5 s) */
 
 #define SVC_TIME_LOCK_TICKS         pdMS_TO_TICKS(1000)
 #define SVC_TIME_SYNC_LOCK_TICKS    pdMS_TO_TICKS(100)
@@ -285,14 +294,14 @@ static void load_timezone_from_nvs(void)
         return;
     }
     if (err == ESP_OK) {
-        ESP_LOGW(TAG, "NVS '%s' is empty -- using '%s'",
-                 NVS_KEY_TZ, SVC_TIME_DEFAULT_TZ);
+        ESP_LOGW(TAG, "NVS '%s' is empty -- using default UK TZ (GMT/BST)",
+                 NVS_KEY_TZ);
     } else if (err == ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGW(TAG, "NVS '%s' absent -- using '%s' (UTC)",
-                 NVS_KEY_TZ, SVC_TIME_DEFAULT_TZ);
+        ESP_LOGW(TAG, "NVS '%s' absent -- using default UK TZ (GMT/BST)",
+                 NVS_KEY_TZ);
     } else {
-        ESP_LOGW(TAG, "NVS read of '%s' failed: %s -- using '%s'",
-                 NVS_KEY_TZ, esp_err_to_name(err), SVC_TIME_DEFAULT_TZ);
+        ESP_LOGW(TAG, "NVS read of '%s' failed: %s -- using default UK TZ (GMT/BST)",
+                 NVS_KEY_TZ, esp_err_to_name(err));
     }
     strncpy(s_tz, SVC_TIME_DEFAULT_TZ, sizeof(s_tz) - 1);
     s_tz[sizeof(s_tz) - 1] = '\0';
@@ -557,36 +566,83 @@ static void backoff_timer_cb(void *arg)
 /* Worker                                                             */
 /* ------------------------------------------------------------------ */
 
+/* One clock tick: refresh the snapshot so the time keeps advancing between
+   syncs (before PR 5c it was frozen at whatever the last sync stored).
+   The RTC is preferred -- it holds UTC, survives a reset, and is re-read here
+   once a second -- and the libc clock is the fallback, but only after NTP has
+   stepped it this boot: time() counts from boot and means nothing before that.
+   UNSYNCED (no trustworthy time yet -- e.g. the DS3231M reported OSF at boot,
+   so the register holds whatever it held when power died) leaves the snapshot
+   alone instead of turning a meaningless value into a valid one.
+   The caller holds no lock. Returns the source used, or NULL when nothing was
+   written. Does not publish: EVENT_TIME_UPDATE means "a new UTC value was
+   accepted", which a tick is not. */
+static const char *tick_snapshot(void)
+{
+    struct tm tm_utc;
+    struct tm tm_local;
+    rtc_time_t rtc_now;
+    const char *source = NULL;
+    time_t epoch = 0;
+
+    if (!state_lock()) {
+        return NULL;
+    }
+    if (s_snapshot.state == SVC_TIME_STATE_UNSYNCED) {
+        state_unlock();
+        return NULL;
+    }
+    if (hil_rtc_get_time(&rtc_now) && utc_to_epoch(&rtc_now, &epoch)) {
+        source = "RTC";
+    } else if (s_snapshot.state == SVC_TIME_STATE_NTP_SYNCED) {
+        epoch = time(NULL);
+        source = "system";
+    }
+    if (source && epoch > 0 && gmtime_r(&epoch, &tm_utc) != NULL &&
+        localtime_r(&epoch, &tm_local) != NULL) {
+        s_snapshot.utc   = tm_to_rtc(&tm_utc);
+        s_snapshot.local = tm_to_rtc(&tm_local);
+        s_snapshot.valid = true;
+    } else {
+        source = NULL;   /* no usable source: snapshot unchanged */
+    }
+    state_unlock();
+    return source;
+}
+
 /* TEMPORARY: remove when the display path lands. */
-static void log_local_status(void)
+static void log_local_status(uint32_t tick)
 {
     svc_time_snapshot_t snap;
 
     if (svc_time_get_snapshot(&snap) != ESP_OK) {
-        ESP_LOGW(TAG, "status: snapshot unavailable");
+        ESP_LOGW(TAG, "status: snapshot unavailable [tick=%u]", (unsigned)tick);
         return;
     }
     if (!snap.valid) {
-        ESP_LOGI(TAG, "status: no valid time yet (state=%s)", state_to_str(snap.state));
+        ESP_LOGI(TAG, "status: no valid time yet (state=%s) [tick=%u]",
+                 state_to_str(snap.state), (unsigned)tick);
         return;
     }
-    ESP_LOGI(TAG, "status: local %02u:%02u:%02u (UTC %02u:%02u:%02u) state=%s",
+    ESP_LOGI(TAG, "status: local %02u:%02u:%02u (UTC %02u:%02u:%02u) state=%s [tick=%u]",
              (unsigned)snap.local.hours, (unsigned)snap.local.minutes,
              (unsigned)snap.local.seconds, (unsigned)snap.utc.hours,
              (unsigned)snap.utc.minutes, (unsigned)snap.utc.seconds,
-             state_to_str(snap.state));
+             state_to_str(snap.state), (unsigned)tick);
 }
 
 static void svc_time_worker(void *arg)
 {
     event_t evt;
+    const char *source;
+    uint32_t tick = 0;
 
     (void)arg;
     ESP_LOGI(TAG, "worker started");
 
     for (;;) {
         if (xQueueReceive(s_mailbox, &evt,
-                          pdMS_TO_TICKS(SVC_TIME_STATUS_PERIOD_MS)) == pdTRUE) {
+                          pdMS_TO_TICKS(SVC_TIME_TICK_PERIOD_MS)) == pdTRUE) {
             switch (evt.type) {
             case EVENT_NETWORK_CONNECTED: {
                 /* A fresh link may be exactly what the last attempt needed,
@@ -608,7 +664,14 @@ static void svc_time_worker(void *arg)
             continue;
         }
 
-        log_local_status();   /* TEMPORARY: remove with the status print */
+        /* Timeout: one clock tick elapsed -- move the clock forward. */
+        source = tick_snapshot();
+        if (source) {
+            ESP_LOGD(TAG, "tick from %s", source);
+        }
+        if (++tick % SVC_TIME_STATUS_TICKS == 0) {
+            log_local_status(tick);   /* TEMPORARY: remove with the status print */
+        }
     }
 }
 

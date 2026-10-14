@@ -50,7 +50,9 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    `ui_producer`, start `svc_time` (reads the RTC, applies the POSIX
    timezone and subscribes to `EVENT_NETWORK_CONNECTED` -- it has to be up
    before `svc_network` can publish one), start `svc_network`
-   (non-fatal), optional audio test, then idle.
+   (non-fatal), optional audio test, then idle. From then on `svc_time`
+   ticks its snapshot once a second (RTC when present, otherwise the libc
+   clock once NTP has synced), so the time it serves keeps advancing.
 
 Events can only be published after step 3.7; the event bus does not
 exist earlier. Steps 3.1–3.6 are observable on the serial log only.
