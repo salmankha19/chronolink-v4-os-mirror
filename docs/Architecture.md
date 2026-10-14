@@ -111,6 +111,12 @@ flowchart TB
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.
+- `ui_producer` runs one task on core 0 (`ui_prod`, `tskIDLE_PRIORITY + 2`,
+  3072 B stack) that wakes every 250 ms, reads `svc_time_get_snapshot()`,
+  and submits a clock frame through `display_manager_submit_frame()` only
+  when the formatted local `HH:MM:SS` changes. The first frame adds a
+  full-screen clear; later frames erase just the 64x8 text bounding box.
+  Rendering on change keeps the 3-slot frame queue from filling.
 - In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
   service tasks.
 

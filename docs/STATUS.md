@@ -41,11 +41,18 @@ not.** Where another doc mentions a gap, this file has the detail.
   forwards matching events non-blocking, up to
   `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. `svc_time` is the first
   subscriber (PR 5b-2): it registers for `EVENT_NETWORK_CONNECTED`.
-- **Services:** `svc_network` (WiFi station), `state_manager`,
-  `display_manager`, `ui_producer`, `font_engine`, `font`.
+- **Services:** `svc_network` (WiFi station), `state_manager`.
+- **Application (layer 6):** `display_manager`, `ui_producer`,
+  `font_engine`, `font` -- UI and display logic, not services
+  (Constitution section 11).
 - **`svc_time`:** RTC + NTP + POSIX TZ; the first event-bus subscriber
   (`EVENT_NETWORK_CONNECTED`); publishes `EVENT_TIME_UPDATE`; ticks the
   snapshot once a second (PR 5c). Details in the `svc_time` section below.
+- **Live clock face (PR 6):** `ui_producer` polls `svc_time` at 250 ms and
+  submits a 3-command `dm_frame_t` (clear / fill_rect / draw_text) when the
+  formatted local `HH:MM:SS` changes. The full-screen clear is first-frame
+  only; later frames are fill_rect + draw_text. The old placeholder (which
+  only called `display_manager_init()`) is gone.
 
 ---
 
@@ -59,8 +66,9 @@ Shape of the implementation: one worker task (`svc_time`, 4 KiB stack,
 priority `tskIDLE_PRIORITY + 3`, core 0) drains a 4-deep mailbox that
 `event_bus_subscribe()` bound to `EVENT_NETWORK_CONNECTED` and wakes once a
 second otherwise; an `esp_timer` drives the NTP backoff retry; readers use
-`svc_time_get_*()` under a mutex. A temporary 5 s serial status print is
-marked for removal when the display path lands.
+`svc_time_get_*()` under a mutex. A temporary 5 s serial status print stays
+until the panel is verified on real hardware; PR 6 added the display-side
+frame log alongside it rather than removing it.
 
 The design decisions below are the contract:
 
@@ -225,6 +233,17 @@ Verify each against hardware or datasheet before fixing.
     `esp_hw_support`'s `rtc_init` in PR 5b-2 and was renamed to
     `hil_rtc_init`. Rename the others with a `hil_` prefix when they are
     first called.
+18. **`DM_MAX_TEXT_LEN` was 8, which left no room for a NUL** on an 8-char
+    string -- `"HH:MM:SS"` is exactly 8 -- so `font_engine_draw_text()`
+    walked past the end of `arg.text.text` into the union and the next
+    command. Latent, not theoretical: no caller of
+    `display_manager_submit_frame()` existed until PR 6. Fixed in PR 6:
+    the macro is 16 with guaranteed termination (`dm_cmd_draw_text()` caps
+    the copy at `DM_MAX_TEXT_LEN - 1` and always writes the NUL).
+19. **`display_manager/README.md` was stale** -- it claimed a lock-free
+    queue and "8 slots x 512 bytes"; the code has a submit mutex and
+    `DM_FRAME_QUEUE_DEPTH` 3 slots of `sizeof(dm_frame_t)`. Corrected in
+    PR 6.
 
 **Resolved**
 

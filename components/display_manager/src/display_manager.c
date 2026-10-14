@@ -17,6 +17,9 @@ static QueueHandle_t s_frame_queue = NULL;
 static SemaphoreHandle_t s_submit_mutex = NULL;
 static bool s_initialized = false;
 
+/* Frames dequeued and executed since boot; read through the accessor below. */
+static uint32_t s_frames_dispatched = 0;
+
 /* Icon registry — populated at init time, read-only in hot path */
 static struct {
     uint16_t id;
@@ -279,6 +282,18 @@ void display_manager_process_frame(void)
     if ((frame.flags & DM_FRAME_FLAG_FORCE_SWAP) && !swap_executed && !disable_swap) {
         HAL_Display_Show();
     }
+
+    /* ------------------------------------------------------------------
+     * The frame left the queue and every command was offered to the HAL,
+     * so this proves the producer -> queue -> core1_task -> driver chain
+     * even with no panel attached. See docs/pr6-preflight.md section 6.
+     * ------------------------------------------------------------------ */
+    s_frames_dispatched++;
+
+    /* TEMPORARY: remove when panel verified on real hardware */
+    if ((s_frames_dispatched % 5U) == 0U) {
+        ESP_LOGI("display_manager", "frame dispatched [n=%lu]", (unsigned long)s_frames_dispatched);
+    }
 }
 
 void display_manager_clear_queue(void)
@@ -286,4 +301,13 @@ void display_manager_clear_queue(void)
     if (s_frame_queue) {
         xQueueReset(s_frame_queue);
     }
+}
+
+/* --------------------------------------------------------------------------
+ * Diagnostics
+ * -------------------------------------------------------------------------- */
+
+uint32_t display_manager_frames_dispatched(void)
+{
+    return s_frames_dispatched;
 }
