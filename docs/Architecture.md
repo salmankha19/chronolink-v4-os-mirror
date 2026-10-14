@@ -96,8 +96,10 @@ flowchart TB
   that drains the event bus and logs each received event at DEBUG level;
   it is created before `state_q` / `core0_task` / `core1_task` so the
   boot-stage events published around this call are not evicted from the
-  32-slot queue. Subscriber fan-out (queue-forward) is added in PR 5b
-  when `svc_time` lands.
+  32-slot queue. Subscriber fan-out (queue-forward) exists as of PR 5b-1:
+  `event_bus_dispatch()` forwards matching events to registered
+  subscriber queues. No subscriber is registered yet; `svc_time`
+  becomes the first in PR 5b-2.
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.

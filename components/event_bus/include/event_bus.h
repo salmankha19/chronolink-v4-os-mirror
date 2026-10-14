@@ -50,6 +50,26 @@ void event_bus_init(QueueHandle_t queue);
 void event_bus_publish(const event_t *evt);
 bool event_bus_receive(event_t *evt, TickType_t timeout);
 
+/* Subscriber fan-out (PR 5b-1).
+ *
+ * event_bus_subscribe() registers ONE (queue, type) rule: a copy of every
+ * event of that type is sent to q by the kernel dispatcher through
+ * event_bus_dispatch(). Intended to be called during init, before events
+ * start flowing -- it is NOT thread-safe against event_bus_dispatch().
+ *
+ * Returns true on success, and also if (q, type) is already registered
+ * (idempotent). Returns false when q is NULL or the subscriber table is
+ * full (EVENT_BUS_MAX_SUBSCRIBERS). */
+bool event_bus_subscribe(QueueHandle_t q, event_type_t type);
+
+/* Companion of event_bus_publish() / event_bus_receive(): the kernel
+ * dispatcher calls this once per dequeued event to forward a copy to every
+ * subscriber queue registered for evt->type. Never blocks -- a full
+ * subscriber queue drops that copy. Safe with a NULL argument (no-op).
+ * Do not register the kernel's own queue (the dispatcher's source): the
+ * forwarded copy would be dequeued and forwarded again, forever. */
+void event_bus_dispatch(const event_t *evt);
+
 static inline void event_init_payload(event_t *evt, event_type_t type,
                                       const void *payload, size_t payload_len)
 {
