@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-14 at commit `855b9b1`. Update this file in
+Snapshot reviewed 2026-10-14 at commit `e109e70`. Update this file in
 the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
@@ -44,8 +44,8 @@ not.** Where another doc mentions a gap, this file has the detail.
 - **Services:** `svc_network` (WiFi station), `state_manager`,
   `display_manager`, `ui_producer`, `font_engine`, `font`.
 - **`svc_time`:** RTC + NTP + POSIX TZ; the first event-bus subscriber
-  (`EVENT_NETWORK_CONNECTED`); publishes `EVENT_TIME_UPDATE`. Details in
-  the `svc_time` section below.
+  (`EVENT_NETWORK_CONNECTED`); publishes `EVENT_TIME_UPDATE`; ticks the
+  snapshot once a second (PR 5c). Details in the `svc_time` section below.
 
 ---
 
@@ -57,10 +57,10 @@ Code: `components/svc_time` (public header `svc_time.h`, source
 
 Shape of the implementation: one worker task (`svc_time`, 4 KiB stack,
 priority `tskIDLE_PRIORITY + 3`, core 0) drains a 4-deep mailbox that
-`event_bus_subscribe()` bound to `EVENT_NETWORK_CONNECTED`; an `esp_timer`
-drives the NTP backoff retry; readers use `svc_time_get_*()` under a mutex.
-A temporary 5 s serial status print is marked for removal when the display
-path lands.
+`event_bus_subscribe()` bound to `EVENT_NETWORK_CONNECTED` and wakes once a
+second otherwise; an `esp_timer` drives the NTP backoff retry; readers use
+`svc_time_get_*()` under a mutex. A temporary 5 s serial status print is
+marked for removal when the display path lands.
 
 The design decisions below are the contract:
 
@@ -121,10 +121,17 @@ Three NTP slots live in NVS namespace `time`:
   built-in 1 h cycle (`CONFIG_LWIP_SNTP_UPDATE_DELAY`); no second timer
   is added for it.
 - **Timezone storage:** NVS key `tz` in namespace `time`, holding a POSIX
-  TZ string; default `GMT0` with a warning log when the key is absent.
+  TZ string; default `GMT0BST,M3.5.0/1,M10.5.0` (UK, DST-aware) with a
+  warning log when the key is absent.
   POSIX TZ strings only -- the web UI translates an IANA zone to POSIX
   and may store an optional `ntp_region` key for display; that UI arrives
   with `svc_http`.
+- **1 Hz tick (PR 5c):** the worker wakes every second and refreshes the
+  snapshot -- from the RTC when one answers, otherwise from the libc clock
+  once NTP has stepped it -- so `svc_time_get_*()` advances instead of
+  returning the value captured at sync time. The default TZ is the UK POSIX
+  string `GMT0BST,M3.5.0/1,M10.5.0` (GMT/BST with automatic DST): a
+  dev/QA target until `svc_http` can store the user's zone.
 - **Known IDF limitation (IDFGH-18398):** on a timeout SNTP may retry the
   same server instead of advancing to the next index, so the three-slot
   fallback is **best-effort, not a guarantee**. Live in the code: the sync
@@ -205,13 +212,13 @@ Verify each against hardware or datasheet before fixing.
     `CONFIG_LWIP_SNTP_MAX_SERVERS` of them (default `1`) and drops the
     rest. Added to `sdkconfig.defaults` by PR 5b-2, but a stale
     `sdkconfig.single_mcu` silently keeps `1`; `svc_time` logs the clamp.
-16. **The `svc_time` snapshot does not follow IDF's 1 h resync.** A live
-    SNTP session re-syncs the system clock every
-    `CONFIG_LWIP_SNTP_UPDATE_DELAY`, but only a sync that runs through
-    `svc_time` refreshes the snapshot and the RTC; in between, the RAM
-    snapshot is frozen (the RTC is re-read only at boot). The display
-    path must re-read the RTC or `time()`, or `svc_time` must subscribe
-    to `NETIF_SNTP_TIME_SYNC` -- decide in the display-path PR.
+16. **The `svc_time` tick relies on picolibc's `time()` / `localtime_r`**
+    (via the HRT systimer). DS3231M drift is not corrected during a boot
+    unless NTP resyncs; the RTC is re-read every tick when present. A
+    resync that IDF runs on its own 1 h cycle
+    (`CONFIG_LWIP_SNTP_UPDATE_DELAY`) steps the system clock without
+    updating the RTC, so the snapshot follows the RTC and does not see it;
+    subscribe to `NETIF_SNTP_TIME_SYNC` or prefer `time()` if that matters.
 17. **HIL function names are unprefixed** (`rtc_*`, `i2c_*`, `spi_*`,
     `gpio_*`, `display_*`, `audio_*`, `sensor_*`) and can collide with
     IDF internal symbols when first called. `rtc_init` collided with
@@ -229,6 +236,12 @@ Verify each against hardware or datasheet before fixing.
   climbing drop count (400+ drops in 7 minutes). The kernel-owned
   `event_dispatch_task`, created first in `core_os_start()`, now drains
   the queue; subscriber fan-out followed in PR 5b-1 and 5b-2.
+
+- **`svc_time` served a frozen snapshot** (found 2026-10-14, fixed by PR 5c,
+  together with the "default TZ is UTC" gap). The snapshot was captured once
+  per sync and re-printed unchanged until the next event; the worker now
+  ticks it at 1 Hz (RTC when present, otherwise the libc clock after an NTP
+  sync), and the default TZ is the UK POSIX string instead of `GMT0`.
 
 ---
 
