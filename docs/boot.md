@@ -47,8 +47,10 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
       32-slot queue.
 
 4. **Back in `app_main()`:** register the built-in font, start
-   `ui_producer`, start `svc_network` (non-fatal), optional audio test,
-   then idle.
+   `ui_producer`, start `svc_time` (reads the RTC, applies the POSIX
+   timezone and subscribes to `EVENT_NETWORK_CONNECTED` -- it has to be up
+   before `svc_network` can publish one), start `svc_network`
+   (non-fatal), optional audio test, then idle.
 
 Events can only be published after step 3.7; the event bus does not
 exist earlier. Steps 3.1–3.6 are observable on the serial log only.

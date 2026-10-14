@@ -17,23 +17,23 @@ typedef struct {
     uint16_t year;
 } rtc_time_t;
 
-bool rtc_init(void);
-bool rtc_get_time(rtc_time_t *t);
-bool rtc_set_time(const rtc_time_t *t);
+bool hil_rtc_init(void);
+bool hil_rtc_get_time(rtc_time_t *t);
+bool hil_rtc_set_time(const rtc_time_t *t);
 
 /* See chronolink_hal's hal_rtc.h for the full rationale: a DS3231M
-   oscillator-stop event means whatever rtc_get_time() returns is not
-   "slightly stale", it's meaningless. Call this once after rtc_init()
+   oscillator-stop event means whatever hil_rtc_get_time() returns is not
+   "slightly stale", it's meaningless. Call this once after hil_rtc_init()
    and treat the clock as untrustworthy (display "--:--" or similar,
    don't schedule Adhan against it) until a fresh time source has run --
-   then call rtc_clear_lost_power_flag() so it doesn't keep tripping.
+   then call hil_rtc_clear_lost_power_flag() so it doesn't keep tripping.
 
    Deliberately NOT included here: sync_ntp(). NTP needs the WiFi/
    network stack, which has nothing to do with a hardware RTC chip --
-   that belongs in svc_time, not this header. rtc_set_time() is what
+   that belongs in svc_time, not this header. hil_rtc_set_time() is what
    svc_time should call once NTP gives it a real time. */
-bool rtc_has_lost_power(bool *lost_power);
-bool rtc_clear_lost_power_flag(void);
+bool hil_rtc_has_lost_power(bool *lost_power);
+bool hil_rtc_clear_lost_power_flag(void);
 
 #ifdef __cplusplus
 }

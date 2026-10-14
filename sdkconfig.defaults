@@ -16,3 +16,11 @@ CONFIG_CHRONOLINK_HAL_DISPLAY_BACKEND_ST7796S=y
 # partitions_singleapp.csv instead of our two-slot OTA layout.
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# svc_time configures up to three NTP servers (NVS namespace "time", keys
+# ntp_server_0 .. ntp_server_2). Must be >= the number of servers svc_time
+# tries, otherwise LwIP's sntp_setservername() silently ignores the extra
+# slots. Changing this file does NOT take effect until sdkconfig.single_mcu
+# (and ideally .pio/build/single_mcu) is deleted before the rebuild -- the
+# persisted value (1) wins otherwise.
+CONFIG_LWIP_SNTP_MAX_SERVERS=3

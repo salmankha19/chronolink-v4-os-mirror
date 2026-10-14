@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-14 at commit `95dd15d`. Update this file in
+Snapshot reviewed 2026-10-14 at commit `855b9b1`. Update this file in
 the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
@@ -39,18 +39,30 @@ not.** Where another doc mentions a gap, this file has the detail.
   `event_bus_dispatch()`. `event_bus_subscribe(q, type)` registers a
   queue to receive copies of selected events; `event_bus_dispatch()`
   forwards matching events non-blocking, up to
-  `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. No subscriber is registered
-  yet; `svc_time` becomes the first in PR 5b-2.
+  `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. `svc_time` is the first
+  subscriber (PR 5b-2): it registers for `EVENT_NETWORK_CONNECTED`.
 - **Services:** `svc_network` (WiFi station), `state_manager`,
   `display_manager`, `ui_producer`, `font_engine`, `font`.
+- **`svc_time`:** RTC + NTP + POSIX TZ; the first event-bus subscriber
+  (`EVENT_NETWORK_CONNECTED`); publishes `EVENT_TIME_UPDATE`. Details in
+  the `svc_time` section below.
 
 ---
 
-## Planned services (design decided, not built)
+## `svc_time` (implemented in PR 5b-2)
 
-### `svc_time`
+Code: `components/svc_time` (public header `svc_time.h`, source
+`svc_time.c`); event payload `time_event_payload_t` in
+`components/event_bus/include/time_events.h`.
 
-Component does not exist yet. Design decisions taken 2026-10-11:
+Shape of the implementation: one worker task (`svc_time`, 4 KiB stack,
+priority `tskIDLE_PRIORITY + 3`, core 0) drains a 4-deep mailbox that
+`event_bus_subscribe()` bound to `EVENT_NETWORK_CONNECTED`; an `esp_timer`
+drives the NTP backoff retry; readers use `svc_time_get_*()` under a mutex.
+A temporary 5 s serial status print is marked for removal when the display
+path lands.
+
+The design decisions below are the contract:
 
 - **RTC stores UTC.** The DS3231M register is written with UTC and
   read as UTC. It is never written with a DST-adjusted or local-time
@@ -65,11 +77,11 @@ Component does not exist yet. Design decisions taken 2026-10-11:
 - **DST applied at read time, in `svc_time`, via the POSIX TZ mechanism.**
   On zone change or boot, `svc_time` calls
   `setenv("TZ", "<posix_tz>", 1)` followed by `tzset()`, then uses
-  `localtime_r()` on the UTC time for display. Newlib's TZ handling
-  applies the DST rule automatically; no "midnight transition handler"
-  code is required. A timer at the next transition instant may be
-  registered purely to trigger a UI redraw -- it does not perform any
-  correction itself.
+  `localtime_r()` on the UTC time for display. The C library's (picolibc
+  on this target) TZ handling applies the DST rule automatically; no
+  "midnight transition handler" code is required. A timer at the next
+  transition instant may be registered purely to trigger a UI redraw --
+  it does not perform any correction itself.
 
 - **Zones come from a small POSIX TZ string table**, not a bundled IANA
   tzdata. The dropdown covers ~5-6 zones with their TZ strings hardcoded
@@ -94,15 +106,20 @@ Three NTP slots live in NVS namespace `time`:
   default for that slot; a present-but-empty value skips the slot; any
   other value is used as the user's hostname. To run a single custom
   server, set slot 0 and leave slots 1 and 2 empty.
-- **Requires `CONFIG_LWIP_SNTP_MAX_SERVERS=3`** in `sdkconfig.defaults`
-  (currently `1`). Changing `sdkconfig.defaults` does not take effect
-  until `sdkconfig.single_mcu` (and ideally `.pio/build/single_mcu`) is
+- **Requires `CONFIG_LWIP_SNTP_MAX_SERVERS=3`.** Set in
+  `sdkconfig.defaults` by PR 5b-2 (it was LwIP's default, `1`).
+  `svc_time` clamps to whatever the build has and logs a warning, so a
+  stale `sdkconfig.single_mcu` costs slots rather than a failed sync.
+  Changing `sdkconfig.defaults` does not take effect until
+  `sdkconfig.single_mcu` (and ideally `.pio/build/single_mcu`) is
   deleted before the rebuild.
-- **Retry on NTP failure:** backoff 1 min -> 5 min -> 15 min -> 1 h cap.
-  A new `EVENT_NETWORK_CONNECTED` cancels the pending backoff and
-  resyncs immediately. Periodic resync is left to IDF's built-in 1 h
-  cycle (`CONFIG_LWIP_SNTP_UPDATE_DELAY`); `svc_time` adds no `esp_timer`
-  of its own.
+- **Retry on NTP failure:** backoff 1 min -> 5 min -> 15 min -> 1 h cap,
+  driven by the service's only `esp_timer`. A new
+  `EVENT_NETWORK_CONNECTED` cancels the pending backoff and resyncs
+  immediately; a successful sync earlier than 60 s ago is skipped, so a
+  reconnect storm does not re-run NTP. Periodic resync is left to IDF's
+  built-in 1 h cycle (`CONFIG_LWIP_SNTP_UPDATE_DELAY`); no second timer
+  is added for it.
 - **Timezone storage:** NVS key `tz` in namespace `time`, holding a POSIX
   TZ string; default `GMT0` with a warning log when the key is absent.
   POSIX TZ strings only -- the web UI translates an IANA zone to POSIX
@@ -110,7 +127,8 @@ Three NTP slots live in NVS namespace `time`:
   with `svc_http`.
 - **Known IDF limitation (IDFGH-18398):** on a timeout SNTP may retry the
   same server instead of advancing to the next index, so the three-slot
-  fallback is **best-effort, not a guarantee**.
+  fallback is **best-effort, not a guarantee**. Live in the code: the sync
+  path hands the servers over in slot order and does not work around it.
 
 The `hal_rtc.h` timezone contract comment records the same decision at
 the HAL boundary, so a future contributor editing the driver cannot
@@ -182,6 +200,24 @@ Verify each against hardware or datasheet before fixing.
     Kconfig entries. Leave the entries in place for now (removing them
     changes the menuconfig menu tree and would need a migration note);
     either delete them or wire them into the HAL in a future PR.
+15. **NTP needs `CONFIG_LWIP_SNTP_MAX_SERVERS=3`.** `svc_time` configures
+    three servers (`time`/`ntp_server_0..2`); LwIP's SNTP keeps only
+    `CONFIG_LWIP_SNTP_MAX_SERVERS` of them (default `1`) and drops the
+    rest. Added to `sdkconfig.defaults` by PR 5b-2, but a stale
+    `sdkconfig.single_mcu` silently keeps `1`; `svc_time` logs the clamp.
+16. **The `svc_time` snapshot does not follow IDF's 1 h resync.** A live
+    SNTP session re-syncs the system clock every
+    `CONFIG_LWIP_SNTP_UPDATE_DELAY`, but only a sync that runs through
+    `svc_time` refreshes the snapshot and the RTC; in between, the RAM
+    snapshot is frozen (the RTC is re-read only at boot). The display
+    path must re-read the RTC or `time()`, or `svc_time` must subscribe
+    to `NETIF_SNTP_TIME_SYNC` -- decide in the display-path PR.
+17. **HIL function names are unprefixed** (`rtc_*`, `i2c_*`, `spi_*`,
+    `gpio_*`, `display_*`, `audio_*`, `sensor_*`) and can collide with
+    IDF internal symbols when first called. `rtc_init` collided with
+    `esp_hw_support`'s `rtc_init` in PR 5b-2 and was renamed to
+    `hil_rtc_init`. Rename the others with a `hil_` prefix when they are
+    first called.
 
 **Resolved**
 
@@ -192,7 +228,7 @@ Verify each against hardware or datasheet before fixing.
   typically the 1 Hz `EVENT_BOOT_HEALTH`. Observed on hardware as a
   climbing drop count (400+ drops in 7 minutes). The kernel-owned
   `event_dispatch_task`, created first in `core_os_start()`, now drains
-  the queue; subscriber fan-out is deferred to PR 5b.
+  the queue; subscriber fan-out followed in PR 5b-1 and 5b-2.
 
 ---
 
