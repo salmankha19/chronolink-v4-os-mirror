@@ -92,7 +92,13 @@ flowchart TB
   the RTC).
 - `core_os_init()` creates the event bus and calls
   `display_manager_init()`.
-- `core_os_start()` starts a state-queue task, a `core0_task`
+- `core_os_start()` starts with a kernel-owned `event_dispatch_task`
+  that drains the event bus and logs each received event at DEBUG level;
+  it is created before `state_q` / `core0_task` / `core1_task` so the
+  boot-stage events published around this call are not evicted from the
+  32-slot queue. Subscriber fan-out (queue-forward) is added in PR 5b
+  when `svc_time` lands.
+- `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.
 - In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal

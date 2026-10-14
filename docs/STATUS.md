@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-04 at commit `65dd77d`. Update this file in
+Snapshot reviewed 2026-10-14 at commit `95dd15d`. Update this file in
 the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
@@ -31,7 +31,12 @@ not.** Where another doc mentions a gap, this file has the detail.
   backend, `hal_gfx`, sensor registry with SHT4x/BME280/VEML7700
   drivers, MAX98357A audio, driver SDK for one custom display driver.
 - **HIL adapters** for display, RTC, sensors, audio, GPIO, I2C, SPI.
-- **Kernel:** event bus, tasks, safe-mode skip.
+- **Kernel:** event bus, tasks, safe-mode skip, and a kernel-owned
+  `event_dispatch_task` created first in `core_os_start()`.
+- **Event bus consumer:** `event_dispatch_task` (`core_os`) drains the
+  kernel event queue, so publishes no longer fill the queue and evict
+  older entries. It is drain-only today (each event is logged at DEBUG
+  level); subscriber fan-out arrives in PR 5b with `svc_time`.
 - **Services:** `svc_network` (WiFi station), `state_manager`,
   `display_manager`, `ui_producer`, `font_engine`, `font`.
 
@@ -70,6 +75,38 @@ Component does not exist yet. Design decisions taken 2026-10-11:
 
 - **NTP is the only sync source.** It provides UTC; `svc_time` writes
   UTC to the RTC and re-derives local on the display path.
+
+#### NTP servers, retry and TZ storage (design agreed 2026-10-14)
+
+Three NTP slots live in NVS namespace `time`:
+
+| Slot | NVS key | Built-in default |
+|---|---|---|
+| 0 | `ntp_server_0` | `time.google.com` |
+| 1 | `ntp_server_1` | `time.cloudflare.com` |
+| 2 | `ntp_server_2` | `0.uk.pool.ntp.org` |
+
+- **Per-slot semantics:** an absent key falls back to the built-in
+  default for that slot; a present-but-empty value skips the slot; any
+  other value is used as the user's hostname. To run a single custom
+  server, set slot 0 and leave slots 1 and 2 empty.
+- **Requires `CONFIG_LWIP_SNTP_MAX_SERVERS=3`** in `sdkconfig.defaults`
+  (currently `1`). Changing `sdkconfig.defaults` does not take effect
+  until `sdkconfig.single_mcu` (and ideally `.pio/build/single_mcu`) is
+  deleted before the rebuild.
+- **Retry on NTP failure:** backoff 1 min -> 5 min -> 15 min -> 1 h cap.
+  A new `EVENT_NETWORK_CONNECTED` cancels the pending backoff and
+  resyncs immediately. Periodic resync is left to IDF's built-in 1 h
+  cycle (`CONFIG_LWIP_SNTP_UPDATE_DELAY`); `svc_time` adds no `esp_timer`
+  of its own.
+- **Timezone storage:** NVS key `tz` in namespace `time`, holding a POSIX
+  TZ string; default `GMT0` with a warning log when the key is absent.
+  POSIX TZ strings only -- the web UI translates an IANA zone to POSIX
+  and may store an optional `ntp_region` key for display; that UI arrives
+  with `svc_http`.
+- **Known IDF limitation (IDFGH-18398):** on a timeout SNTP may retry the
+  same server instead of advancing to the next index, so the three-slot
+  fallback is **best-effort, not a guarantee**.
 
 The `hal_rtc.h` timezone contract comment records the same decision at
 the HAL boundary, so a future contributor editing the driver cannot
@@ -141,6 +178,17 @@ Verify each against hardware or datasheet before fixing.
     Kconfig entries. Leave the entries in place for now (removing them
     changes the menuconfig menu tree and would need a migration note);
     either delete them or wire them into the HAL in a future PR.
+
+**Resolved**
+
+- **Event bus had no consumer** (found 2026-10-11, fixed 2026-10-14 by
+  PR 5a). Every `event_bus_publish()` landed in the 32-slot kernel event
+  queue with no reader, so the queue filled in ~32 s and the
+  evict-oldest path in `event_bus_publish()` discarded entries --
+  typically the 1 Hz `EVENT_BOOT_HEALTH`. Observed on hardware as a
+  climbing drop count (400+ drops in 7 minutes). The kernel-owned
+  `event_dispatch_task`, created first in `core_os_start()`, now drains
+  the queue; subscriber fan-out is deferred to PR 5b.
 
 ---
 

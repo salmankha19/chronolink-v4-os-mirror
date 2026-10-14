@@ -39,8 +39,12 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    6. `HAL_Init()` — see below. Failure aborts boot (returns -1).
    7. `core_os_init()` — creates the event bus and state queue,
       initialises the display manager.
-   8. Publish stage events, call `core_os_start()` (starts tasks),
-      publish `HANDOFF` and `READY`.
+   8. Publish stage events, call `core_os_start()`, publish `HANDOFF`
+      and `READY`. `core_os_start()` creates the kernel event-bus
+      dispatcher (`event_dispatch_task`) **first**, before `state_q`,
+      `core0_task` and `core1_task`, so the stage events published
+      around this step are drained instead of being evicted from the
+      32-slot queue.
 
 4. **Back in `app_main()`:** register the built-in font, start
    `ui_producer`, start `svc_network` (non-fatal), optional audio test,

@@ -95,6 +95,29 @@ void core_os_init(boot_flags_t boot_flags)
 }
 
 /* --------------------------------------------------------------------------
+ * Event bus dispatcher task
+ *
+ * Drains the kernel event queue. Nothing consumed the bus before this task,
+ * so the 32-slot queue filled up and event_bus_publish() evicted its oldest
+ * entries (typically the 1 Hz heartbeat). Drain-only for now: each event is
+ * logged at DEBUG level. Subscriber fan-out (queue-forward) arrives in
+ * PR 5b together with svc_time.
+ * -------------------------------------------------------------------------- */
+static void event_dispatch_task(void *arg)
+{
+    (void)arg;
+    event_t e;
+
+    ESP_LOGI(TAG, "event_dispatch_task started");
+
+    for (;;) {
+        if (event_bus_receive(&e, portMAX_DELAY)) {
+            ESP_LOGD(TAG, "event type=%d", (int)e.type);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
  * State queue dispatcher task
  *
  * Reads os_state_msg_t items from g_state_queue and forwards them to the
@@ -159,7 +182,24 @@ void core_os_start(void)
         return;
     }
 
-    /* Start the state queue dispatcher first so posted events are handled */
+    /* Start the event bus dispatcher first. The heartbeat timer is already
+       running (started in core_os_init) and boot_manager publishes the
+       boot-stage and READY events around this call, so an undrained queue
+       would evict its oldest entries. Created before state_q/core0/core1 so
+       the queue is drained from the first event onward. */
+    BaseType_t res_evt = xTaskCreatePinnedToCore(event_dispatch_task,
+                                                 "event_disp",
+                                                 3072,
+                                                 NULL,
+                                                 tskIDLE_PRIORITY + 4,
+                                                 NULL,
+                                                 0); /* pin to core 0 */
+    if (res_evt != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create event_dispatch_task: res=%ld", (long)res_evt);
+        return;
+    }
+
+    /* Start the state queue dispatcher next so posted events are handled */
     BaseType_t res_state = xTaskCreatePinnedToCore(state_queue_task,
                                                    "state_q",
                                                    4096,
