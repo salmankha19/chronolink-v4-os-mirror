@@ -36,7 +36,7 @@ current behaviour.
 | Header | Functions | Notes |
 |---|---|---|
 | `display_api.h` | `display_init`, `display_deinit`, `display_clear`, `display_draw_pixel`, `display_fill`, `display_draw_text`, `display_get_width`, `display_get_height`, `display_set_brightness` | Colors are 24-bit `0xRRGGBB`. Text uses `font_engine` with the built-in 8×8 font, fixed white. **`display_set_brightness` always returns `false`** (no backlight PWM in HAL) |
-| `rtc_api.h` | `rtc_init`, `rtc_get_time`, `rtc_set_time`, `rtc_has_lost_power`, `rtc_clear_lost_power_flag` | Check `rtc_has_lost_power` once at boot; if set, treat the time as untrusted until an NTP sync runs |
+| `rtc_api.h` | `hil_rtc_init`, `hil_rtc_get_time`, `hil_rtc_set_time`, `hil_rtc_has_lost_power`, `hil_rtc_clear_lost_power_flag` | Check `hil_rtc_has_lost_power` once at boot; if set, treat the time as untrusted until an NTP sync runs |
 | `sensor_api.h` | `sensor_get_temperature`, `sensor_get_humidity`, `sensor_get_pressure`, `sensor_get_light` | Returns `false` when no sensor provides the quantity or the read fails; `*out` is set to 0 on failure. Each call triggers a full sensor read |
 | `audio_api.h` | `audio_init`, `audio_deinit`, `audio_play_pcm`, `audio_set_volume`, `audio_is_playing`, `audio_play_mp3` | **`audio_play_mp3` always returns `false`** (no decoder exists). Volume is a no-op in the HAL |
 | `gpio_api.h` | `gpio_init`, `gpio_write`, `gpio_read` | Raw digital pins |

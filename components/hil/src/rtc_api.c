@@ -3,16 +3,20 @@
  *
  * Thin adapter over chronolink_hal's HAL_RTC_* (hal_rtc.h /
  * hal_rtc_ds3231m.c -- the production-quality DS3231M driver).
+ *
+ * Every entry point is hil_rtc_*-prefixed: the unprefixed rtc_* names
+ * collide with IDF-internal symbols (esp_hw_support's rtc_init), which
+ * PR 5b-2 hit at link time.
  */
 #include "rtc_api.h"
 #include "hal_rtc.h"
 
-bool rtc_init(void)
+bool hil_rtc_init(void)
 {
     return HAL_RTC_Init() == HAL_OK;
 }
 
-bool rtc_get_time(rtc_time_t *t)
+bool hil_rtc_get_time(rtc_time_t *t)
 {
     if (!t) return false;
     hal_time_t ht;
@@ -27,7 +31,7 @@ bool rtc_get_time(rtc_time_t *t)
     return true;
 }
 
-bool rtc_set_time(const rtc_time_t *t)
+bool hil_rtc_set_time(const rtc_time_t *t)
 {
     if (!t) return false;
     hal_time_t ht = {
@@ -41,13 +45,13 @@ bool rtc_set_time(const rtc_time_t *t)
     return HAL_RTC_SetTime(&ht) == HAL_OK;
 }
 
-bool rtc_has_lost_power(bool *lost_power)
+bool hil_rtc_has_lost_power(bool *lost_power)
 {
     if (!lost_power) return false;
     return HAL_RTC_HasLostPower(lost_power) == HAL_OK;
 }
 
-bool rtc_clear_lost_power_flag(void)
+bool hil_rtc_clear_lost_power_flag(void)
 {
     return HAL_RTC_ClearLostPowerFlag() == HAL_OK;
 }

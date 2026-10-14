@@ -18,7 +18,7 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `display_manager`, `ui_producer`, `font_engine`, `font`, `remote_bridge` | Logic and engines |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `display_manager`, `ui_producer`, `font_engine`, `font`, `remote_bridge` | Logic and engines |
 | 6 | Application | `main/` (UI code lives here today), future `src/app/*` | UI, display cycle, web config, theme |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
@@ -54,6 +54,7 @@ flowchart TB
         DM[display_manager]
         UIP[ui_producer]
         NET[svc_network]
+        TIME[svc_time]
         SM[state_manager]
         FE[font_engine / font]
     end
@@ -77,6 +78,8 @@ flowchart TB
     CORE --> EB
     CORE --> DM
     DM --> HALC
+    TIME --> HILC
+    TIME --> EB
     HILC --> HALC
     HILC --> FE
     HALC --> SDK
@@ -87,9 +90,10 @@ flowchart TB
 ## 4. Runtime model
 
 - `app_main()` (`main/main.c`) calls `boot_manager_init(0)`, registers
-  the built-in 8x8 font, starts `ui_producer`, then starts
-  `svc_network` (non-fatal if Wi-Fi fails; the clock keeps running from
-  the RTC).
+  the built-in 8x8 font, starts `ui_producer`, starts `svc_time` (RTC +
+  NTP; it must be up before anything can publish
+  `EVENT_NETWORK_CONNECTED`), then starts `svc_network` (non-fatal if
+  Wi-Fi fails; the clock keeps running from the RTC).
 - `core_os_init()` creates the event bus and calls
   `display_manager_init()`.
 - `core_os_start()` starts with a kernel-owned `event_dispatch_task`
@@ -98,8 +102,12 @@ flowchart TB
   boot-stage events published around this call are not evicted from the
   32-slot queue. Subscriber fan-out (queue-forward) exists as of PR 5b-1:
   `event_bus_dispatch()` forwards matching events to registered
-  subscriber queues. No subscriber is registered yet; `svc_time`
-  becomes the first in PR 5b-2.
+  subscriber queues. `svc_time` registers the first subscriber
+  (`EVENT_NETWORK_CONNECTED`, PR 5b-2).
+- `svc_time_start()` subscribes to `EVENT_NETWORK_CONNECTED` and runs NTP
+  on its own worker task; a failed sync is retried by an `esp_timer`
+  backoff (1 min -> 5 min -> 15 min -> 1 h). Only UTC is ever written to
+  the RTC; local time is derived at read time from the POSIX TZ rule.
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.

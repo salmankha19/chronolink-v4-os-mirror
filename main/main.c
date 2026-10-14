@@ -7,7 +7,9 @@
  *   1. boot_manager_init()  — NVS, FATFS, HAL, Core OS
  *   2. font_engine_register() — Register built-in 8×8 font (id = 0)
  *   3. ui_producer_start()  — Start declarative UI frame producer
- *   4. audio_test_init()    — Initialize audio (if enabled)
+ *   4. svc_time_start()     — RTC + NTP time service (first event-bus subscriber)
+ *   5. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
+ *   6. audio_test_init()    — Initialize audio (if enabled)
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -17,6 +19,7 @@
 #include "ui_producer.h"
 #include "font_engine.h"
 #include "font_builtin_8x8.h"
+#include "svc_time.h"
 #include "svc_network.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
@@ -40,6 +43,15 @@ void app_main(void)
     font_engine_register(&FONT_BUILTIN_8X8);
 
     ui_producer_start();
+
+    /* svc_time subscribes to EVENT_NETWORK_CONNECTED, so it has to be up
+       before svc_network can publish one. Non-fatal: without a network (or
+       without an RTC) the clock still runs, it just is not NTP-synced. */
+    esp_err_t time_err = svc_time_start();
+    if (time_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_time_start failed: %s -- continuing without NTP",
+                 esp_err_to_name(time_err));
+    }
 
     /* svc_network is non-fatal: no AP reachable still leaves the clock
        running off the RTC. Errors surface via EVENT_NETWORK_ERROR. */
