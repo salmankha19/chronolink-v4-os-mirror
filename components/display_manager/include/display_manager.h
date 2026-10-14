@@ -13,7 +13,7 @@ extern "C" {
  * Display Manager — ChronoLink V4 OS
  *
  * Declarative frame executor. Producers (Core 0 / services) build lightweight
- * dm_frame_t descriptors and submit them to a lock-free queue. The consumer
+ * dm_frame_t descriptors and submit them to a mutex-guarded queue. The consumer
  * (Core 1 / core1_task) calls display_manager_process_frame() at ~60 Hz to
  * dequeue and execute commands via HAL_GFX.
  *
@@ -24,7 +24,11 @@ extern "C" {
  * -------------------------------------------------------------------------- */
 
 #define DM_MAX_CMDS_PER_FRAME 16
-#define DM_MAX_TEXT_LEN       8
+/* Room for "HH:MM:SS" (8 chars) plus the terminating NUL = 9 bytes minimum;
+   16 leaves headroom for a longer face (date, AM/PM). Must stay > 8: at 8 an
+   8-char text has no room for the NUL, and font_engine_draw_text() walks the
+   string until it finds one. */
+#define DM_MAX_TEXT_LEN       16
 #define DM_MAX_ICONS          16
 #define DM_FRAME_QUEUE_DEPTH  3   /* triple-buffer + 1 spare */
 
@@ -81,6 +85,14 @@ typedef struct {
 void display_manager_init(void);
 void display_manager_process_frame(void);
 void display_manager_clear_queue(void);
+
+/* --------------------------------------------------------------------------
+ * Diagnostics
+ * -------------------------------------------------------------------------- */
+
+/* Frames dequeued and executed by display_manager_process_frame() since boot.
+   A snapshot: the counter may advance between two reads. */
+uint32_t display_manager_frames_dispatched(void);
 
 /* --------------------------------------------------------------------------
  * Producer API (safe from any task / core)
@@ -177,9 +189,11 @@ static inline void dm_cmd_draw_text(dm_cmd_t *c, int16_t x, int16_t y,
     c->arg.text.x = x; c->arg.text.y = y;
     c->arg.text.color = color;
     c->arg.text.font_id = font_id;
-    for (int i = 0; i < DM_MAX_TEXT_LEN; i++) {
+    for (int i = 0; i < DM_MAX_TEXT_LEN - 1; i++) {
         c->arg.text.text[i] = (text && text[i]) ? text[i] : '\0';
     }
+    /* The loop stops one short of the buffer so the terminator always fits. */
+    c->arg.text.text[DM_MAX_TEXT_LEN - 1] = '\0';
 }
 
 static inline void dm_cmd_blit_icon(dm_cmd_t *c, int16_t x, int16_t y, uint16_t icon_id) {
