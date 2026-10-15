@@ -196,6 +196,17 @@ void HAL_GFX_Blit(const hal_gfx_color_t *src,
                   int16_t src_x, int16_t src_y,
                   int16_t src_w_clip, int16_t src_h_clip);
 
+/* Scale-blit an RGB565 source bitmap into the active clip rect using
+   nearest-neighbour sampling. dst is (dst_x, dst_y, dst_w, dst_h);
+   each destination pixel reads exactly one source pixel. No
+   anti-aliasing. Used by the scalable-font path (font_engine) and by
+   any future scaled icon. Respects the current clip rect set by
+   HAL_GFX_SetClip(). */
+void HAL_GFX_BlitScaled(const hal_gfx_color_t *src,
+                        int16_t src_w, int16_t src_h,
+                        int16_t dst_x, int16_t dst_y,
+                        int16_t dst_w, int16_t dst_h);
+
 #ifdef __cplusplus
 }
 #endif

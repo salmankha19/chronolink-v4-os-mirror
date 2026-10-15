@@ -394,3 +394,46 @@ void HAL_GFX_Blit(const hal_gfx_color_t *src,
         }
     }
 }
+
+void HAL_GFX_BlitScaled(const hal_gfx_color_t *src,
+                        int16_t src_w, int16_t src_h,
+                        int16_t dst_x, int16_t dst_y,
+                        int16_t dst_w, int16_t dst_h)
+{
+    if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
+
+    int16_t x1 = dst_x,             y1 = dst_y;
+    int16_t x2 = dst_x + dst_w - 1, y2 = dst_y + dst_h - 1;
+    if (x1 < s_clip.x)                  x1 = s_clip.x;
+    if (y1 < s_clip.y)                  y1 = s_clip.y;
+    if (x2 > s_clip.x + s_clip.w - 1)   x2 = s_clip.x + s_clip.w - 1;
+    if (y2 > s_clip.y + s_clip.h - 1)   y2 = s_clip.y + s_clip.h - 1;
+    if (x1 > x2 || y1 > y2) return;
+
+    int16_t out_w = x2 - x1 + 1;
+    int16_t out_h = y2 - y1 + 1;
+
+    for (int16_t row = 0; row < out_h; ++row) {
+        int16_t dst_row = y1 + row;
+        int32_t src_row = ((int32_t)(dst_row - dst_y) * src_h) / dst_h;
+        if (src_row >= src_h) src_row = src_h - 1;
+        const hal_gfx_color_t *src_line = src + src_row * src_w;
+
+        int16_t remaining = out_w;
+        int16_t blit_x = x1;
+        while (remaining > 0) {
+            int16_t chunk = remaining > HAL_GFX_MAX_ROW_BUF
+                            ? HAL_GFX_MAX_ROW_BUF : remaining;
+            for (int16_t i = 0; i < chunk; ++i) {
+                int32_t src_col =
+                    ((int32_t)(blit_x + i - dst_x) * src_w) / dst_w;
+                if (src_col >= src_w) src_col = src_w - 1;
+                s_row_buf[i] = HAL_GFX_ColorToBackend24(src_line[src_col]);
+            }
+            HAL_Display_BlitRow((uint16_t)blit_x, (uint16_t)dst_row,
+                                s_row_buf, (uint16_t)chunk);
+            remaining -= chunk;
+            blit_x    += chunk;
+        }
+    }
+}
