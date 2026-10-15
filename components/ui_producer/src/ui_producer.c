@@ -1,7 +1,7 @@
 /*
  * ui_producer.c
  *
- * ChronoLink V4 OS -- live clock face (HH:MM:SS)
+ * ChronoLink V4 OS -- live clock face (H:MM AM/PM)
  *
  * Application band (layer 6, Constitution section 11): this file owns UI and
  * display logic, uses the svc_time service, and never calls the HAL directly.
@@ -9,7 +9,7 @@
  * Design: poll, do not subscribe. The face is a consumer of the clock, so it
  * calls svc_time_get_snapshot() from its own task -- svc_time.h licenses the
  * getters from any task -- and renders only when the formatted local
- * HH:MM:SS changes. See docs/pr6-preflight.md sections 1 and 3 for the full
+ * H:MM AM/PM changes. See docs/pr6-preflight.md sections 1 and 3 for the full
  * reasoning.
  *
  *   - 250 ms poll. Bounds the display lag to <250 ms and removes the 1 Hz
@@ -20,9 +20,10 @@
  *     frame per second reaches the 3-slot queue and it cannot fill.
  *   - Clear the screen on the first frame only. A full-screen DM_CMD_CLEAR
  *     costs ~15-20 ms of DMA and lazily allocates the driver's 8 kB fill
- *     buffer, so it happens once; every later frame erases just the 64x8 text
- *     bounding box (font_engine plots lit pixels only, so without the erase
- *     the previous digits bleed through).
+ *     buffer, so it happens once. Each frame contains two DM_CMD_DRAW_TEXT_SCALED
+ *     commands (time and meridiem). No per-frame erase: each scaled glyph
+ *     blit paints its full rect including background. A single full-screen
+ *     clear runs on the first frame only.
  *
  * The submit runs in this task, never in an esp_timer callback or the kernel
  * dispatcher: display_manager_submit_frame() can block for ~10 ms worst case
@@ -42,7 +43,9 @@
 
 static const char *TAG = "ui_producer";
 
-/* Layout: portrait 320x480, built-in 8x8 font (id 0). 8 glyphs = 64 px wide. */
+/* Layout: portrait 320x480, font_id 1 (FONT_UI_SANS, RGB565); font_id 0
+   (FONT_BUILTIN_8X8) remains the mono path for 1-bit panels.
+   8 glyphs = 64 px wide. */
 #define UI_CLOCK_X 128   /* (320 - 8*8) / 2 */
 #define UI_CLOCK_Y 232
 

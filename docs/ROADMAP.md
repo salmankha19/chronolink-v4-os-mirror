@@ -19,7 +19,7 @@ dependency, not by promise of a date.
 | Network | WiFi station connects and gets an IP; on the guest network NTP is reachable and a sync completes. |
 | Event bus | `event_dispatch_task` drains the kernel queue; `event_bus_subscribe()` fans out per type (8 subscriber slots). |
 | `svc_time` | First event-bus subscriber. NTP syncs, the DS3231M write path soft-fails on a bare devkit, POSIX TZ (default UK `GMT0BST,M3.5.0/1,M10.5.0`), 1 Hz tick on the snapshot, publishes `EVENT_TIME_UPDATE`. |
-| `ui_producer` | 250 ms poll task on core 0; builds a 3-command `dm_frame_t` (clear / fill_rect / draw_text) only when the local `HH:MM:SS` changes, then submits it. |
+| `ui_producer` | 250 ms poll task on core 0; builds a 2-command `dm_frame_t` (draw_text_scaled for time, draw_text_scaled for AM/PM) only when the rendered local `H:MM AM/PM` changes, then submits it. First frame adds a one-time clear. |
 | `display_manager` | Frame queue plus frame counter (`display_manager_frames_dispatched()`). Frames dispatch at 1 Hz on the devkit and the counter advances -- verified on hardware against the PR 6 boot log. |
 | Panel | None wired. The ST7796S HAL initialises, RDDID returns all-zero (non-fatal by design), frames write into the void: no crash, no log spam. |
 | CI | Two jobs (`PlatformIO build (single_mcu)`, then `ESP-IDF build (esp32s3)`). Artifacts upload only on tag pushes and manual dispatch (`retention-days: 7`), so ordinary push/PR runs leave no artifact storage behind. |
@@ -39,10 +39,13 @@ Goal: pixels on a real ST7796S panel.
 - Wire the panel to the devkit, or wait for the assembled PCB.
 - Verify the frame path renders. No code change expected: the queue, the
   command set and the GFX path are already exercised end to end.
-- Clock face design: digits larger than the current 8x8 glyphs
-  (`FONT_BUILTIN_8X8`, id 0, is the only registered font); consider the
-  date, the next-prayer name, a countdown.
-- Deliverable: the wall clock shows `HH:MM:SS` in a font readable from
+- Clock face design: PR 8 landed the scalable RGB565 font pipeline
+  (`HAL_GFX_BlitScaled`, `FONT_FORMAT_RGB565` in `font_engine`,
+  `DM_CMD_DRAW_TEXT_SCALED`, `FONT_UI_SANS` placeholder). Digit size
+  and layout are panel-derived. Full-panel visual verification waits
+  on the ST7796S panel being wired to the devkit, and on the real
+  Inter SemiBold TTF replacing the placeholder.
+- Deliverable: the wall clock shows `H:MM AM/PM` in a font readable from
   across the room.
 
 Prerequisite PRs: none. All plumbing exists.

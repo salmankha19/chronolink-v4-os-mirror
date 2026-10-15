@@ -156,9 +156,16 @@ the flag controls whether the driver is *registered* at boot.
 | RTC | `hal_rtc.h` | DS3231M: get/set time, oscillator-stop (battery loss) detection and clear. Soft-fails at init if absent |
 | Display | `hal_display.h` | Router + backends - see below |
 | Graphics | `hal_gfx.h` | Clipped primitives (lines, rects, circles, round rects, blit) over the display router, RGB565 API. Lives here for now; planned to move out |
+| Font | `font_engine.h`, `font_ui_sans.h`, `font_builtin_8x8.h` | Runtime registry (FE_MAX_FONTS = 6). Two formats: `FONT_FORMAT_MONO_1BPP` (1-bit panels, per-pixel draw) and `FONT_FORMAT_RGB565` (colour panels, row blit via `HAL_GFX_BlitScaled`, scalable to a target height). Both first-class. `FONT_BUILTIN_8X8` (id 0) is the reference mono font. `FONT_UI_SANS` (id 1) is a placeholder RGB565 font pending the project TTF (Inter SemiBold, SIL OFL). `font_engine_draw_text()` renders MONO; `font_engine_draw_text_scaled()` renders RGB565. |
 | Sensors | `hal_sensors.h` | Registry of up to 4 drivers; legacy aggregate read plus read-by-name and read-all |
 | Audio | `hal_audio.h` | MAX98357A over I2S, 44.1 kHz mono 16-bit, blocking play. Volume is a no-op (the amp has analog gain only) |
 | Driver SDK | `chronolink_driver_sdk.h` | Register one custom display driver at runtime |
+
+Both panel families reach text through the font layer; the format
+chosen (mono vs RGB565) is determined by the panel's native
+capability, not by which fonts happen to be registered. The
+ST7796S backend correctly declines `HAL_CAP_TEXT`; use the font
+layer for real text rendering on any panel.
 
 ### Display router
 

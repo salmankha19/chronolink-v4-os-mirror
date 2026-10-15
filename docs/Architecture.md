@@ -114,9 +114,22 @@ flowchart TB
 - `ui_producer` runs one task on core 0 (`ui_prod`, `tskIDLE_PRIORITY + 2`,
   3072 B stack) that wakes every 250 ms, reads `svc_time_get_snapshot()`,
   and submits a clock frame through `display_manager_submit_frame()` only
-  when the formatted local `HH:MM:SS` changes. The first frame adds a
-  full-screen clear; later frames erase just the 64x8 text bounding box.
+  when the formatted local `H:MM AM/PM` changes. Each frame carries two
+  `DM_CMD_DRAW_TEXT_SCALED` commands (time, meridiem). The first frame
+  adds a full-screen clear; later frames need no per-frame erase because
+  each scaled glyph blit paints its full rect including background.
   Rendering on change keeps the 3-slot frame queue from filling.
+
+Two font formats, two panel families: `FONT_FORMAT_MONO_1BPP`
+(per-pixel draw; `FONT_BUILTIN_8X8`, id 0) is the correct
+representation for 1-bit panels such as MAX7219 and dot-matrix, and
+`FONT_FORMAT_RGB565` (row blit via `HAL_GFX_BlitScaled`, scaled to a
+panel-derived target height; `FONT_UI_SANS`, id 1, a placeholder
+pending the project TTF -- Inter SemiBold, SIL OFL) serves colour
+panels. The mono path is unchanged. The ST7796S backend correctly
+declines text; the font layer is the sanctioned text path for both
+panel families.
+
 - In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
   service tasks.
 

@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-14 at commit `e109e70`. Update this file in
+Snapshot reviewed 2026-10-15 at commit `6c7637a` (PR 8 in flight). Update this file in
 the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
@@ -53,6 +53,13 @@ not.** Where another doc mentions a gap, this file has the detail.
   formatted local `HH:MM:SS` changes. The full-screen clear is first-frame
   only; later frames are fill_rect + draw_text. The old placeholder (which
   only called `display_manager_init()`) is gone.
+- **Scalable time face (PR 8):** `ui_producer` renders `H:MM AM/PM`
+  via `font_engine`'s new `FONT_FORMAT_RGB565` path. `HAL_GFX_BlitScaled`
+  is a new HAL primitive; `FONT_UI_SANS` (id 1) is a placeholder RGB565
+  font pending a project TTF (Inter SemiBold, SIL OFL). Layout is
+  panel-derived (fits width and height). The mono `FONT_FORMAT_MONO_1BPP`
+  path is unchanged and remains the correct representation for 1-bit
+  panels (MAX7219, dot-matrix).
 
 ---
 
@@ -161,7 +168,7 @@ contract.
 | `HAL_Audio_SetVolume` | returns `HAL_ERR_DEV`, does nothing |
 | `display_set_brightness` | always returns `false` |
 | `audio_play_mp3` | always returns `false` |
-| ST7796S `write_text` | not implemented in backend |
+| ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
 | `src/app/*`, `src/svc/*` | empty placeholders; **not built** (`platformio.ini` sets `src_dir = main`) |
 | Prayer engine, scheduler, config service, theme registry, web config | do not exist |
 | SD card | pin defined, no driver |
