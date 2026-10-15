@@ -151,9 +151,11 @@ static const uint8_t font_builtin_8x8_data[] = {
 
 const font_desc_t FONT_BUILTIN_8X8 = {
     .id         = 0,
-    .glyph_w    = 8,
-    .glyph_h    = 8,
     .first_char = 32,
     .last_char  = 95,
+    .format     = FONT_FORMAT_MONO_1BPP,
+    .script     = FONT_SCRIPT_LATIN,
+    .glyph_w    = 8,
+    .glyph_h    = 8,
     .bitmap     = font_builtin_8x8_data,
 };

@@ -11,7 +11,7 @@
  * Notes:
  *   - No heap allocation.
  *   - Bitmap must reside in flash (.rodata).
- *   - Linear search of the registry is acceptable for FE_MAX_FONTS <= 4.
+ *   - Linear search of the registry is acceptable for FE_MAX_FONTS <= 6.
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -26,8 +26,22 @@ static bool        s_slot_used[FE_MAX_FONTS];
 
 bool font_engine_register(const font_desc_t *desc)
 {
-    if (!desc || !desc->bitmap || desc->glyph_w == 0 || desc->glyph_h == 0) {
+    if (!desc) {
         ESP_LOGE(TAG, "Invalid font descriptor");
+        return false;
+    }
+    if (desc->format == FONT_FORMAT_MONO_1BPP) {
+        if (!desc->bitmap || desc->glyph_w == 0 || desc->glyph_h == 0) {
+            ESP_LOGE(TAG, "Invalid MONO_1BPP font descriptor");
+            return false;
+        }
+    } else if (desc->format == FONT_FORMAT_RGB565) {
+        if (!desc->glyphs || !desc->pixels || desc->native_h == 0) {
+            ESP_LOGE(TAG, "Invalid RGB565 font descriptor");
+            return false;
+        }
+    } else {
+        ESP_LOGE(TAG, "Unknown font format %d", (int)desc->format);
         return false;
     }
 
@@ -35,9 +49,15 @@ bool font_engine_register(const font_desc_t *desc)
         if (!s_slot_used[i]) {
             s_fonts[i] = *desc;
             s_slot_used[i] = true;
-            ESP_LOGI(TAG, "Registered font id=%d %dx%d range %d..%d",
-                     desc->id, desc->glyph_w, desc->glyph_h,
-                     desc->first_char, desc->last_char);
+            if (desc->format == FONT_FORMAT_MONO_1BPP) {
+                ESP_LOGI(TAG, "Registered MONO font id=%d %dx%d range %d..%d",
+                         desc->id, desc->glyph_w, desc->glyph_h,
+                         desc->first_char, desc->last_char);
+            } else {
+                ESP_LOGI(TAG, "Registered RGB565 font id=%d native_h=%d range %d..%d",
+                         desc->id, desc->native_h,
+                         desc->first_char, desc->last_char);
+            }
             return true;
         }
     }
@@ -94,4 +114,47 @@ void font_engine_draw_text(int16_t x, int16_t y, hal_gfx_color_t color,
         }
         cursor_x += w;
     }
+}
+
+void font_engine_draw_text_scaled(int16_t x, int16_t y,
+                                  uint8_t font_id,
+                                  uint16_t target_h,
+                                  const char *text,
+                                  int16_t *out_end_x)
+{
+    if (out_end_x) *out_end_x = x;
+    if (!text) return;
+
+    const font_desc_t *f = NULL;
+    for (int i = 0; i < FE_MAX_FONTS; i++) {
+        if (s_slot_used[i] && s_fonts[i].id == font_id) {
+            f = &s_fonts[i]; break;
+        }
+    }
+    if (!f || f->format != FONT_FORMAT_RGB565 || !f->glyphs || !f->pixels) {
+        ESP_LOGW(TAG, "draw_text_scaled: font id=%d not RGB565", font_id);
+        return;
+    }
+    if (target_h == 0) target_h = f->native_h;
+    if (target_h == 0) return;
+
+    int16_t cursor_x = x;
+    for (const char *p = text; *p; ++p) {
+        uint8_t ch = (uint8_t)*p;
+        if (ch < f->first_char || ch > f->last_char) {
+            cursor_x += target_h / 2; continue;
+        }
+        const font_glyph_t *g = &f->glyphs[ch - f->first_char];
+        if (g->w == 0) { cursor_x += target_h / 2; continue; }
+
+        int16_t dst_w = (int16_t)(((uint32_t)g->w * target_h) / f->native_h);
+        if (dst_w <= 0) dst_w = 1;
+
+        HAL_GFX_BlitScaled(&f->pixels[g->offset],
+                           (int16_t)g->w, (int16_t)f->native_h,
+                           cursor_x, y,
+                           dst_w, (int16_t)target_h);
+        cursor_x += dst_w;
+    }
+    if (out_end_x) *out_end_x = cursor_x;
 }
