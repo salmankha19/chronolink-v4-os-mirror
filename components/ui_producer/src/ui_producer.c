@@ -38,6 +38,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "font_ui_sans.h"
+
 static const char *TAG = "ui_producer";
 
 /* Layout: portrait 320x480, built-in 8x8 font (id 0). 8 glyphs = 64 px wide. */
@@ -86,14 +88,33 @@ static void ui_producer_task(void *arg)
 
         /* local already carries the POSIX TZ / DST rule applied by svc_time. */
         char buf[16];
-        snprintf(buf, sizeof buf, "%02u:%02u:%02u",
-                 (unsigned)snap.local.hours,
-                 (unsigned)snap.local.minutes,
-                 (unsigned)snap.local.seconds);
+        int h12 = snap.local.hours % 12;
+        if (h12 == 0) h12 = 12;
+        const char *mer = (snap.local.hours < 12) ? "AM" : "PM";
+        snprintf(buf, sizeof buf, "%d:%02d%s",
+                 h12, (unsigned)snap.local.minutes, mer);
 
         if (strcmp(buf, s_last_text) == 0) {
             continue;
         }
+
+        int W = HAL_GFX_GetDisplayWidth();
+        int H = HAL_GFX_GetDisplayHeight();
+        /* Fit H:MM within 80% of panel width. The real (Inter SemiBold)
+           font's digits are ~2:3 (w:h) and the colon ~1:3, so H:MM
+           spans about 3 × target_h. Panel height bounds the size too:
+           5/16 of H is the designed proportion. Take the smaller.
+           The RGB565 placeholder's glyphs are square (8x8 native), so
+           they overflow this box until the real font is generated;
+           the pipeline still executes and clips cleanly. */
+        uint16_t target_h_by_h = (uint16_t)(H * 5 / 16);
+        uint16_t target_h_by_w = (uint16_t)((W * 8 / 10) / 3);
+        uint16_t target_h = (target_h_by_h < target_h_by_w)
+                            ? target_h_by_h : target_h_by_w;
+
+        char time_str[8];
+        snprintf(time_str, sizeof time_str, "%d:%02d",
+                 h12, (unsigned)snap.local.minutes);
 
         dm_frame_t frame;
         memset(&frame, 0, sizeof frame);
@@ -102,28 +123,35 @@ static void ui_producer_task(void *arg)
         uint8_t n = 0;
 
         if (first_frame) {
-            /* Erase whatever the panel held before boot; once only. */
             dm_cmd_clear(&frame.cmds[n++], UI_COLOR_BLACK);
             first_frame = false;
         }
 
-        /* The 64x8 bounding box of 8 glyphs: font_engine_draw_text() plots
-           lit pixels only, so the old digits have to be erased first. */
-        dm_cmd_fill_rect(&frame.cmds[n++], UI_CLOCK_X, UI_CLOCK_Y, 64, 8,
-                         UI_COLOR_BLACK);
-        dm_cmd_draw_text(&frame.cmds[n++], UI_CLOCK_X, UI_CLOCK_Y,
-                         UI_COLOR_WHITE, /* font_id */ 0, buf);
+        /* Width approximated from the placeholder font's native 8x8
+           aspect. A real measure pass lands with the TTF. */
+        int16_t glyph_w   = (int16_t)(target_h * 2 / 3);
+        int16_t time_w    = (int16_t)(strlen(time_str) * glyph_w);
+        int16_t badge_h   = (int16_t)(target_h / 3);
+        int16_t badge_w   = (int16_t)(badge_h * 2 / 3);
+        int16_t badge_gap = (int16_t)(target_h / 6);
+        int16_t total_w   = (int16_t)(time_w + badge_gap + badge_w);
+
+        int16_t x0 = (int16_t)((W - total_w) / 2);
+        int16_t y0 = (int16_t)((H - target_h) / 2);
+
+        dm_cmd_draw_text_scaled(&frame.cmds[n++], x0, y0,
+                                /* font_id */ 1, target_h, time_str);
+        dm_cmd_draw_text_scaled(&frame.cmds[n++],
+                                (int16_t)(x0 + time_w + badge_gap),
+                                (int16_t)(y0 + target_h - badge_h),
+                                /* font_id */ 1, badge_h, mer);
         frame.cmd_count = n;
 
-        /* Checked, never assumed: submit_frame() returns false silently when
-           the manager was never initialised, and logs when the queue is
-           full. */
         if (!display_manager_submit_frame(&frame)) {
             ESP_LOGW(TAG, "frame submit failed");
         } else {
-            /* Only a submitted frame updates the memory, so a dropped frame
-               is retried on the next poll. s_last_text[15] stays NUL. */
             strncpy(s_last_text, buf, sizeof s_last_text - 1);
+            s_last_text[sizeof(s_last_text) - 1] = '\0';
         }
     }
 }
@@ -137,6 +165,14 @@ void ui_producer_start(void)
     /* display_manager_init() is deliberately NOT called here: core_os_init()
        already initialised it, and the second call only logs "Already
        initialized". */
+
+    /* Register the scalable UI font (id 1) before the task can
+       submit any frame. font_engine_register() is idempotent on
+       a given id; a second call after a soft restart harmlessly
+       fails and is ignored. */
+    if (!font_engine_register(&FONT_UI_SANS)) {
+        ESP_LOGD(TAG, "scalable font register skipped (already registered or invalid)");
+    }
     if (xTaskCreatePinnedToCore(ui_producer_task, "ui_prod", 3072, NULL,
                                 tskIDLE_PRIORITY + 2, &s_producer_task, 0) != pdPASS) {
         ESP_LOGE(TAG, "failed to create producer task");
