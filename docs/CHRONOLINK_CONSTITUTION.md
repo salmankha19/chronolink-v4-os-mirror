@@ -25,6 +25,10 @@ orchestrator, not a layer.
 The canonical mapping of layers to components is in
 [Architecture.md](Architecture.md) section 1.
 
+Service components use the `svc_` prefix. Components predating the
+convention (`state_manager`, `remote_bridge`) are listed in
+`components/README.md` and may be renamed in a future cleanup PR.
+
 ---
 
 ## 2. Boot rules

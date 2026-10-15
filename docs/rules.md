@@ -17,6 +17,8 @@ document. Do not leave the disagreement in place.
 
 - Respect the layer order: Flash (0), PDL (1), HAL (2), HIL (3),
   Kernel (4), Services (5), Application (6). Call downward only.
+- New services prefix their component name with `svc_`. The
+  current component-to-layer mapping is in `components/README.md`.
 - FATFS on `/storage` only. Never SPIFFS or LittleFS.
 - Use valid ESP-IDF 6 component names (`log`, not `esp_log`).
 - Services and the application use `hil`; only the HAL touches
