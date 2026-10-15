@@ -18,8 +18,8 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `display_manager`, `ui_producer`, `font_engine`, `font`, `remote_bridge` | Logic and engines |
-| 6 | Application | `main/` (UI code lives here today), future `src/app/*` | UI, display cycle, web config, theme |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
+| 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/`, future `src/app/*` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
 runs once, before the kernel's tasks exist. See [boot.md](boot.md).
@@ -31,6 +31,12 @@ component.
 `src/app/*` and `src/svc/*` contain placeholder stubs. They are **not
 compiled**: `platformio.ini` sets `src_dir = main`. Treat them as
 reserved for future work, not as active code.
+
+Service components use the `svc_` prefix. The current
+component-to-layer mapping is listed in `components/README.md`.
+Components predating the prefix convention (`state_manager`,
+`remote_bridge`) are listed there and may be renamed in a future
+cleanup PR.
 
 ---
 
@@ -50,13 +56,16 @@ reserved for future work, not as active code.
 
 ```mermaid
 flowchart TB
-    subgraph SVC["Services (5)"]
+    subgraph APP["Application (6)"]
         DM[display_manager]
         UIP[ui_producer]
+        FE[font_engine / font]
+    end
+    subgraph SVC["Services (5)"]
         NET[svc_network]
         TIME[svc_time]
         SM[state_manager]
-        FE[font_engine / font]
+        RB[remote_bridge]
     end
     subgraph KERN["Kernel (4)"]
         CORE[core_os]
@@ -148,7 +157,7 @@ stay.
 | Type | Deviation | Where | Intended fix / rationale |
 |---|---|---|---|
 | Dev | Kernel calls a service (`display_manager`) | `core_os.c` | Have `display_manager` register itself with the kernel, or start it from `app_main` |
-| Dev | A service calls the HAL directly, bypassing HIL | `display_manager`, `json_display_executor` call `HAL_GFX_*` / `HAL_Display_*` | Route through a HIL graphics adapter, or formally allow services to use the display HAL |
+| Dev | The app band calls the HAL directly, bypassing HIL | `display_manager` calls `HAL_GFX_*` / `HAL_Display_*` | Route through a HIL graphics adapter, or formally allow the app band to use the display HAL |
 | Dev | `hal_gfx` (drawing primitives) lives in the HAL | `chronolink_hal/src/hal_gfx.c` | Move to its own graphics component above the HAL |
 | Exc | `boot_manager` calls `HAL_Init()` | `boot_manager.c` | Accepted exception; provisioning step only. The BOOT-pin read that used to be here was removed in `refactor/remove-boot-button` |
 | Dev | HAL reads pin settings from `main/Kconfig.projbuild` | `board_pins.h` uses `CONFIG_BOARD_*` | Move the pin Kconfig into `chronolink_hal` |
@@ -166,5 +175,8 @@ stay.
   under that flag.
 - **A new service** - new component; depend on `hil` (not
   `chronolink_hal`); talk to other services through the event bus.
+      Prefix the component name with `svc_` (e.g. `svc_config`,
+      `svc_prayer_engine`). See `components/README.md` for the full
+      component-to-layer mapping.
 - **A new HIL adapter** - a thin `bool`-returning wrapper over the HAL.
   Add hardware logic to the HAL first, then wrap it here.
