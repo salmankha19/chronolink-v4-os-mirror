@@ -48,6 +48,7 @@ typedef enum {
     DM_CMD_DRAW_ROUND_RECT,  /* arg.round_rect   */
     DM_CMD_FILL_ROUND_RECT,  /* arg.round_rect   */
     DM_CMD_DRAW_TEXT,        /* arg.text         */
+    DM_CMD_DRAW_TEXT_SCALED, /* arg.text_scaled, uses font_engine scalable path */
     DM_CMD_BLIT_ICON,        /* arg.icon         */
     DM_CMD_SET_CLIP,         /* arg.clip         */
     DM_CMD_RESET_CLIP,       /* no args          */
@@ -65,6 +66,8 @@ typedef struct {
         struct { int16_t cx, cy, r; hal_gfx_color_t color; } circle;
         struct { int16_t x, y, w, h, r; hal_gfx_color_t color; } round_rect;
         struct { int16_t x, y; hal_gfx_color_t color; uint8_t font_id; char text[DM_MAX_TEXT_LEN]; } text;
+        struct { int16_t x, y; uint8_t font_id; uint16_t target_h;
+                 char text[DM_MAX_TEXT_LEN]; } text_scaled;
         struct { int16_t x, y; uint16_t icon_id; } icon;
         struct { int16_t x, y, w, h; } clip;
         struct { uint16_t tfa, vsa, bfa; } scroll_area;
@@ -194,6 +197,20 @@ static inline void dm_cmd_draw_text(dm_cmd_t *c, int16_t x, int16_t y,
     }
     /* The loop stops one short of the buffer so the terminator always fits. */
     c->arg.text.text[DM_MAX_TEXT_LEN - 1] = '\0';
+}
+
+static inline void dm_cmd_draw_text_scaled(dm_cmd_t *c, int16_t x, int16_t y,
+                                           uint8_t font_id, uint16_t target_h,
+                                           const char *text) {
+    c->type = DM_CMD_DRAW_TEXT_SCALED;
+    c->arg.text_scaled.x = x;
+    c->arg.text_scaled.y = y;
+    c->arg.text_scaled.font_id = font_id;
+    c->arg.text_scaled.target_h = target_h;
+    for (int i = 0; i < DM_MAX_TEXT_LEN - 1; i++) {
+        c->arg.text_scaled.text[i] = (text && text[i]) ? text[i] : '\0';
+    }
+    c->arg.text_scaled.text[DM_MAX_TEXT_LEN - 1] = '\0';
 }
 
 static inline void dm_cmd_blit_icon(dm_cmd_t *c, int16_t x, int16_t y, uint16_t icon_id) {

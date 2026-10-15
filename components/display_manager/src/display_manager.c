@@ -169,6 +169,15 @@ static void dm_execute_cmd(const dm_cmd_t *cmd)
                               cmd->arg.text.text);
         break;
 
+    case DM_CMD_DRAW_TEXT_SCALED:
+        font_engine_draw_text_scaled(cmd->arg.text_scaled.x,
+                                     cmd->arg.text_scaled.y,
+                                     cmd->arg.text_scaled.font_id,
+                                     cmd->arg.text_scaled.target_h,
+                                     cmd->arg.text_scaled.text,
+                                     NULL);
+        break;
+
     case DM_CMD_NOP:
     default:
         break;
