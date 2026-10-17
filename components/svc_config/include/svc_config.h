@@ -42,15 +42,17 @@ extern "C" {
 /* Capacity of location_name including the terminating NUL. */
 #define SVC_CONFIG_NAME_MAX 64
 
-/* V3-compatible calculation method IDs. 0..3 match the V3 web UI;
-   4 (Umm al-Qura) is new. */
+/* Calculation method IDs. Values 0..4 match svc_prayer_method_t
+   exactly; 5 (Jafaria) is a distinct method that maps 1:1 through
+   the service layer. */
 typedef enum {
     SVC_CONFIG_METHOD_MWL         = 0,
     SVC_CONFIG_METHOD_ISNA        = 1,
     SVC_CONFIG_METHOD_EGYPTIAN    = 2,
     SVC_CONFIG_METHOD_KARACHI     = 3,
     SVC_CONFIG_METHOD_UMM_AL_QURA = 4,
-    SVC_CONFIG_METHOD_COUNT       = 5,
+    SVC_CONFIG_METHOD_JAFARIA     = 5,  /* Shia Ithna-Ashari */
+    SVC_CONFIG_METHOD_COUNT       = 6,
 } svc_config_method_t;
 
 typedef enum {

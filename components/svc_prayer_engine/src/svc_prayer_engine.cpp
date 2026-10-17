@@ -17,13 +17,30 @@ extern "C" {
 
 static uint32_t hours_to_sec(double h)
 {
-    if (!isfinite(h)) return 0;
+    // Use isnan() not isfinite(): on this picolibc build, isfinite(NaN)
+    // returns true, so !isfinite() would miss NaN and hit the UB cast
+    // (uint32_t)NaN below. isnan() is proven working (PR 16).
+    if (isnan(h)) return 0;
     // Do not wrap to 24h. Isha and Midnight can exceed 86400.
     // Clamp at 2 days (172799) just as a safety net.
     double s = h * 3600.0 + 0.5;
     if (s < 0.0) s = 0.0;
     if (s > 172799.0) s = 172799.0;
     return (uint32_t)s;
+}
+
+/* Days in the given month, accounting for leap years.
+   Returns 0 if the month is out of range (1..12). */
+static int days_in_month(int year, int month)
+{
+    static const int mdays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12) return 0;
+
+    if (month == 2) {
+        bool leap = ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+        return leap ? 29 : 28;
+    }
+    return mdays[month - 1];
 }
 
 esp_err_t svc_prayer_engine_calculate(
@@ -48,6 +65,10 @@ esp_err_t svc_prayer_engine_calculate(
     if (year < 1900 || year > 2100) return ESP_ERR_INVALID_ARG;
     if (month < 1 || month > 12)    return ESP_ERR_INVALID_ARG;
     if (day < 1   || day > 31)      return ESP_ERR_INVALID_ARG;
+    {
+        int max_day = days_in_month(year, month);
+        if (max_day == 0 || day > max_day) return ESP_ERR_INVALID_ARG;
+    }
     if ((unsigned)method >= (unsigned)SVC_PRAYER_METHOD_COUNT) return ESP_ERR_INVALID_ARG;
     if ((unsigned)madhab >= (unsigned)SVC_PRAYER_MADHAB_COUNT) return ESP_ERR_INVALID_ARG;
     /* No SVC_PRAYER_HIGHLAT_COUNT enumerator exists by design (AUTO is a
@@ -96,7 +117,13 @@ esp_err_t svc_prayer_engine_calculate(
     out->sunrise_sec  = hours_to_sec(t.sunrise);
     out->dhuhr_sec    = hours_to_sec(t.dhuhr);
     out->zawal_start_sec = hours_to_sec(t.zawal_start);
-    out->asr_yellow_sec  = hours_to_sec(t.asr_yellowing); /* 0 if NaN (no yellowing at high lat) */
+    /* On high-latitude days where the sun never reaches 5 degrees above
+       the horizon, asr_yellowing is NaN. Distinguish that from a genuine
+       00:00:00 using UINT32_MAX as the sentinel. Use isnan() not
+       isfinite(): see hours_to_sec() comment above. */
+    out->asr_yellow_sec = isnan(t.asr_yellowing)
+                        ? UINT32_MAX
+                        : hours_to_sec(t.asr_yellowing);
     out->sunset_sec      = hours_to_sec(t.sunset);
     out->zawal_sec    = hours_to_sec(t.zawal);
     out->asr_sec      = hours_to_sec(t.asr);

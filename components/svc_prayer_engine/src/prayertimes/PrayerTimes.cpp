@@ -27,6 +27,10 @@ static double fix_angle(double a) {
 }
 
 static double fix_hour(double a) {
+    /* Propagate NaN: fmod(NaN, 24) is unspecified per C standard and
+       picolibc returns 0 instead of NaN, which silently turns "sun never
+       reached this angle" into "00:00:00". */
+    if (isnan(a)) return a;
     a = fmod(a, 24.0);
     return (a < 0) ? a + 24.0 : a;
 }

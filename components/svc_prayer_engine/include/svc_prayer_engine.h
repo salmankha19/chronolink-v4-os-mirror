@@ -20,9 +20,8 @@
 extern "C" {
 #endif
 
-/* Calculation methods. Values 0..4 match svc_config_method_t exactly.
-   Value 5 (Jafaria) is unique to the prayer engine and has no
-   svc_config equivalent today. */
+/* Calculation methods. Values 0..5 match svc_config_method_t exactly
+   (Jafaria included); the service layer casts config -> engine 1:1. */
 typedef enum {
     SVC_PRAYER_METHOD_MWL         = 0,
     SVC_PRAYER_METHOD_ISNA        = 1,
@@ -50,7 +49,12 @@ typedef enum {
 /* Output. Most times are seconds since local midnight (0..86399).
    Isha and Islamic midnight may be up to 172799 (i.e. after midnight,
    same day +1) when they fall after 00:00. If any prayer cannot be
-   calculated (extreme latitude), valid is false and numeric fields are 0. */
+   calculated (extreme latitude), valid is false and numeric fields are 0.
+
+   asr_yellow_sec uses UINT32_MAX as a sentinel for "sun does not reach
+   5 degrees above the horizon today" (high-latitude winter), distinct
+   from 0 (00:00:00). Consumers should treat UINT32_MAX as unavailable,
+   not as a real time. */
 typedef struct {
     bool     valid;
     uint32_t fajr_sec;

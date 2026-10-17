@@ -68,3 +68,7 @@ pr-body.txt
 # committed.
 # ============================================================
 *.tmp
+
+# Compiled object files (never commit)
+*.o
+*.o.*
