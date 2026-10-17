@@ -60,6 +60,9 @@ not.** Where another doc mentions a gap, this file has the detail.
   panel-derived (fits width and height). The mono `FONT_FORMAT_MONO_1BPP`
   path is unchanged and remains the correct representation for 1-bit
   panels (MAX7219, dot-matrix).
+  A generator script `scripts/generate_font_ui_sans.py` supports both
+  TTF and built-in placeholder modes; the placeholder can be
+  regenerated with `--builtin`.
 
 ---
 
