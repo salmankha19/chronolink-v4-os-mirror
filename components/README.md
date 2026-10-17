@@ -11,7 +11,7 @@ nesting.
 | `chronolink_hal`, `chronolink_driver_sdk` | HAL (2) |
 | `hil` | HIL (3) |
 | `core_os`, `event_bus` | Kernel (4) |
-| `state_manager`, `remote_bridge`, `svc_network`, `svc_time` | Services (5) |
+| `state_manager`, `remote_bridge`, `svc_network`, `svc_time`, `svc_config` | Services (5) |
 | `display_manager`, `font_engine`, `font`, `ui_producer` | Application (6) |
 | `boot_manager` | Orchestrator (not a layer) |
 | `audio_test` | Dev/test (Kconfig-gated, not shipped) |

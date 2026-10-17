@@ -41,7 +41,7 @@ not.** Where another doc mentions a gap, this file has the detail.
   forwards matching events non-blocking, up to
   `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. `svc_time` is the first
   subscriber (PR 5b-2): it registers for `EVENT_NETWORK_CONNECTED`.
-- **Services:** `svc_network` (WiFi station), `state_manager`.
+- **Services:** `svc_network` (WiFi station), `state_manager`, `svc_config` (NVS-backed installation config: location, method, madhab, iqamah offsets, adhan mode, display preferences — storage + accessors only, no calculation or hardware).
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).

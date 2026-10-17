@@ -6,10 +6,11 @@
  * Boot sequence:
  *   1. boot_manager_init()  — NVS, FATFS, HAL, Core OS
  *   2. font_engine_register() — Register built-in 8×8 font (id = 0)
- *   3. ui_producer_start()  — Start declarative UI frame producer
- *   4. svc_time_start()     — RTC + NTP time service (first event-bus subscriber)
- *   5. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
- *   6. audio_test_init()    — Initialize audio (if enabled)
+ *   3. svc_config_start()   — Configuration service (NVS namespace "config")
+ *   4. ui_producer_start()  — Start declarative UI frame producer
+ *   5. svc_time_start()     — RTC + NTP time service (first event-bus subscriber)
+ *   6. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
+ *   7. audio_test_init()    — Initialize audio (if enabled)
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -21,6 +22,7 @@
 #include "font_builtin_8x8.h"
 #include "svc_time.h"
 #include "svc_network.h"
+#include "svc_config.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -41,6 +43,16 @@ void app_main(void)
 
     /* Register built-in font before any UI producer uses it */
     font_engine_register(&FONT_BUILTIN_8X8);
+
+    /* svc_config is a data-only service: no background task, no events.
+       Start it before anything that needs location/calculation inputs.
+       Non-fatal: on failure, defaults are used and setters return
+       ESP_ERR_INVALID_STATE. */
+    esp_err_t config_err = svc_config_start();
+    if (config_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_config_start failed: %s -- running on defaults",
+                 esp_err_to_name(config_err));
+    }
 
     ui_producer_start();
 

@@ -63,7 +63,8 @@ location and method, and does something at each.
 - `svc_scheduler` (new component): fires events at prayer times, sunrise
   and sunset, and day rollover.
 - `svc_config` (new component): NVS-backed settings -- location, method,
-  madhab, TZ, adhan on/off.
+  madhab, iqamah offsets, adhan mode, display preferences. *(Landed as PR 12;
+  the schema is in `components/svc_config/include/svc_config.h`.)*
 - Wire to the display: next prayer name and countdown on the face.
 
 ---
