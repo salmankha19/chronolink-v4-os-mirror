@@ -13,6 +13,14 @@
 
 namespace prayertimes {
 
+enum class HighLatitudeRule {
+    NONE = 0,
+    MIDDLE_NIGHT = 1,
+    SEVENTH_OF_THE_NIGHT = 2,
+    ANGLE_BASED = 3,
+    AUTO = 4
+};
+
 struct Coordinates {
     double latitude;
     double longitude;
@@ -45,11 +53,13 @@ class PrayerTimesCalculator {
 public:
     // Calculates prayer times for a given date and coordinates.
     // timezone_offset: Standard timezone offset from UTC (e.g., +5.0 for Pakistan, 0.0 for UK winter).
+    // highlat_rule: Fallback rule if Fajr/Isha angles are unreachable.
     static PrayerTimes calculate(
         const Date& date,
         const Coordinates& coords,
         double timezone_offset,
-        const Method& method
+        const Method& method,
+        HighLatitudeRule highlat_rule = HighLatitudeRule::AUTO
     );
 
 private:

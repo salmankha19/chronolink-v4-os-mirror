@@ -39,6 +39,14 @@ typedef enum {
     SVC_PRAYER_MADHAB_COUNT    = 2,
 } svc_prayer_madhab_t;
 
+typedef enum {
+    SVC_PRAYER_HIGHLAT_AUTO          = 0,
+    SVC_PRAYER_HIGHLAT_NONE          = 1,
+    SVC_PRAYER_HIGHLAT_MIDDLE_NIGHT  = 2,
+    SVC_PRAYER_HIGHLAT_SEVENTH       = 3,
+    SVC_PRAYER_HIGHLAT_ANGLE_BASED   = 4,
+} svc_prayer_highlat_t;
+
 /* Output. All times are seconds since local midnight (0..86399).
    If any prayer cannot be calculated (extreme latitude), valid is false
    and the numeric fields are 0. */
@@ -71,6 +79,7 @@ esp_err_t svc_prayer_engine_calculate(
     double timezone_offset,
     svc_prayer_method_t method,
     svc_prayer_madhab_t madhab,
+    svc_prayer_highlat_t highlat,
     svc_prayer_times_t *out
 );
 

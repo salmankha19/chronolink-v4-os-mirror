@@ -23,6 +23,7 @@
 #include "svc_time.h"
 #include "svc_network.h"
 #include "svc_config.h"
+#include "svc_prayer_engine.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -52,6 +53,54 @@ void app_main(void)
     if (config_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_config_start failed: %s -- running on defaults",
                  esp_err_to_name(config_err));
+    }
+
+    /* TEMPORARY verification -- remove before commit */
+    {
+        typedef struct {
+            const char         *name;
+            int                 year, month, day;
+            double              lat, lon, tz_offset;
+            svc_prayer_method_t method;
+            svc_prayer_madhab_t madhab;
+            svc_prayer_highlat_t highlat;
+        } pt_verify_row_t;
+
+        static const pt_verify_row_t rows[] = {
+            /* London in June: lat 51.5 (<55). AUTO -> MIDDLE_NIGHT. */
+            { "London Jun AUTO",  2026,  6, 21,  51.5074,  -0.1278,  1.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
+            /* London in June: explicit ANGLE_BASED. */
+            { "London Jun ANGLE", 2026,  6, 21,  51.5074,  -0.1278,  1.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_ANGLE_BASED },
+            /* Reykjavik in June: lat 64.1 (>55). AUTO -> SEVENTH. */
+            { "Reykjavik Jun AUTO", 2026, 6, 21, 64.1466, -21.9426,  0.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
+            /* Karachi Hanafi: Standard Asr shadow factor 2. */
+            { "Karachi Hanafi",   2026,  3, 20,  24.8607,  67.0011,  5.0, SVC_PRAYER_METHOD_KARACHI,     SVC_PRAYER_MADHAB_HANAFI,   SVC_PRAYER_HIGHLAT_AUTO },
+            /* New York: Standard winter path, no fallback. */
+            { "New York Dec",     2026, 12, 21,  40.7128, -74.0060, -5.0, SVC_PRAYER_METHOD_ISNA,        SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
+        };
+
+        for (unsigned i = 0; i < (unsigned)(sizeof(rows) / sizeof(rows[0])); i++) {
+            const pt_verify_row_t *r = &rows[i];
+            svc_prayer_times_t pt;
+            esp_err_t err = svc_prayer_engine_calculate(
+                r->year, r->month, r->day, r->lat, r->lon, r->tz_offset,
+                r->method, r->madhab, r->highlat, &pt);
+
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "[PT-VERIFY] %s: calculate failed (%s)", r->name, esp_err_to_name(err));
+                continue;
+            }
+
+            ESP_LOGI(TAG, "[PT-VERIFY] %s: Fajr %02u:%02u | Sunrise %02u:%02u | "
+                          "Dhuhr %02u:%02u | Asr %02u:%02u | Maghrib %02u:%02u | Isha %02u:%02u",
+                     r->name,
+                     (unsigned)(pt.fajr_sec / 3600U),    (unsigned)((pt.fajr_sec % 3600U) / 60U),
+                     (unsigned)(pt.sunrise_sec / 3600U), (unsigned)((pt.sunrise_sec % 3600U) / 60U),
+                     (unsigned)(pt.dhuhr_sec / 3600U),   (unsigned)((pt.dhuhr_sec % 3600U) / 60U),
+                     (unsigned)(pt.asr_sec / 3600U),     (unsigned)((pt.asr_sec % 3600U) / 60U),
+                     (unsigned)(pt.maghrib_sec / 3600U), (unsigned)((pt.maghrib_sec % 3600U) / 60U),
+                     (unsigned)(pt.isha_sec / 3600U),    (unsigned)((pt.isha_sec % 3600U) / 60U));
+        }
     }
 
     ui_producer_start();

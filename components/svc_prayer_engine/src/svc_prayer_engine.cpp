@@ -35,6 +35,7 @@ esp_err_t svc_prayer_engine_calculate(
     double timezone_offset,
     svc_prayer_method_t method,
     svc_prayer_madhab_t madhab,
+    svc_prayer_highlat_t highlat,
     svc_prayer_times_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
@@ -49,6 +50,9 @@ esp_err_t svc_prayer_engine_calculate(
     if (day < 1   || day > 31)      return ESP_ERR_INVALID_ARG;
     if ((unsigned)method >= (unsigned)SVC_PRAYER_METHOD_COUNT) return ESP_ERR_INVALID_ARG;
     if ((unsigned)madhab >= (unsigned)SVC_PRAYER_MADHAB_COUNT) return ESP_ERR_INVALID_ARG;
+    /* No SVC_PRAYER_HIGHLAT_COUNT enumerator exists by design (AUTO is a
+       sentinel, not a real rule). Range check uses the last valid value. */
+    if ((unsigned)highlat > (unsigned)SVC_PRAYER_HIGHLAT_ANGLE_BASED) return ESP_ERR_INVALID_ARG;
 
     prayertimes::Method m{};
     switch (method) {
@@ -65,11 +69,24 @@ esp_err_t svc_prayer_engine_calculate(
         m.asr_shadow_factor = 2.0;
     }
 
+    /* Map C enum to C++ enum. The numeric values intentionally do NOT
+       match (C AUTO=0, NONE=1; C++ AUTO=4, NONE=0), so the switch is
+       required. */
+    prayertimes::HighLatitudeRule hl = prayertimes::HighLatitudeRule::AUTO;
+    switch (highlat) {
+    case SVC_PRAYER_HIGHLAT_NONE:         hl = prayertimes::HighLatitudeRule::NONE; break;
+    case SVC_PRAYER_HIGHLAT_MIDDLE_NIGHT: hl = prayertimes::HighLatitudeRule::MIDDLE_NIGHT; break;
+    case SVC_PRAYER_HIGHLAT_SEVENTH:      hl = prayertimes::HighLatitudeRule::SEVENTH_OF_THE_NIGHT; break;
+    case SVC_PRAYER_HIGHLAT_ANGLE_BASED:  hl = prayertimes::HighLatitudeRule::ANGLE_BASED; break;
+    case SVC_PRAYER_HIGHLAT_AUTO:
+    default:                              hl = prayertimes::HighLatitudeRule::AUTO; break;
+    }
+
     prayertimes::Date d{ year, month, day };
     prayertimes::Coordinates c{ latitude, longitude };
 
     prayertimes::PrayerTimes t = prayertimes::PrayerTimesCalculator::calculate(
-        d, c, timezone_offset, m);
+        d, c, timezone_offset, m, hl);
 
     if (!t.valid) {
         return ESP_ERR_INVALID_STATE;
