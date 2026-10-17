@@ -95,6 +95,9 @@ esp_err_t svc_prayer_engine_calculate(
     out->fajr_sec     = hours_to_sec(t.fajr);
     out->sunrise_sec  = hours_to_sec(t.sunrise);
     out->dhuhr_sec    = hours_to_sec(t.dhuhr);
+    out->zawal_start_sec = hours_to_sec(t.zawal_start);
+    out->asr_yellow_sec  = hours_to_sec(t.asr_yellowing); /* 0 if NaN (no yellowing at high lat) */
+    out->sunset_sec      = hours_to_sec(t.sunset);
     out->zawal_sec    = hours_to_sec(t.zawal);
     out->asr_sec      = hours_to_sec(t.asr);
     out->maghrib_sec  = hours_to_sec(t.maghrib);

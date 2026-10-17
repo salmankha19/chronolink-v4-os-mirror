@@ -55,6 +55,9 @@ typedef struct {
     uint32_t fajr_sec;
     uint32_t sunrise_sec;
     uint32_t dhuhr_sec;
+    uint32_t zawal_start_sec;
+    uint32_t asr_yellow_sec;
+    uint32_t sunset_sec;
     uint32_t zawal_sec;
     uint32_t asr_sec;
     uint32_t maghrib_sec;
