@@ -26,6 +26,7 @@ static const char *TAG = "svc_config";
 #define NVS_KEY_BRIGHT_MODE    "bright_mode"
 #define NVS_KEY_AUTO_BRIGHT    "auto_bright"
 #define NVS_KEY_NIGHT_LAMP     "night_lamp"
+#define NVS_KEY_HIGH_LAT       "high_lat"
 
 static SemaphoreHandle_t s_lock    = NULL;
 static bool              s_nvs_open = false;
@@ -49,6 +50,7 @@ static void set_defaults(svc_config_t *c)
     c->adhan_mode        = SVC_CONFIG_ADHAN_OFF;
     c->adhan_volume      = 70;
     c->brightness_mode   = 0;
+    c->high_lat_rule     = 0;
     c->auto_brightness   = false;
     c->night_lamp_enable = false;
 }
@@ -180,6 +182,13 @@ static void load_from_nvs_unlocked(void)
         s_cache.brightness_mode = v;
     } else if (v > 2) {
         ESP_LOGW(TAG, "stored brightness_mode %u out of range -- using default", v);
+    }
+
+    v = 0;
+    if (nvs_get_u8(s_nvs, NVS_KEY_HIGH_LAT, &v) == ESP_OK && v <= 4) {
+        s_cache.high_lat_rule = v;
+    } else if (v > 4) {
+        ESP_LOGW(TAG, "stored high_lat_rule %u out of range -- using default", v);
     }
 
     v = 0;
@@ -438,6 +447,19 @@ esp_err_t svc_config_set_night_lamp(bool enabled)
 
     s_cache.night_lamp_enable = enabled;
     esp_err_t err = persist_u8(NVS_KEY_NIGHT_LAMP, enabled ? 1 : 0);
+    lock_give();
+    return err;
+}
+
+esp_err_t svc_config_set_high_lat_rule(uint8_t rule)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if (rule > 4) return ESP_ERR_INVALID_ARG;
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    s_cache.high_lat_rule = rule;
+    esp_err_t err = persist_u8(NVS_KEY_HIGH_LAT, rule);
     lock_give();
     return err;
 }

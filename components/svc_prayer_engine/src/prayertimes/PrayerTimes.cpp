@@ -87,7 +87,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     const Date& date,
     const Coordinates& coords,
     double timezone_offset,
-    const Method& method
+    const Method& method,
+    HighLatitudeRule highlat_rule
 ) {
     PrayerTimes result{};
     result.valid = false;
@@ -122,12 +123,35 @@ PrayerTimes PrayerTimesCalculator::calculate(
         isha = sun_angle_time(method.isha_angle, mid, coords.latitude, sp.declination, 1.0);
     }
 
-    // High-latitude fallback: use middle-of-night for NaN.
-    // This handles cases like London in summer where the sun never
-    // reaches 18 degrees below the horizon.
-    double night = 24.0 - (sunset - sunrise);
-    if (isnan(fajr)) fajr = sunrise - night / 2.0;
-    if (isnan(isha)) isha = sunset + night / 2.0;
+    // High-latitude fallback
+    if (isnan(fajr) || isnan(isha)) {
+        double night = 24.0 - (sunset - sunrise);
+        HighLatitudeRule effective_rule = highlat_rule;
+
+        if (effective_rule == HighLatitudeRule::AUTO) {
+            // We only reach this block if an angle was unreachable (NaN).
+            // Therefore NONE is not a valid fallback here. We must apply a rule.
+            double abs_lat = fabs(coords.latitude);
+            if (abs_lat < 55.0) effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
+            else                effective_rule = HighLatitudeRule::SEVENTH_OF_THE_NIGHT;
+        }
+
+        if (effective_rule == HighLatitudeRule::MIDDLE_NIGHT) {
+            if (isnan(fajr)) fajr = sunrise - night / 2.0;
+            if (isnan(isha)) isha = sunset + night / 2.0;
+        } else if (effective_rule == HighLatitudeRule::SEVENTH_OF_THE_NIGHT) {
+            if (isnan(fajr)) fajr = sunrise - night / 7.0;
+            if (isnan(isha)) isha = sunset + night / 7.0;
+        } else if (effective_rule == HighLatitudeRule::ANGLE_BASED) {
+            // Formula from PrayTimes.org
+            double fajr_angle = method.fajr_angle;
+            double isha_angle = method.isha_angle;
+            if (isnan(fajr)) fajr = sunrise - night * (fajr_angle / 60.0);
+            if (isnan(isha) && isha_angle > 0) isha = sunset + night * (isha_angle / 60.0);
+        } else {
+            // NONE - leave as NaN (will fail the final validity check)
+        }
+    }
 
     // Offset to local clock time
     double offset = timezone_offset - coords.longitude / 15.0;
