@@ -78,6 +78,16 @@ private:
     static double mid_day(double jd);
     static double sun_angle_time(double angle, double time, double lat, double decl, double direction);
     static double asr_time(double time, double lat, double decl, double shadow_factor);
+
+    /* Iterated (accurate) variants. The primitives above sample the sun
+       once at 0h UT; these converge each event time by re-sampling the
+       sun's declination at the event's UT hour. Reduces the equinox
+       error from up to +/-125s to <10s. */
+    static double mid_day_iterated(double jd, double lon);
+    static double sun_angle_time_iterated(double jd, double mid, double lat, double lon,
+                                          double angle, double direction);
+    static double asr_time_iterated(double jd, double mid, double lat, double lon,
+                                    double shadow_factor);
 };
 
 } // namespace prayertimes

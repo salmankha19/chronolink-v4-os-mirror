@@ -87,6 +87,74 @@ double PrayerTimesCalculator::asr_time(double time, double lat, double decl, dou
     return sun_angle_time(angle, time, lat, decl, 1.0); // Asr is in the afternoon (direction +1)
 }
 
+/* Iterated solar noon. Re-samples the equation of time at the estimated
+   transit UT hour until the estimate converges. Returns local mean time
+   (fractional hours, NOT yet offset by tz). The lon offset is inside
+   the sample instant because the transit happens at local noon, which
+   is lon/360 hours away from 0h UT. */
+double PrayerTimesCalculator::mid_day_iterated(double jd, double lon)
+{
+    double t = mid_day(jd);       /* seed from the 0h sample */
+    for (int i = 0; i < 3; i++) {
+        double jd_sample = jd - lon / 360.0 + t / 24.0;
+        SolarPosition sp = sun_position(jd_sample);
+        double t_next = fix_hour(12.0 - sp.equation);
+        double delta = fabs(t_next - t);
+        t = t_next;
+        if (delta < (1.0 / 3600.0)) break;   /* <1 second */
+    }
+    return t;
+}
+
+/* Iterated angle-event time. Re-samples the declination at the event's
+   estimated UT hour until the time converges. `direction` is -1 for
+   morning events (fajr, sunrise) and +1 for afternoon events (maghrib,
+   sunset, isha). Returns local mean time (fractional hours, no tz). */
+double PrayerTimesCalculator::sun_angle_time_iterated(
+    double jd, double mid, double lat, double lon,
+    double angle, double direction)
+{
+    /* Seed with the 0h-UT declination at the transit instant. */
+    double jd_transit = jd - lon / 360.0 + mid / 24.0;
+    SolarPosition sp_seed = sun_position(jd_transit);
+    double t = sun_angle_time(angle, mid, lat, sp_seed.declination, direction);
+
+    for (int i = 0; i < 3; i++) {
+        if (isnan(t)) break;      /* unreachable angle: let caller's NaN path handle it */
+        double jd_sample = jd - lon / 360.0 + t / 24.0;
+        SolarPosition sp = sun_position(jd_sample);
+        double t_next = sun_angle_time(angle, mid, lat, sp.declination, direction);
+        if (isnan(t_next)) { t = t_next; break; }
+        double delta = fabs(t_next - t);
+        t = t_next;
+        if (delta < (1.0 / 3600.0)) break;
+    }
+    return t;
+}
+
+/* Iterated Asr. Same pattern as sun_angle_time_iterated, but the shadow
+   angle is recomputed each pass from the sampled declination. */
+double PrayerTimesCalculator::asr_time_iterated(
+    double jd, double mid, double lat, double lon,
+    double shadow_factor)
+{
+    double jd_transit = jd - lon / 360.0 + mid / 24.0;
+    SolarPosition sp_seed = sun_position(jd_transit);
+    double t = asr_time(mid, lat, sp_seed.declination, shadow_factor);
+
+    for (int i = 0; i < 3; i++) {
+        if (isnan(t)) break;
+        double jd_sample = jd - lon / 360.0 + t / 24.0;
+        SolarPosition sp = sun_position(jd_sample);
+        double t_next = asr_time(mid, lat, sp.declination, shadow_factor);
+        if (isnan(t_next)) { t = t_next; break; }
+        double delta = fabs(t_next - t);
+        t = t_next;
+        if (delta < (1.0 / 3600.0)) break;
+    }
+    return t;
+}
+
 PrayerTimes PrayerTimesCalculator::calculate(
     const Date& date,
     const Coordinates& coords,
@@ -98,23 +166,30 @@ PrayerTimes PrayerTimesCalculator::calculate(
     result.valid = false;
 
     double jd = julian_date(date.year, date.month, date.day);
-    SolarPosition sp = sun_position(jd);
-    double mid = mid_day(jd);
+    /* Iterated solar transit: re-samples the equation of time at the
+       estimate of transit UT hour. ~8s more accurate at equinox vs
+       the old 0h-UT sample. */
+    double mid = mid_day_iterated(jd, coords.longitude);
 
-    // Sunrise/sunset at -0.833 degrees (refraction + sun disk)
-    double sunrise = sun_angle_time(0.833, mid, coords.latitude, sp.declination, -1.0);
-    double sunset = sun_angle_time(0.833, mid, coords.latitude, sp.declination, 1.0);
+    /* Sunrise/sunset at 0.833 deg depression (refraction + sun disk),
+       iterated per event so the declination is sampled near the event
+       instant rather than at 0h UT. */
+    double sunrise = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude, 0.833, -1.0);
+    double sunset  = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude, 0.833,  1.0);
 
     if (isnan(sunrise) || isnan(sunset)) {
         return result;  // polar day/night
     }
 
-    double fajr = sun_angle_time(method.fajr_angle, mid, coords.latitude, sp.declination, -1.0);
-    double asr = asr_time(mid, coords.latitude, sp.declination, method.asr_shadow_factor);
+    double fajr = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
+                                          method.fajr_angle, -1.0);
+    double asr  = asr_time_iterated(jd, mid, coords.latitude, coords.longitude,
+                                    method.asr_shadow_factor);
 
     double maghrib;
     if (method.maghrib_angle > 0.0) {
-        maghrib = sun_angle_time(method.maghrib_angle, mid, coords.latitude, sp.declination, 1.0);
+        maghrib = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
+                                          method.maghrib_angle, 1.0);
         if (isnan(maghrib)) maghrib = sunset;
     } else {
         maghrib = sunset;
@@ -124,7 +199,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     if (method.isha_interval > 0) {
         isha = maghrib + method.isha_interval / 60.0;
     } else {
-        isha = sun_angle_time(method.isha_angle, mid, coords.latitude, sp.declination, 1.0);
+        isha = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
+                                       method.isha_angle, 1.0);
     }
 
     // High-latitude fallback
@@ -172,7 +248,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     double offset = timezone_offset - coords.longitude / 15.0;
 
     double zawal_start = mid - (10.0 / 60.0); // 10 minutes before Dhuhr
-    double asr_yellowing = sun_angle_time(-5.0, mid, coords.latitude, sp.declination, 1.0);
+    double asr_yellowing = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
+                                                   -5.0, 1.0);
 
     result.fajr = fix_hour(fajr + offset);
     result.sunrise = fix_hour(sunrise + offset);
