@@ -47,9 +47,10 @@ typedef enum {
     SVC_PRAYER_HIGHLAT_ANGLE_BASED   = 4,
 } svc_prayer_highlat_t;
 
-/* Output. All times are seconds since local midnight (0..86399).
-   If any prayer cannot be calculated (extreme latitude), valid is false
-   and the numeric fields are 0. */
+/* Output. Most times are seconds since local midnight (0..86399).
+   Isha and Islamic midnight may be up to 172799 (i.e. after midnight,
+   same day +1) when they fall after 00:00. If any prayer cannot be
+   calculated (extreme latitude), valid is false and numeric fields are 0. */
 typedef struct {
     bool     valid;
     uint32_t fajr_sec;

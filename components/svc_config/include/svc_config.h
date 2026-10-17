@@ -88,7 +88,11 @@ typedef struct {
     svc_config_adhan_mode_t adhan_mode;
     uint8_t  adhan_volume;          /* 0..100; no digital volume control on shipped PCB */
     uint8_t  brightness_mode;       /* 0=daylight, 1=evening, 2=calm */
-    uint8_t  high_lat_rule;         /* 0=auto, 1=none, 2=middle, 3=seventh, 4=angle */
+    /* 0=auto (default), 1=none, 2=middle, 3=seventh, 4=angle.
+       AUTO uses seventh-of-night > 48° latitude (UK/Europe) to avoid
+       twilight collision, and middle-of-night <= 48° (Middle East/Asia).
+       User can override at runtime. */
+    uint8_t  high_lat_rule;
     uint16_t adhan_offset_min[SVC_CONFIG_PRAYER_COUNT];
     uint16_t zawal_buffer_min;
     bool     auto_brightness;

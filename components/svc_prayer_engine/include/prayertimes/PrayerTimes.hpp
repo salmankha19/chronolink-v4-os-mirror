@@ -4,7 +4,8 @@
  * ChronoLink V4 OS -- Standalone Prayer Time Calculation Library
  *
  * This object holds the calculated times for a single day.
- * All times are expressed in decimal hours (0.0 to 24.0).
+ * Most times are in decimal hours (0.0 to 24.0). However, Isha and
+ * Islamic Midnight may exceed 24.0 if they fall after midnight.
  */
 #pragma once
 
