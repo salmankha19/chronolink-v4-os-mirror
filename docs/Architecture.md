@@ -18,7 +18,7 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
 | 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/`, future `src/app/*` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
@@ -64,6 +64,7 @@ flowchart TB
     subgraph SVC["Services (5)"]
         NET[svc_network]
         TIME[svc_time]
+        CFG[svc_config]
         SM[state_manager]
         RB[remote_bridge]
     end
@@ -93,6 +94,7 @@ flowchart TB
     HILC --> FE
     HALC --> SDK
     HALC --> PDL
+```
 
 ---
 
