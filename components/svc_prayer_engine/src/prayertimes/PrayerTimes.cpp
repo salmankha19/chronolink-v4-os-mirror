@@ -124,33 +124,44 @@ PrayerTimes PrayerTimesCalculator::calculate(
     }
 
     // High-latitude fallback
-    if (isnan(fajr) || isnan(isha)) {
-        double night = 24.0 - (sunset - sunrise);
-        HighLatitudeRule effective_rule = highlat_rule;
+    HighLatitudeRule effective_rule = highlat_rule;
 
-        if (effective_rule == HighLatitudeRule::AUTO) {
-            // We only reach this block if an angle was unreachable (NaN).
-            // Therefore NONE is not a valid fallback here. We must apply a rule.
-            double abs_lat = fabs(coords.latitude);
-            if (abs_lat < 55.0) effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
-            else                effective_rule = HighLatitudeRule::SEVENTH_OF_THE_NIGHT;
-        }
+    if (effective_rule == HighLatitudeRule::AUTO) {
+        // For high latitudes (>48), one-seventh is the most practical default.
+        double abs_lat = fabs(coords.latitude);
+        if (abs_lat > 48.0) effective_rule = HighLatitudeRule::SEVENTH_OF_THE_NIGHT;
+        else                effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
+    }
 
-        if (effective_rule == HighLatitudeRule::MIDDLE_NIGHT) {
-            if (isnan(fajr)) fajr = sunrise - night / 2.0;
-            if (isnan(isha)) isha = sunset + night / 2.0;
-        } else if (effective_rule == HighLatitudeRule::SEVENTH_OF_THE_NIGHT) {
-            if (isnan(fajr)) fajr = sunrise - night / 7.0;
-            if (isnan(isha)) isha = sunset + night / 7.0;
-        } else if (effective_rule == HighLatitudeRule::ANGLE_BASED) {
-            // Formula from PrayTimes.org
-            double fajr_angle = method.fajr_angle;
-            double isha_angle = method.isha_angle;
-            if (isnan(fajr)) fajr = sunrise - night * (fajr_angle / 60.0);
-            if (isnan(isha) && isha_angle > 0) isha = sunset + night * (isha_angle / 60.0);
-        } else {
-            // NONE - leave as NaN (will fail the final validity check)
-        }
+    double night = 24.0 - (sunset - sunrise);
+    double fajr_portion = 0, isha_portion = 0;
+
+    if (effective_rule == HighLatitudeRule::MIDDLE_NIGHT) {
+        fajr_portion = night / 2.0;
+        isha_portion = night / 2.0;
+    } else if (effective_rule == HighLatitudeRule::SEVENTH_OF_THE_NIGHT) {
+        fajr_portion = night / 7.0;
+        isha_portion = night / 7.0;
+    } else if (effective_rule == HighLatitudeRule::ANGLE_BASED) {
+        fajr_portion = night * (method.fajr_angle / 60.0);
+        if (method.isha_angle > 0) isha_portion = night * (method.isha_angle / 60.0);
+    }
+
+    // Apply clamping (PrayTimes.org style)
+    if (fajr_portion > 0) {
+        if (isnan(fajr) || (sunrise - fajr) > fajr_portion) fajr = sunrise - fajr_portion;
+    }
+    if (isha_portion > 0 && method.isha_interval == 0) {
+        if (isnan(isha) || (isha - sunset) > isha_portion) isha = sunset + isha_portion;
+    }
+
+    // Islamic midnight: halfway between sunset and the (clamped) Fajr,
+    // so the displayed midnight is consistent with the displayed Fajr.
+    // Fall back to sunrise only if Fajr itself is NaN or if the result
+    // would land earlier than Isha.
+    double midnight = sunset + (fajr + 24.0 - sunset) / 2.0;
+    if (isnan(fajr) || midnight < isha) {
+        midnight = sunset + (sunrise + 24.0 - sunset) / 2.0;
     }
 
     // Offset to local clock time
@@ -168,8 +179,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     result.asr_yellowing = fix_hour(asr_yellowing + offset);
     result.maghrib = fix_hour(maghrib + offset);
     result.sunset = fix_hour(sunset + offset);
-    result.isha = fix_hour(isha + offset);
-    result.midnight = fix_hour(sunset + offset + (fajr + 24.0 - sunset) / 2.0);
+    result.isha = isha + offset;       // Allow > 24h for post-midnight Isha
+    result.midnight = midnight + offset; // Allow > 24h for post-midnight midnight
 
     if (isnan(result.fajr) || isnan(result.sunrise) || isnan(result.dhuhr) ||
         isnan(result.asr) || isnan(result.maghrib) || isnan(result.isha)) {

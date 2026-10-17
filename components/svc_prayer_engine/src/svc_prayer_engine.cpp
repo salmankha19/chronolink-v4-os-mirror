@@ -18,11 +18,11 @@ extern "C" {
 static uint32_t hours_to_sec(double h)
 {
     if (!isfinite(h)) return 0;
-    h = fmod(h, 24.0);
-    if (h < 0.0) h += 24.0;
+    // Do not wrap to 24h. Isha and Midnight can exceed 86400.
+    // Clamp at 2 days (172799) just as a safety net.
     double s = h * 3600.0 + 0.5;
     if (s < 0.0) s = 0.0;
-    if (s > 86399.0) s = 86399.0;
+    if (s > 172799.0) s = 172799.0;
     return (uint32_t)s;
 }
 
