@@ -130,6 +130,10 @@ static char                s_lwip_servers[SVC_TIME_NTP_SLOTS][SVC_TIME_NTP_HOST_
 
 static size_t              s_backoff_idx      = 0;
 static int64_t             s_last_sync_us     = 0;
+/* Track last-published local date and offset to detect date/DST changes
+   on each tick. date=0 means "not yet tracked" (skip first tick). */
+static uint32_t            s_last_local_date_yyymmdd = 0;
+static int32_t             s_last_offset_sec          = INT32_MIN;
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                      */
@@ -610,6 +614,61 @@ static const char *tick_snapshot(void)
     return source;
 }
 
+/* After each successful tick, compare the current local date and effective
+   UTC offset to the last-published values. If either changed, publish
+   EVENT_TIME_DATE_CHANGED so cached consumers (svc_prayer_engine_service)
+   recompute. The first successful tick after boot primes the trackers
+   without publishing (nothing is cached yet). */
+static void check_and_publish_date_change(void)
+{
+    if (!state_lock()) {
+        return;
+    }
+    if (!s_snapshot.valid) {
+        state_unlock();
+        return;
+    }
+
+    uint32_t new_date = (uint32_t)s_snapshot.local.year  * 10000U
+                      + (uint32_t)s_snapshot.local.month * 100U
+                      + (uint32_t)s_snapshot.local.day;
+
+    int32_t local_secs = s_snapshot.local.hours   * 3600
+                       + s_snapshot.local.minutes * 60
+                       + s_snapshot.local.seconds;
+    int32_t utc_secs   = s_snapshot.utc.hours     * 3600
+                       + s_snapshot.utc.minutes   * 60
+                       + s_snapshot.utc.seconds;
+    int32_t new_offset_sec = local_secs - utc_secs;
+    if (new_offset_sec >  14 * 3600) new_offset_sec -= 24 * 3600;
+    if (new_offset_sec < -14 * 3600) new_offset_sec += 24 * 3600;
+
+    bool date_changed   = (s_last_local_date_yyymmdd != 0 &&
+                           s_last_local_date_yyymmdd != new_date);
+    bool offset_changed = (s_last_offset_sec != INT32_MIN &&
+                           s_last_offset_sec != new_offset_sec);
+
+    s_last_local_date_yyymmdd = new_date;
+    s_last_offset_sec          = new_offset_sec;
+    state_unlock();
+
+    if (!date_changed && !offset_changed) {
+        return;
+    }
+
+    event_t evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.type = EVENT_TIME_DATE_CHANGED;
+    event_bus_publish(&evt);
+
+    if (date_changed) {
+        ESP_LOGI(TAG, "local date changed -> published EVENT_TIME_DATE_CHANGED");
+    }
+    if (offset_changed) {
+        ESP_LOGI(TAG, "tz offset changed -> published EVENT_TIME_DATE_CHANGED");
+    }
+}
+
 /* TEMPORARY: remove when the display path lands. */
 static void log_local_status(uint32_t tick)
 {
@@ -668,6 +727,7 @@ static void svc_time_worker(void *arg)
         source = tick_snapshot();
         if (source) {
             ESP_LOGD(TAG, "tick from %s", source);
+            check_and_publish_date_change();
         }
         if (++tick % SVC_TIME_STATUS_TICKS == 0) {
             log_local_status(tick);   /* TEMPORARY: remove with the status print */

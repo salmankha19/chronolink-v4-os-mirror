@@ -13,11 +13,15 @@ typedef enum {
     EVENT_NONE = 0,
 
     /* Application / service events */
-    EVENT_TIME_UPDATE      = 1,
-    EVENT_SENSOR_UPDATE    = 2,
-    EVENT_PRAYER_UPDATE    = 3,
-    EVENT_STATE_CHANGE     = 4,
-    EVENT_UI_REQUEST       = 5,
+    EVENT_TIME_UPDATE        = 1,
+    EVENT_SENSOR_UPDATE      = 2,
+    EVENT_PRAYER_UPDATE      = 3,
+    EVENT_STATE_CHANGE       = 4,
+    EVENT_UI_REQUEST         = 5,
+    /* Published by svc_time when the local calendar date changes (or the
+       effective timezone offset changes, e.g. DST transition). Consumers
+       that cache times keyed on date/offset should recompute. */
+    EVENT_TIME_DATE_CHANGED  = 6,
 
     /* Boot lifecycle events -- formerly EVENT_BOOT_* in boot_events.h,
        which collided with EVENT_STATE_CHANGE (4) and EVENT_UI_REQUEST (5).

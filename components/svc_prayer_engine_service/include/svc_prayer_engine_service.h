@@ -8,7 +8,7 @@
  *
  * Consumers subscribe to EVENT_PRAYER_TIMES_UPDATED on the event bus.
  * IMPORTANT: that event is a SIGNAL ONLY -- the payload is truncated
- * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 48). Do NOT
+ * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 52). Do NOT
  * memcpy the payload. On receiving the event, call
  * svc_prayer_engine_service_get_times() to read the full snapshot.
  *
@@ -28,7 +28,9 @@ extern "C" {
 /* Final prayer times after adhan offsets are applied (seconds since midnight). */
 typedef struct {
     bool     valid;
-    uint32_t date_yyyymmdd;   /* cache key: recalculate when this changes */
+    uint32_t date_yyyymmdd;      /* cache key: recalculate when this changes */
+    int16_t  tz_offset_minutes;  /* cache key: recalculate when this changes;
+                                    = local - UTC at noon of target date */
 
     uint32_t fajr_sec;
     uint32_t sunrise_sec;
@@ -43,11 +45,13 @@ typedef struct {
 } svc_prayer_engine_times_t;
 
 /*
- * Start the service. Registers a subscriber for EVENT_TIME_UPDATE and
- * does an initial calculation immediately. NOTE: EVENT_TIME_UPDATE is
- * currently published only on successful NTP sync, not at midnight;
- * the service may hold stale times across day boundaries until a
- * future PR adds date-change publishing to svc_time.
+ * Start the service. Subscribes to EVENT_TIME_UPDATE and
+ * EVENT_TIME_DATE_CHANGED, and does an initial calculation immediately.
+ * A 60 s periodic wakeup self-heals if an event is dropped; on each wake
+ * the service compares the current local date and noon UTC offset
+ * against the cache and recalculates if either has changed. The noon
+ * offset is DST-safe: a day's prayer times all use the same offset even
+ * on a transition day.
  *
  * Non-blocking. Idempotent.
  *

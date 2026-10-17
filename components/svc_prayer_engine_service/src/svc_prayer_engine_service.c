@@ -18,6 +18,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
+#include <time.h>     /* struct tm, mktime, timegm, time_t (noon-offset calc) */
 
 static const char *TAG = "svc_prayer_eng_svc";
 
@@ -47,7 +48,7 @@ static void lock_give(void)
     if (s_lock) xSemaphoreGive(s_lock);
 }
 
-/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 48 bytes,
+/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 52 bytes,
    event_t.data is 32 bytes. Consumers must call
    svc_prayer_engine_service_get_times() to read the full snapshot. */
 static void publish_times_updated(const svc_prayer_engine_times_t *t)
@@ -98,6 +99,9 @@ esp_err_t svc_prayer_engine_service_start(void)
     if (!event_bus_subscribe(s_mailbox, EVENT_TIME_UPDATE)) {
         ESP_LOGW(TAG, "Failed to subscribe to EVENT_TIME_UPDATE -- no recalculation on NTP sync");
     }
+    if (!event_bus_subscribe(s_mailbox, EVENT_TIME_DATE_CHANGED)) {
+        ESP_LOGW(TAG, "Failed to subscribe to EVENT_TIME_DATE_CHANGED -- no recalculation on date change");
+    }
 
     s_started = true;
 
@@ -116,16 +120,43 @@ esp_err_t svc_prayer_engine_service_start(void)
     return ESP_OK;
 }
 
-/* Compute timezone offset in hours (local minus UTC) from a svc_time snapshot.
-   Handles cross-midnight wraps that stay within +/-14 h (real timezones). */
-static double tz_offset_hours(const svc_time_snapshot_t *snap)
+/* Compute the local-UTC offset (minutes) at LOCAL NOON of the target date.
+   Why noon: prayer times for a given date should all use the same offset,
+   even on a DST-transition day where local 01:00 and local 15:00 have
+   different offsets. Noon is safely past any 01:00-03:00 transition.
+   Uses the current TZ env var (set by svc_time at start), which encodes
+   the POSIX DST rule. Returns 0 on failure (mktime/timegm rejected tm).
+   The result is a signed int16 covering all real timezones (+/-840 min). */
+static int16_t tz_offset_minutes_at_noon(int year, int month, int day)
 {
-    int utc_secs   = snap->utc.hours   * 3600 + snap->utc.minutes   * 60 + snap->utc.seconds;
-    int local_secs = snap->local.hours * 3600 + snap->local.minutes * 60 + snap->local.seconds;
-    int diff = local_secs - utc_secs;
-    if (diff >  14 * 3600) diff -= 24 * 3600;
-    if (diff < -14 * 3600) diff += 24 * 3600;
-    return (double)diff / 3600.0;
+    struct tm tm_local = {0};
+    struct tm tm_utc   = {0};
+
+    tm_local.tm_year = tm_utc.tm_year = year - 1900;
+    tm_local.tm_mon  = tm_utc.tm_mon  = month - 1;
+    tm_local.tm_mday = tm_utc.tm_mday = day;
+    tm_local.tm_hour = tm_utc.tm_hour = 12;  /* noon */
+    tm_local.tm_isdst = -1;   /* let mktime apply the POSIX TZ DST rule */
+    tm_utc.tm_isdst   = 0;    /* timegm ignores DST (it is UTC) */
+
+    time_t epoch_local = mktime(&tm_local);
+    time_t epoch_utc   = timegm(&tm_utc);
+
+    if (epoch_local == (time_t)-1 || epoch_utc == (time_t)-1) {
+        ESP_LOGW(TAG, "tz offset at noon: mktime/timegm failed");
+        return 0;
+    }
+
+    /* For BST (+1h): local noon = 11:00 UTC -> epoch_local < epoch_utc.
+       offset_sec = epoch_utc - epoch_local = +3600. */
+    int32_t offset_sec = (int32_t)(epoch_utc - epoch_local);
+    /* Defensive: reject implausible offsets (>14h) as a sign of a broken TZ. */
+    if (offset_sec >  14 * 3600 || offset_sec < -14 * 3600) {
+        ESP_LOGW(TAG, "tz offset at noon: implausible %ld sec, using 0",
+                 (long)offset_sec);
+        return 0;
+    }
+    return (int16_t)(offset_sec / 60);
 }
 
 esp_err_t svc_prayer_engine_service_recalculate(void)
@@ -152,8 +183,10 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Compute offset from svc_time utc vs local fields. */
-    double tz_off = tz_offset_hours(&snap);
+    /* Offset at local noon of the target date (DST-safe). */
+    int16_t tz_offset_min = tz_offset_minutes_at_noon(
+        (int)snap.local.year, (int)snap.local.month, (int)snap.local.day);
+    double tz_off = (double)tz_offset_min / 60.0;
 
     /* Cast config enums to prayer-engine enums (values 0..N match). */
     svc_prayer_method_t method   = (svc_prayer_method_t)cfg.method;
@@ -175,6 +208,8 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     result.date_yyyymmdd = (uint32_t)snap.local.year  * 10000U
                          + (uint32_t)snap.local.month * 100U
                          + (uint32_t)snap.local.day;
+
+    result.tz_offset_minutes = tz_offset_min;
 
     result.sunrise_sec    = raw.sunrise_sec;
     result.sunset_sec     = raw.sunset_sec;
@@ -200,11 +235,40 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
 
     publish_times_updated(&result);
 
-    ESP_LOGI(TAG, "prayer times updated: fajr=%u dhuhr=%u asr=%u maghrib=%u isha=%u",
+    ESP_LOGI(TAG, "prayer times updated (date=%lu offset=%d min): "
+                  "fajr=%u dhuhr=%u asr=%u maghrib=%u isha=%u",
+             (unsigned long)result.date_yyyymmdd,
+             (int)result.tz_offset_minutes,
              (unsigned)result.fajr_sec, (unsigned)result.dhuhr_sec,
              (unsigned)result.asr_sec, (unsigned)result.maghrib_sec,
              (unsigned)result.isha_sec);
     return ESP_OK;
+}
+
+/* Return true if the cache needs to be recomputed because the current
+   local date or the effective UTC offset has diverged from what the
+   cache was computed for. If cache is empty, returns true (must recalc).
+   Reads svc_time; returns true on any error reading time (fail-safe:
+   prefer to recalculate rather than serve stale data). */
+static bool cache_is_stale(void)
+{
+    svc_time_snapshot_t snap;
+    if (svc_time_get_snapshot(&snap) != ESP_OK || !snap.valid) {
+        return true;   /* can't tell -- prefer recalc */
+    }
+
+    uint32_t cur_date = (uint32_t)snap.local.year  * 10000U
+                      + (uint32_t)snap.local.month * 100U
+                      + (uint32_t)snap.local.day;
+    int16_t cur_offset = tz_offset_minutes_at_noon(
+        (int)snap.local.year, (int)snap.local.month, (int)snap.local.day);
+
+    if (!lock_take()) return true;
+    bool stale = (!s_cache_valid)
+              || (s_cache.date_yyyymmdd     != cur_date)
+              || (s_cache.tz_offset_minutes != cur_offset);
+    lock_give();
+    return stale;
 }
 
 esp_err_t svc_prayer_engine_service_get_times(svc_prayer_engine_times_t *out)
@@ -220,8 +284,10 @@ esp_err_t svc_prayer_engine_service_get_times(svc_prayer_engine_times_t *out)
     return valid ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
-/* Worker task: drains the mailbox. Each EVENT_TIME_UPDATE triggers a
-   recalculation; other event types are ignored. Runs on core 0. */
+/* Worker task: drains the mailbox. Recalculates on EVENT_TIME_UPDATE,
+   on EVENT_TIME_DATE_CHANGED, and on a 60 s timeout whenever the cache
+   key (local date / noon UTC offset) has drifted -- self-heals a dropped
+   event. Runs on core 0. */
 static void prayer_task(void *arg)
 {
     (void)arg;
@@ -229,11 +295,29 @@ static void prayer_task(void *arg)
 
     event_t evt;
     for (;;) {
-        if (xQueueReceive(s_mailbox, &evt, portMAX_DELAY) == pdTRUE) {
+        /* Wake on any event, or every 60 s as a self-healing fallback if
+           an event is dropped by the event bus. 60 s is short enough that
+           a missed midnight/date-change event causes at most 1 minute of
+           stale display; long enough that the task is idle in the common
+           case. */
+        BaseType_t got = xQueueReceive(s_mailbox, &evt, pdMS_TO_TICKS(60000));
+
+        bool event_recalc = false;
+        if (got == pdTRUE) {
             if (evt.type == EVENT_TIME_UPDATE) {
-                ESP_LOGD(TAG, "EVENT_TIME_UPDATE -- recalculating");
-                svc_prayer_engine_service_recalculate();
+                ESP_LOGD(TAG, "EVENT_TIME_UPDATE received");
+                event_recalc = true;
+            } else if (evt.type == EVENT_TIME_DATE_CHANGED) {
+                ESP_LOGI(TAG, "EVENT_TIME_DATE_CHANGED received");
+                event_recalc = true;
             }
+        }
+
+        bool stale_recalc = cache_is_stale();
+        if (event_recalc || stale_recalc) {
+            ESP_LOGD(TAG, "recalculating (event=%d stale=%d)",
+                     (int)event_recalc, (int)stale_recalc);
+            svc_prayer_engine_service_recalculate();
         }
     }
 }
