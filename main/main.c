@@ -9,8 +9,9 @@
  *   3. svc_config_start()   — Configuration service (NVS namespace "config")
  *   4. ui_producer_start()  — Start declarative UI frame producer
  *   5. svc_time_start()     — RTC + NTP time service (first event-bus subscriber)
- *   6. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
- *   7. audio_test_init()    — Initialize audio (if enabled)
+ *   6. svc_prayer_engine_service_start() — Prayer times + EVENT_PRAYER_TIMES_UPDATED
+ *   7. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
+ *   8. audio_test_init()    — Initialize audio (if enabled)
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -23,7 +24,7 @@
 #include "svc_time.h"
 #include "svc_network.h"
 #include "svc_config.h"
-#include "svc_prayer_engine.h"
+#include "svc_prayer_engine_service.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -55,54 +56,6 @@ void app_main(void)
                  esp_err_to_name(config_err));
     }
 
-    /* TEMPORARY verification -- remove before commit */
-    {
-        typedef struct {
-            const char         *name;
-            int                 year, month, day;
-            double              lat, lon, tz_offset;
-            svc_prayer_method_t method;
-            svc_prayer_madhab_t madhab;
-            svc_prayer_highlat_t highlat;
-        } pt_verify_row_t;
-
-        static const pt_verify_row_t rows[] = {
-            /* London in June: lat 51.5 (<55). AUTO -> MIDDLE_NIGHT. */
-            { "London Jun AUTO",  2026,  6, 21,  51.5074,  -0.1278,  1.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
-            /* London in June: explicit ANGLE_BASED. */
-            { "London Jun ANGLE", 2026,  6, 21,  51.5074,  -0.1278,  1.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_ANGLE_BASED },
-            /* Reykjavik in June: lat 64.1 (>55). AUTO -> SEVENTH. */
-            { "Reykjavik Jun AUTO", 2026, 6, 21, 64.1466, -21.9426,  0.0, SVC_PRAYER_METHOD_MWL,         SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
-            /* Karachi Hanafi: Standard Asr shadow factor 2. */
-            { "Karachi Hanafi",   2026,  3, 20,  24.8607,  67.0011,  5.0, SVC_PRAYER_METHOD_KARACHI,     SVC_PRAYER_MADHAB_HANAFI,   SVC_PRAYER_HIGHLAT_AUTO },
-            /* New York: Standard winter path, no fallback. */
-            { "New York Dec",     2026, 12, 21,  40.7128, -74.0060, -5.0, SVC_PRAYER_METHOD_ISNA,        SVC_PRAYER_MADHAB_STANDARD, SVC_PRAYER_HIGHLAT_AUTO },
-        };
-
-        for (unsigned i = 0; i < (unsigned)(sizeof(rows) / sizeof(rows[0])); i++) {
-            const pt_verify_row_t *r = &rows[i];
-            svc_prayer_times_t pt;
-            esp_err_t err = svc_prayer_engine_calculate(
-                r->year, r->month, r->day, r->lat, r->lon, r->tz_offset,
-                r->method, r->madhab, r->highlat, &pt);
-
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "[PT-VERIFY] %s: calculate failed (%s)", r->name, esp_err_to_name(err));
-                continue;
-            }
-
-            ESP_LOGI(TAG, "[PT-VERIFY] %s: Fajr %02u:%02u | Sunrise %02u:%02u | "
-                          "Dhuhr %02u:%02u | Asr %02u:%02u | Maghrib %02u:%02u | Isha %02u:%02u",
-                     r->name,
-                     (unsigned)(pt.fajr_sec / 3600U),    (unsigned)((pt.fajr_sec % 3600U) / 60U),
-                     (unsigned)(pt.sunrise_sec / 3600U), (unsigned)((pt.sunrise_sec % 3600U) / 60U),
-                     (unsigned)(pt.dhuhr_sec / 3600U),   (unsigned)((pt.dhuhr_sec % 3600U) / 60U),
-                     (unsigned)(pt.asr_sec / 3600U),     (unsigned)((pt.asr_sec % 3600U) / 60U),
-                     (unsigned)(pt.maghrib_sec / 3600U), (unsigned)((pt.maghrib_sec % 3600U) / 60U),
-                     (unsigned)(pt.isha_sec / 3600U),    (unsigned)((pt.isha_sec % 3600U) / 60U));
-        }
-    }
-
     ui_producer_start();
 
     /* svc_time subscribes to EVENT_NETWORK_CONNECTED, so it has to be up
@@ -112,6 +65,18 @@ void app_main(void)
     if (time_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_time_start failed: %s -- continuing without NTP",
                  esp_err_to_name(time_err));
+    }
+
+    /* svc_prayer_engine_service reads svc_config and svc_time, so it
+       must start AFTER svc_time_start(). Its initial calculation will
+       succeed if svc_time already has a valid time (RTC present).
+       Otherwise it starts in "not valid" state and warms up on the
+       first EVENT_TIME_UPDATE (successful NTP sync).
+       Non-fatal on failure. */
+    esp_err_t prayer_err = svc_prayer_engine_service_start();
+    if (prayer_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_prayer_engine_service_start failed: %s",
+                 esp_err_to_name(prayer_err));
     }
 
     /* svc_network is non-fatal: no AP reachable still leaves the clock

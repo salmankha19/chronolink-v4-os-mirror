@@ -21,6 +21,8 @@
  *     auto_brightness        -> backlight PWM + VEML7700 polling (separate PR)
  *     night_lamp_enable      -> full-screen warm fill + low backlight (separate PR)
  *     high_lat_rule          -> svc_prayer_engine (PR 14)
+ *     adhan_offset_min       -> svc_prayer_engine_service (PR 15)
+ *     zawal_buffer_min       -> svc_prayer_engine_service (PR 15)
  *
  * The honest-stub rule (Constitution section 12) forbids returning success
  * from a function that does nothing. It does not forbid storing a value that
@@ -87,6 +89,8 @@ typedef struct {
     uint8_t  adhan_volume;          /* 0..100; no digital volume control on shipped PCB */
     uint8_t  brightness_mode;       /* 0=daylight, 1=evening, 2=calm */
     uint8_t  high_lat_rule;         /* 0=auto, 1=none, 2=middle, 3=seventh, 4=angle */
+    uint16_t adhan_offset_min[SVC_CONFIG_PRAYER_COUNT];
+    uint16_t zawal_buffer_min;
     bool     auto_brightness;
     bool     night_lamp_enable;
 } svc_config_t;
@@ -122,6 +126,8 @@ esp_err_t svc_config_set_adhan_mode(svc_config_adhan_mode_t mode);
 esp_err_t svc_config_set_adhan_volume(uint8_t volume_0_100);
 esp_err_t svc_config_set_brightness_mode(uint8_t mode);
 esp_err_t svc_config_set_high_lat_rule(uint8_t rule);
+esp_err_t svc_config_set_adhan_offset(svc_config_prayer_t p, uint16_t minutes);
+esp_err_t svc_config_set_zawal_buffer(uint16_t minutes);
 esp_err_t svc_config_set_auto_brightness(bool enabled);
 esp_err_t svc_config_set_night_lamp(bool enabled);
 

@@ -44,6 +44,9 @@ struct PrayerTimes {
     // Additional times for Fiqh boundaries
     double zawal;    // Solar noon (sun at zenith, forbidden to pray)
     double midnight; // Islamic midnight (end of Isha)
+    double zawal_start;    /* Start of Zawal (forbidden time) */
+    double asr_yellowing;  /* Asr preferred end (sun 5 deg above horizon) */
+    double sunset;         /* True astronomical sunset */
 
     // True if all calculations succeeded (e.g., not null in extreme latitudes)
     bool valid;

@@ -30,12 +30,15 @@ typedef enum {
     EVENT_BOOT_STAGE       = 37,
 
     /* Network lifecycle events (svc_network). Range 64..95 reserved for
-       network-related events; svc_http / svc_ota should NOT reuse these
-       slots -- give them their own range in the 96..127 band. */
+       network-related events. svc_http / svc_ota should use the 112..127
+       band; the 96..111 band is reserved for prayer / audio scheduling. */
     EVENT_NETWORK_STARTING     = 64,
     EVENT_NETWORK_CONNECTED    = 65,  /* associated + got IP */
     EVENT_NETWORK_DISCONNECTED = 66,
     EVENT_NETWORK_ERROR        = 67,
+    /* Prayer engine events (svc_prayer_engine_service). 96..111 is the
+       prayer / audio scheduling band. */
+    EVENT_PRAYER_TIMES_UPDATED = 96,
 } event_type_t;
 
 typedef struct {

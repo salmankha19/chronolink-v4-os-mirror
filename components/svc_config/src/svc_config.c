@@ -27,6 +27,14 @@ static const char *TAG = "svc_config";
 #define NVS_KEY_AUTO_BRIGHT    "auto_bright"
 #define NVS_KEY_NIGHT_LAMP     "night_lamp"
 #define NVS_KEY_HIGH_LAT       "high_lat"
+#define NVS_KEY_ZAWAL_BUF      "zawal_buf"
+static const char *const k_adhan_offset_keys[SVC_CONFIG_PRAYER_COUNT] = {
+    "adhan_off_0",
+    "adhan_off_1",
+    "adhan_off_2",
+    "adhan_off_3",
+    "adhan_off_4",
+};
 
 static SemaphoreHandle_t s_lock    = NULL;
 static bool              s_nvs_open = false;
@@ -51,6 +59,10 @@ static void set_defaults(svc_config_t *c)
     c->adhan_volume      = 70;
     c->brightness_mode   = 0;
     c->high_lat_rule     = 0;
+    c->zawal_buffer_min = 10;
+    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
+        c->adhan_offset_min[i] = 0;
+    }
     c->auto_brightness   = false;
     c->night_lamp_enable = false;
 }
@@ -189,6 +201,18 @@ static void load_from_nvs_unlocked(void)
         s_cache.high_lat_rule = v;
     } else if (v > 4) {
         ESP_LOGW(TAG, "stored high_lat_rule %u out of range -- using default", v);
+    }
+
+    uint16_t off = 0;
+    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
+        if (nvs_get_u16(s_nvs, k_adhan_offset_keys[i], &off) == ESP_OK && off <= 60) {
+            s_cache.adhan_offset_min[i] = off;
+        }
+    }
+
+    off = 0;
+    if (nvs_get_u16(s_nvs, NVS_KEY_ZAWAL_BUF, &off) == ESP_OK && off <= 30) {
+        s_cache.zawal_buffer_min = off;
     }
 
     v = 0;
@@ -460,6 +484,33 @@ esp_err_t svc_config_set_high_lat_rule(uint8_t rule)
 
     s_cache.high_lat_rule = rule;
     esp_err_t err = persist_u8(NVS_KEY_HIGH_LAT, rule);
+    lock_give();
+    return err;
+}
+
+esp_err_t svc_config_set_adhan_offset(svc_config_prayer_t p, uint16_t minutes)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if ((unsigned)p >= (unsigned)SVC_CONFIG_PRAYER_COUNT) return ESP_ERR_INVALID_ARG;
+    if (minutes > 60) return ESP_ERR_INVALID_ARG;
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    s_cache.adhan_offset_min[p] = minutes;
+    esp_err_t err = persist_u16(k_adhan_offset_keys[p], minutes);
+    lock_give();
+    return err;
+}
+
+esp_err_t svc_config_set_zawal_buffer(uint16_t minutes)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if (minutes > 30) return ESP_ERR_INVALID_ARG;
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    s_cache.zawal_buffer_min = minutes;
+    esp_err_t err = persist_u16(NVS_KEY_ZAWAL_BUF, minutes);
     lock_give();
     return err;
 }
