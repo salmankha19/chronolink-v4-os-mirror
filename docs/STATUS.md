@@ -207,8 +207,10 @@ Verify each against hardware or datasheet before fixing.
    returns OK; SHT4x CRC not checked.
 9. **I2C** uses the legacy driver with deprecation checks
     suppressed, and lazy init is not under the lock. No bus recovery.
-10. **Audio:** `i2s_new_channel` result unchecked; no stop/abort;
-    blocking writes with no timeout.
+10. **Audio:** stop/abort is cooperative only -- `HAL_Audio_Stop()` sets a
+    flag that `HAL_Audio_Play()` polls between 1024-sample chunks (~23 ms
+    at 44.1 kHz) -- and nothing calls it yet. `Play()` has no lock against
+    `Stop()`/`Deinit()` on another task.
 11. **Display router:** custom SDK driver unreachable when a built-in
     backend is selected; mock replaces rather than adds; lock has no
     timeout.
