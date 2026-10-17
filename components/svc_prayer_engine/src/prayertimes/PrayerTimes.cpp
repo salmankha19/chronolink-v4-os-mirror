@@ -97,8 +97,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     double mid = mid_day(jd);
 
     // Sunrise/sunset at -0.833 degrees (refraction + sun disk)
-    double sunrise = sun_angle_time(-0.833, mid, coords.latitude, sp.declination, -1.0);
-    double sunset = sun_angle_time(-0.833, mid, coords.latitude, sp.declination, 1.0);
+    double sunrise = sun_angle_time(0.833, mid, coords.latitude, sp.declination, -1.0);
+    double sunset = sun_angle_time(0.833, mid, coords.latitude, sp.declination, 1.0);
 
     if (isnan(sunrise) || isnan(sunset)) {
         return result;  // polar day/night
