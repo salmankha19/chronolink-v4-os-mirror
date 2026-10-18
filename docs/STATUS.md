@@ -113,6 +113,17 @@ The design decisions below are the contract:
 - **NTP is the only sync source.** It provides UTC; `svc_time` writes
   UTC to the RTC and re-derives local on the display path.
 
+#### Planned Phase 3 Additions (Not yet implemented)
+
+The following logic is defined in `Architecture.md` §4.1 but is currently **not** in the code. It will be added in a future PR.
+
+*Implementation Note: The logic below is subject to continuous improvement. If a better sequence is found, update `Architecture.md` first. Per `.clinerules`, this work must be done on a dedicated branch (e.g., `feat/time-state-machine`), not directly on `main`.*
+
+1. **23:00 One-Shot NTP Sync (Corrects RTC):** `svc_time_worker` needs to check for `local.hours == 23 && local.minutes == 0` and fire a single NTP sync to update the hardware RTC, without scheduling a backoff retry if it fails. Requires Wi-Fi.
+2. **Hourly ESP32 Clock Correction (From RTC):** `svc_time_worker` needs to check for `local.minutes == 0 && local.seconds == 0`. It must read the hardware RTC, calculate the `difftime`, and call `settimeofday()` if the drift exceeds 1 second. This requires **no Wi-Fi** and keeps the ESP32 internal clock perfectly aligned with the RTC.
+3. **00:01 Prayer Delay:** `svc_prayer_engine_service.c` currently recalculates immediately on `EVENT_TIME_DATE_CHANGED`. It must be updated to set a `pending` flag and wait until `local.minutes >= 1` (00:01 AM) to actually run `svc_prayer_engine_service_recalculate()`.
+4. **Sync Telemetry & NVS Storage:** `svc_time.c` must store the **UTC epoch timestamp** (`time_t`) of every successful NTP sync (which includes an RTC write) in NVS (namespace `time`, key `last_sync_utc`). Add a new public API `svc_time_get_last_sync_time(time_t *out)` so the future `svc_http` web UI can read it, apply the local timezone, and display a "Last synced X days ago" warning to the user if the network has been down.
+
 #### NTP servers, retry and TZ storage (design agreed 2026-10-14)
 
 Three NTP slots live in NVS namespace `time`:

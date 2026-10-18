@@ -144,6 +144,39 @@ panel families.
 - In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
   service tasks.
 
+### 4.1 Time, Sync, and Prayer State Machine (Target Logic)
+
+The firmware operates on a resilient, always-on state machine that prioritizes keeping the correct time even if the network is offline.
+
+**Boot Sequence:**
+1. `svc_time` reads the hardware RTC immediately. If valid, internal ESP32 time is set.
+2. `svc_prayer_engine_service` calculates today's prayer times immediately based on the RTC time.
+3. `svc_network` starts attempting to connect to Wi-Fi in the background (infinite retry).
+4. If Wi-Fi connects, NTP syncs, updates the hardware RTC, and recalculates prayer times if the date shifted.
+
+**Hourly Fallback (ESP32 Internal Clock Correction - No Wi-Fi Needed):**
+- Every hour on the hour (e.g., `XX:00:00`), `svc_time` reads the hardware RTC.
+- If the ESP32's internal clock has drifted from the RTC by more than **1 second**, the internal clock snaps to the RTC time. (The DS3231M RTC is highly accurate, drifting only ~1 second per year, while the ESP32's internal oscillator drifts by seconds per day).
+
+**23:00 Daily Sync (RTC Drift Correction - Wi-Fi Needed):**
+- At exactly 23:00 local time, `svc_time` triggers a one-shot NTP sync **if** Wi-Fi is connected to correct the hardware RTC.
+- If Wi-Fi is offline, this is skipped (no retries). The clock continues relying on the RTC, and the RTC relies on its own extreme accuracy until the next boot or next successful connection.
+
+**Sync Telemetry (Last Known Good State):**
+- Every time an NTP sync succeeds and the hardware RTC is updated, `svc_time` records the exact Unix Epoch timestamp (`time_t`) of that success in NVS (key `last_sync_utc`). 
+- **This timestamp is strictly stored in UTC**, not local time. This ensures it remains accurate across DST shifts or timezone changes.
+- If the 23:00 sync fails (no Wi-Fi, no internet, or NTP server unreachable), the system does **not** overwrite this timestamp.
+- The web UI / config portal can read this timestamp via `svc_time_get_last_sync_time()`. The UI is responsible for converting this UTC timestamp to the user's local time. If the last sync was more than 24 hours ago, the UI should display a warning (e.g., "Warning: Clock has not synced in X days. Check Wi-Fi connection.").
+
+**00:00 to 00:01 Midnight Rollover:**
+- At 00:00:00, `svc_time` detects the date change and publishes `EVENT_TIME_DATE_CHANGED`.
+- `svc_prayer_engine_service` receives the event but **waits until 00:01** (a configurable 1-to-5 minute buffer) to recalculate the prayer times for the new day. This ensures the system has settled into the new date and prevents any edge-case race conditions at the stroke of midnight.
+
+> **Living Document Note:** 
+> This state machine is a continuous evolution process. As we discover more efficient, robust, or fool-proof sequences (e.g., handling extreme edge cases, optimizing power consumption, or improving network fallback), this section will be updated. 
+> 
+> **Workflow Rule:** Any modification to this sequence requires a dedicated Git branch (e.g., `feat/time-logic-update`), a code review, and an update to this exact document in the *same* PR. Never commit changes to this logic directly to `main`.
+
 ---
 
 ## 5. Known deviations from the rules

@@ -59,6 +59,9 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
 Events can only be published after step 3.7; the event bus does not
 exist earlier. Steps 3.1–3.6 are observable on the serial log only.
 
+**Post-Boot Autonomy:**
+Once step 4 completes, the system is fully autonomous. `svc_time` ticks at 1 Hz, keeping the internal clock alive. If the RTC is present, it is read every second to keep the snapshot accurate. If Wi-Fi connects, NTP corrects the RTC. Prayer times are calculated immediately on boot and recalculated at midnight (00:01) and upon any successful NTP sync.
+
 ---
 
 ## Reset mechanisms
