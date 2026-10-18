@@ -208,9 +208,22 @@ PrayerTimes PrayerTimesCalculator::calculate(
 
     if (effective_rule == HighLatitudeRule::AUTO) {
         // For high latitudes (>48), one-seventh is the most practical default.
+        // Below 48, middle-of-night is only sensible while the twilight angles
+        // are reachable all year. A twilight angle becomes unreachable at the
+        // summer solstice when |lat| > 90 - 23.44 - angle (~66.5 - angle), e.g.
+        // Egyptian 19.5 deg from ~47 deg N. In that band middle-of-night would
+        // place Fajr at ~midnight (before Isha), so use one-seventh there too.
+        // This test depends only on latitude + method (not the date), so the
+        // chosen rule never flips mid-year.
         double abs_lat = fabs(coords.latitude);
-        if (abs_lat > 48.0) effective_rule = HighLatitudeRule::SEVENTH_OF_THE_NIGHT;
-        else                effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
+        bool angle_unreachable_in_summer =
+            (method.fajr_angle > 0.0 && abs_lat > 66.5 - method.fajr_angle) ||
+            (method.isha_interval == 0 && method.isha_angle > 0.0 &&
+             abs_lat > 66.5 - method.isha_angle);
+        if (abs_lat > 48.0 || angle_unreachable_in_summer)
+            effective_rule = HighLatitudeRule::SEVENTH_OF_THE_NIGHT;
+        else
+            effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
     }
 
     double night = 24.0 - (sunset - sunrise);
@@ -232,16 +245,24 @@ PrayerTimes PrayerTimesCalculator::calculate(
         if (isnan(fajr) || (sunrise - fajr) > fajr_portion) fajr = sunrise - fajr_portion;
     }
     if (isha_portion > 0 && method.isha_interval == 0) {
-        if (isnan(isha) || (isha - sunset) > isha_portion) isha = sunset + isha_portion;
+        // Measured from Maghrib, not sunset: for methods with a Maghrib angle
+        // (Jafaria, 4 deg) Maghrib is later than sunset, and a sunset-based
+        // limit could put Isha before Maghrib at high latitude.
+        if (isnan(isha) || (isha - maghrib) > isha_portion) isha = maghrib + isha_portion;
     }
 
     // Islamic midnight: halfway between sunset and the (clamped) Fajr,
     // so the displayed midnight is consistent with the displayed Fajr.
-    // Fall back to sunrise only if Fajr itself is NaN or if the result
-    // would land earlier than Isha.
-    double midnight = sunset + (fajr + 24.0 - sunset) / 2.0;
-    if (isnan(fajr) || midnight < isha) {
+    // It is never earlier than Isha (floored at Isha). Using max() keeps the
+    // value continuous day to day; the old "switch to a sunrise-based
+    // definition when midnight < isha" jumped by up to ~2 h near the
+    // clamp boundary. Sunrise-based only if Fajr itself is NaN.
+    double midnight;
+    if (isnan(fajr)) {
         midnight = sunset + (sunrise + 24.0 - sunset) / 2.0;
+    } else {
+        midnight = sunset + (fajr + 24.0 - sunset) / 2.0;
+        if (midnight < isha) midnight = isha;
     }
 
     // Offset to local clock time
@@ -260,8 +281,12 @@ PrayerTimes PrayerTimesCalculator::calculate(
     result.asr_yellowing = fix_hour(asr_yellowing + offset);
     result.maghrib = fix_hour(maghrib + offset);
     result.sunset = fix_hour(sunset + offset);
-    result.isha = isha + offset;       // Allow > 24h for post-midnight Isha
-    result.midnight = midnight + offset; // Allow > 24h for post-midnight midnight
+    // Night events are expressed relative to the (wrapped) Maghrib / sunset,
+    // not wrapped themselves: they may exceed 24h (post-midnight), and the
+    // Maghrib->Isha interval stays correct even if Maghrib wraps past 24h
+    // (civil time far ahead of solar time).
+    result.isha     = result.maghrib + (isha - maghrib);
+    result.midnight = result.sunset  + (midnight - sunset);
 
     if (isnan(result.fajr) || isnan(result.sunrise) || isnan(result.dhuhr) ||
         isnan(result.asr) || isnan(result.maghrib) || isnan(result.isha)) {

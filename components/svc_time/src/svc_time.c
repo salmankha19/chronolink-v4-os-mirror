@@ -639,9 +639,14 @@ static void check_and_publish_date_change(void)
     int32_t utc_secs   = s_snapshot.utc.hours     * 3600
                        + s_snapshot.utc.minutes   * 60
                        + s_snapshot.utc.seconds;
-    int32_t new_offset_sec = local_secs - utc_secs;
-    if (new_offset_sec >  14 * 3600) new_offset_sec -= 24 * 3600;
-    if (new_offset_sec < -14 * 3600) new_offset_sec += 24 * 3600;
+    /* Time-of-day difference is only known modulo 24 h (the two clocks may
+       be on different calendar days). Normalise into [0, 86400) so the value
+       is CONSTANT for a given real UTC offset -- the old +/-14 h window flipped
+       between two values twice a day for offsets of >= +10 h or <= -10 h
+       (eastern Australia, NZ, Hawaii...) and published spurious events. A DST
+       step still changes the value by 3600 s, which is all we need to detect. */
+    int32_t new_offset_sec = (local_secs - utc_secs) % (24 * 3600);
+    if (new_offset_sec < 0) new_offset_sec += 24 * 3600;
 
     bool date_changed   = (s_last_local_date_yyymmdd != 0 &&
                            s_last_local_date_yyymmdd != new_date);
@@ -1044,10 +1049,3 @@ esp_err_t svc_time_set_ntp_server(uint8_t slot, const char *host)
     }
     return err;
 }
-
-
-
-
-
-
-

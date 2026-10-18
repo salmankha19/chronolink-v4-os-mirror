@@ -392,8 +392,12 @@ esp_err_t svc_network_start(void)
 
     wifi_config_t wcfg;
     memset(&wcfg, 0, sizeof(wcfg));
-    strncpy((char *)wcfg.sta.ssid,     ssid, sizeof(wcfg.sta.ssid) - 1);
-    strncpy((char *)wcfg.sta.password, pass, sizeof(wcfg.sta.password) - 1);
+    /* Copy the full field width. A 32-char SSID and a 64-char (hex PSK)
+       password are valid; ESP-IDF does not need a NUL when the field is
+       full, and wcfg was zeroed above so shorter values stay terminated.
+       (The old "sizeof - 1" silently truncated those to 31 / 63 chars.) */
+    memcpy(wcfg.sta.ssid,     ssid, strnlen(ssid, sizeof(wcfg.sta.ssid)));
+    memcpy(wcfg.sta.password, pass, strnlen(pass, sizeof(wcfg.sta.password)));
     wcfg.sta.threshold.authmode = pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
 
     err = esp_wifi_set_mode(WIFI_MODE_STA);
