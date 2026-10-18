@@ -60,7 +60,6 @@ typedef struct {
     uint32_t fajr_sec;
     uint32_t sunrise_sec;
     uint32_t dhuhr_sec;
-    uint32_t zawal_start_sec;
     uint32_t asr_yellow_sec;
     uint32_t sunset_sec;
     uint32_t zawal_sec;
@@ -69,6 +68,37 @@ typedef struct {
     uint32_t isha_sec;
     uint32_t midnight_sec;
 } svc_prayer_times_t;
+
+/* Day-rollover contract.
+ *
+ * Fajr / Sunrise / Dhuhr / Asr / Maghrib / Sunset / Isha / Midnight are
+ * expressed in seconds since local midnight of the *requested* date. Two
+ * fields may legitimately exceed 86399:
+ *
+ *   - isha_sec    : Isha can fall after local midnight in summer at high
+ *                   latitude. Legal range is 0 .. 172799.
+ *   - midnight_sec: Islamic midnight likewise; same range.
+ *
+ * In addition, svc_prayer_engine_service adds per-prayer adhan offsets to
+ * every field without wrap. A positive offset applied to a prayer near
+ * 23:59 therefore pushes that field to >= 86400 too.
+ *
+ * Any consumer that compares these values against a "current time since
+ * local midnight" (for a "next prayer" indicator, an adhan scheduler, etc.)
+ * MUST do day-aware comparison. A naive `if (now_sec < isha_sec)` is wrong
+ * between local midnight and the actual Isha instant when isha_sec > 86399.
+ *
+ * Use the helper below to resolve a field into (day_offset, time_of_day):
+ *     bool next_day;
+ *     uint32_t tod;
+ *     next_day = svc_prayer_time_resolve(t.isha_sec, &tod);
+ *     // Now compare `tod` in [0, 86400) and adjust for next_day as needed.
+ */
+static inline bool svc_prayer_time_resolve(uint32_t sec, uint32_t *time_of_day_sec)
+{
+    if (time_of_day_sec) *time_of_day_sec = sec % 86400U;
+    return sec >= 86400U;
+}
 
 /*
  * Calculate prayer times for a single day.

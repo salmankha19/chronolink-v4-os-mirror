@@ -116,7 +116,6 @@ esp_err_t svc_prayer_engine_calculate(
     out->fajr_sec     = hours_to_sec(t.fajr);
     out->sunrise_sec  = hours_to_sec(t.sunrise);
     out->dhuhr_sec    = hours_to_sec(t.dhuhr);
-    out->zawal_start_sec = hours_to_sec(t.zawal_start);
     /* On high-latitude days where the sun never reaches 5 degrees above
        the horizon, asr_yellowing is NaN. Distinguish that from a genuine
        00:00:00 using UINT32_MAX as the sentinel. Use isnan() not

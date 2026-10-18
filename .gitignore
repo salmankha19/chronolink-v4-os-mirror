@@ -72,3 +72,8 @@ pr-body.txt
 # Compiled object files (never commit)
 *.o
 *.o.*
+
+# Working documents (not committed)
+docs/session*-cline-prompt.md
+docs/session*-plan.md
+docs/session*-prompt.md

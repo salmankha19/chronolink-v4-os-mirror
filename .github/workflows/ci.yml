@@ -93,3 +93,16 @@ jobs:
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
           retention-days: 7
+
+  host-prayer-tests:
+    name: Prayer host tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run golden + wrapper tests
+        run: make -C prayer_host_tests test
+
+      - name: Run invariants
+        run: make -C prayer_host_tests test-highlat

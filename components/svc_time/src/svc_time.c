@@ -733,6 +733,15 @@ static void svc_time_worker(void *arg)
         if (source) {
             ESP_LOGD(TAG, "tick from %s", source);
             check_and_publish_date_change();
+
+            /* One-shot stack high-water measurement (F15). */
+            static bool s_stack_logged = false;
+            if (!s_stack_logged) {
+                UBaseType_t hw = uxTaskGetStackHighWaterMark2(NULL);
+                ESP_LOGI(TAG, "worker stack high-water: %u bytes free of %d",
+                         (unsigned)hw, SVC_TIME_TASK_STACK);
+                s_stack_logged = true;
+            }
         }
         if (++tick % SVC_TIME_STATUS_TICKS == 0) {
             log_local_status(tick);   /* TEMPORARY: remove with the status print */

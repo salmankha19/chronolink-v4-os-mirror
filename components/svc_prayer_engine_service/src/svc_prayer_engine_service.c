@@ -293,6 +293,13 @@ static void prayer_task(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "task started");
 
+    /* One-shot baseline stack high-water (F15). */
+    {
+        UBaseType_t hw = uxTaskGetStackHighWaterMark2(NULL);
+        ESP_LOGI(TAG, "task stack high-water (baseline): %u bytes free of %d",
+                 (unsigned)hw, TASK_STACK);
+    }
+
     event_t evt;
     for (;;) {
         /* Wake on any event, or every 60 s as a self-healing fallback if
@@ -318,6 +325,15 @@ static void prayer_task(void *arg)
             ESP_LOGD(TAG, "recalculating (event=%d stale=%d)",
                      (int)event_recalc, (int)stale_recalc);
             svc_prayer_engine_service_recalculate();
+
+            /* One-shot post-recalculate stack high-water (F15). */
+            static bool s_stack_post_logged = false;
+            if (!s_stack_post_logged) {
+                UBaseType_t hw = uxTaskGetStackHighWaterMark2(NULL);
+                ESP_LOGI(TAG, "task stack high-water (post-recalc): %u bytes free of %d",
+                         (unsigned)hw, TASK_STACK);
+                s_stack_post_logged = true;
+            }
         }
     }
 }

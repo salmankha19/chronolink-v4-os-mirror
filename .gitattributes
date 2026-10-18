@@ -30,4 +30,5 @@ Kconfig*        text eol=lf
 # Treat these as binary (no conversion, no diff noise)
 *.png  binary
 *.jpg  binary
-*.pdf  binary
+*.pdf  binaryMakefile text eol=lf
+*.py text eol=lf

@@ -1,0 +1,4 @@
+test-golden
+test-wrapper
+test-invariants
+*.o

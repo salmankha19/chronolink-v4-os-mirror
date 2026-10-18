@@ -268,7 +268,6 @@ PrayerTimes PrayerTimesCalculator::calculate(
     // Offset to local clock time
     double offset = timezone_offset - coords.longitude / 15.0;
 
-    double zawal_start = mid - (10.0 / 60.0); // 10 minutes before Dhuhr
     double asr_yellowing = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
                                                    -5.0, 1.0);
 
@@ -276,7 +275,6 @@ PrayerTimes PrayerTimesCalculator::calculate(
     result.sunrise = fix_hour(sunrise + offset);
     result.dhuhr = fix_hour(mid + offset);
     result.zawal = result.dhuhr;
-    result.zawal_start = fix_hour(zawal_start + offset);
     result.asr = fix_hour(asr + offset);
     result.asr_yellowing = fix_hour(asr_yellowing + offset);
     result.maghrib = fix_hour(maghrib + offset);
