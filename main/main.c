@@ -25,6 +25,7 @@
 #include "svc_network.h"
 #include "svc_config.h"
 #include "svc_prayer_engine_service.h"
+#include "svc_http.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -86,6 +87,12 @@ void app_main(void)
     if (net_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_network_start failed: %s -- continuing without WiFi",
                  esp_err_to_name(net_err));
+    }
+
+    /* Start HTTP server (PR 4.1 - Backend APIs only) */
+    esp_err_t http_err = svc_http_start();
+    if (http_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_http_start failed: %s", esp_err_to_name(http_err));
     }
 
     ESP_LOGI(TAG, "ChronoLink initialized successfully");

@@ -418,7 +418,12 @@ limitation becomes unacceptable for a specific deployment. A 4 MB
 The design intent is that all user configuration goes through a web
 UI. None of it exists yet.
 
-- **`svc_http`**: HTTP server (component not created).
+- **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
+  `GET /api/config` returns the full `svc_config_t` snapshot;
+  `POST /api/config` applies JSON patches; `POST /api/wifi` saves
+  credentials to NVS. Uses the `espressif/cjson` managed component via
+  `components/svc_http/idf_component.yml` (ESP-IDF 6.0 removed the
+  built-in `json` component). The HTML UI arrives in PR 4.2.
 - **Config UI**: set WiFi credentials, time, prayer settings, display
   preferences.
 - **Firmware update over HTTP**: writes to an inactive OTA slot.
