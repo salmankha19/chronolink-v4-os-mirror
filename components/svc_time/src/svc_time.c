@@ -34,8 +34,9 @@
 #include "svc_time.h"
 
 #include <stdio.h>
-#include <stdlib.h>   /* setenv */
+#include <stdlib.h>   /* setenv, llabs */
 #include <string.h>
+#include <sys/time.h> /* settimeofday, struct timeval */
 #include <time.h>     /* time, timegm, gmtime_r, localtime_r, tzset */
 
 #include "freertos/FreeRTOS.h"
@@ -62,6 +63,7 @@ static const char *TAG = "svc_time";
 #define NVS_NAMESPACE_TIME     "time"
 #define NVS_KEY_TZ             "tz"
 #define NVS_KEY_NTP_PREFIX     "ntp_server_"   /* + "0" .. "2" */
+#define NVS_KEY_LAST_SYNC      "last_sync_utc"
 
 #define SVC_TIME_NTP_HOST_MAX  64              /* incl. NUL */
 
@@ -130,6 +132,19 @@ static char                s_lwip_servers[SVC_TIME_NTP_SLOTS][SVC_TIME_NTP_HOST_
 
 static size_t              s_backoff_idx      = 0;
 static int64_t             s_last_sync_us     = 0;
+static time_t              s_last_sync_time   = 0;   /* UTC epoch of last successful sync */
+
+/* Link state, tracked from the event bus rather than by calling
+   svc_network_is_connected(). Keeps svc_time at layer 5 -- two services
+   talking through the bus, per Constitution section 10. Only the worker
+   touches this; no lock needed. */
+static bool                s_network_connected = false;
+
+/* "Last-run" guards for the periodic Phase 3 tasks. A tick that lands a
+   few seconds (or a few minutes, after a long NTP block) late still
+   triggers exactly once. Values are yyyymmddhh and yyyymmdd. */
+static uint32_t            s_last_hourly_correction_key = 0;
+static uint32_t            s_last_daily_sync_date       = 0;
 /* Track last-published local date and offset to detect date/DST changes
    on each tick. date=0 means "not yet tracked" (skip first tick). */
 static uint32_t            s_last_local_date_yyymmdd = 0;
@@ -417,7 +432,7 @@ static size_t collect_servers_locked(char bufs[SVC_TIME_NTP_SLOTS][SVC_TIME_NTP_
     return n;
 }
 
-static esp_err_t do_ntp_sync(const char *why)
+static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
 {
     esp_sntp_config_t cfg;
     esp_err_t err;
@@ -482,7 +497,11 @@ static esp_err_t do_ntp_sync(const char *why)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "NTP sync failed (%s): %s -- keeping the old time",
                  why, esp_err_to_name(err));
-        arm_backoff();
+        if (!is_daily_sync) {
+            arm_backoff();
+        } else {
+            ESP_LOGW(TAG, "23:00 daily sync failed, no retry until tomorrow");
+        }
         return err;   /* non-fatal: the clock keeps running off the RTC */
     }
 
@@ -515,8 +534,24 @@ static esp_err_t do_ntp_sync(const char *why)
     snapshot_store_locked(&utc, SVC_TIME_STATE_NTP_SYNCED);
     local_copy = s_snapshot.local;
     memcpy(tz_copy, s_tz, sizeof(tz_copy));
-    s_last_sync_us = esp_timer_get_time();
+    s_last_sync_us   = esp_timer_get_time();
+    s_last_sync_time = epoch;
     state_unlock();
+
+    /* Persist telemetry OUTSIDE the lock: NVS writes are flash and can
+       block for tens of milliseconds. Every svc_time_get_*() caller
+       would otherwise be stalled by a sync. */
+    if (s_nvs_open) {
+        esp_err_t nvs_err = nvs_set_i64(s_nvs, NVS_KEY_LAST_SYNC,
+                                        (int64_t)epoch);
+        if (nvs_err == ESP_OK) {
+            nvs_err = nvs_commit(s_nvs);
+        }
+        if (nvs_err != ESP_OK) {
+            ESP_LOGW(TAG, "failed to persist last_sync_utc: %s",
+                     esp_err_to_name(nvs_err));
+        }
+    }
 
     cancel_backoff();   /* the next failure starts again at 1 min */
     publish_time_update(&utc, SVC_TIME_STATE_NTP_SYNCED, TIME_EVENT_SOURCE_NTP);
@@ -532,7 +567,7 @@ static esp_err_t do_ntp_sync(const char *why)
 
 /* One sync at a time: the worker, the backoff timer and
    svc_time_sync_ntp_once() can all reach this. */
-static esp_err_t run_ntp_sync(const char *why)
+static esp_err_t run_ntp_sync(const char *why, bool is_daily_sync)
 {
     esp_err_t err;
 
@@ -544,7 +579,7 @@ static esp_err_t run_ntp_sync(const char *why)
         return ESP_ERR_INVALID_STATE;
     }
 
-    err = do_ntp_sync(why);
+    err = do_ntp_sync(why, is_daily_sync);
     xSemaphoreGive(s_sync_lock);
     return err;
 }
@@ -560,7 +595,7 @@ static void backoff_timer_cb(void *arg)
        wait is bounded and only happens while NTP is failing; if that ever
        becomes a problem, signal the worker from here instead. */
     ESP_LOGI(TAG, "backoff elapsed -- retrying NTP");
-    err = run_ntp_sync("backoff");
+    err = run_ntp_sync("backoff", false);
     if (err != ESP_OK) {
         ESP_LOGD(TAG, "backoff retry result: %s", esp_err_to_name(err));
     }
@@ -674,6 +709,97 @@ static void check_and_publish_date_change(void)
     }
 }
 
+/* One-off task: run the 23:00 daily NTP sync without blocking the worker.
+   The worker must keep ticking (so the clock in the snapshot stays alive)
+   while a sync blocks for up to SVC_TIME_SYNC_WAIT_MS. */
+static void daily_sync_task(void *arg)
+{
+    (void)arg;
+    run_ntp_sync("23:00 daily", true);
+    vTaskDelete(NULL);
+}
+
+/* Snap the ESP32 internal clock (time()) to the RTC if it has drifted by
+   more than 1 second. Runs once per clock hour, in the worker's context --
+   the I2C read is ~1 ms and settimeofday() is instant, so this never blocks
+   the worker for long. Silently skips if the RTC is unreadable or the
+   timestamp is invalid. */
+static void run_hourly_rtc_correction(void)
+{
+    rtc_time_t rtc_utc;
+    time_t     rtc_epoch;
+    time_t     sys_epoch;
+    long long  drift;
+    struct timeval tv;
+
+    if (!hil_rtc_get_time(&rtc_utc)) {
+        ESP_LOGD(TAG, "hourly correction: RTC read failed, skipping");
+        return;
+    }
+    if (!utc_to_epoch(&rtc_utc, &rtc_epoch)) {
+        ESP_LOGW(TAG, "hourly correction: invalid RTC timestamp, skipping");
+        return;
+    }
+
+    sys_epoch = time(NULL);
+    drift = (long long)sys_epoch - (long long)rtc_epoch;
+    if (llabs(drift) <= 1) {
+        ESP_LOGD(TAG, "hourly correction: drift %lld s, no action", drift);
+        return;
+    }
+
+    tv.tv_sec  = rtc_epoch;
+    tv.tv_usec = 0;
+    if (settimeofday(&tv, NULL) != 0) {
+        ESP_LOGW(TAG, "hourly correction: settimeofday failed");
+        return;
+    }
+    ESP_LOGI(TAG, "hourly correction: snapped system clock to RTC (drift %lld s)",
+             drift);
+}
+
+/* Called from the worker tick. Handles the two time-boundary tasks:
+   hourly RTC correction (once per clock hour, no Wi-Fi needed) and the
+   23:00 NTP sync (once per local date, requires connection). "Last-run"
+   keys make each task fire exactly once even if the tick is late. */
+static void run_periodic_clock_tasks(void)
+{
+    svc_time_snapshot_t snap;
+    uint32_t hour_key;
+    uint32_t cur_date;
+
+    if (svc_time_get_snapshot(&snap) != ESP_OK || !snap.valid) {
+        return;
+    }
+
+    /* 1. Hourly RTC correction: once per clock hour. */
+    hour_key = (uint32_t)snap.local.year  * 1000000U
+             + (uint32_t)snap.local.month *   10000U
+             + (uint32_t)snap.local.day   *     100U
+             + (uint32_t)snap.local.hours;
+    if (hour_key != s_last_hourly_correction_key) {
+        s_last_hourly_correction_key = hour_key;
+        run_hourly_rtc_correction();
+    }
+
+    /* 2. 23:00 NTP sync: once per local date, only if connected. */
+    cur_date = (uint32_t)snap.local.year  * 10000U
+             + (uint32_t)snap.local.month *   100U
+             + (uint32_t)snap.local.day;
+    if (snap.local.hours == 23 && cur_date != s_last_daily_sync_date) {
+        s_last_daily_sync_date = cur_date;   /* mark done: no retry this day */
+        if (s_network_connected) {
+            ESP_LOGI(TAG, "23:00 daily NTP sync triggered");
+            if (xTaskCreate(daily_sync_task, "svc_time_daily", 4096, NULL,
+                            tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
+                ESP_LOGW(TAG, "failed to spawn daily sync task");
+            }
+        } else {
+            ESP_LOGI(TAG, "23:00 sync skipped (WiFi offline)");
+        }
+    }
+}
+
 /* TEMPORARY: remove when the display path lands. */
 static void log_local_status(uint32_t tick)
 {
@@ -712,15 +838,20 @@ static void svc_time_worker(void *arg)
                 /* A fresh link may be exactly what the last attempt needed,
                    so cancel the pending backoff and retry now. */
                 esp_err_t err;
+                s_network_connected = true;
                 ESP_LOGI(TAG, "network connected -- starting NTP sync");
                 cancel_backoff();
-                err = run_ntp_sync("network");
+                err = run_ntp_sync("network", false);
                 if (err != ESP_OK) {
                     ESP_LOGW(TAG, "NTP sync after connect failed: %s",
                              esp_err_to_name(err));
                 }
                 break;
             }
+            case EVENT_NETWORK_DISCONNECTED:
+                s_network_connected = false;
+                ESP_LOGI(TAG, "network disconnected -- tracking offline");
+                break;
             default:
                 ESP_LOGD(TAG, "ignoring event type=%d", (int)evt.type);
                 break;
@@ -742,6 +873,9 @@ static void svc_time_worker(void *arg)
                          (unsigned)hw, SVC_TIME_TASK_STACK);
                 s_stack_logged = true;
             }
+
+            /* Phase 3: hourly RTC correction + 23:00 daily sync. */
+            run_periodic_clock_tasks();
         }
         if (++tick % SVC_TIME_STATUS_TICKS == 0) {
             log_local_status(tick);   /* TEMPORARY: remove with the status print */
@@ -840,6 +974,16 @@ esp_err_t svc_time_start(void)
 
     load_timezone_from_nvs();
     load_servers_from_nvs();
+
+    /* Load sync telemetry (UTC epoch of the last successful sync). */
+    if (s_nvs_open) {
+        int64_t last_sync = 0;
+        if (nvs_get_i64(s_nvs, NVS_KEY_LAST_SYNC, &last_sync) == ESP_OK) {
+            s_last_sync_time = (time_t)last_sync;
+            ESP_LOGI(TAG, "loaded last_sync_utc: %lld", (long long)last_sync);
+        }
+    }
+
     apply_timezone();
     load_initial_time_from_rtc();
 
@@ -885,6 +1029,11 @@ esp_err_t svc_time_start(void)
         /* Not fatal: the getters, a manual sync and the backoff retry still
            work; only the automatic sync on connect is lost. */
         ESP_LOGE(TAG, "event_bus_subscribe(EVENT_NETWORK_CONNECTED) failed");
+    }
+    if (!event_bus_subscribe(s_mailbox, EVENT_NETWORK_DISCONNECTED)) {
+        /* Not fatal: s_network_connected would be stuck true, and the
+           23:00 sync would run once and fail. Recoverable on next connect. */
+        ESP_LOGW(TAG, "event_bus_subscribe(EVENT_NETWORK_DISCONNECTED) failed");
     }
 
     s_started = true;
@@ -1013,7 +1162,28 @@ esp_err_t svc_time_sync_ntp_once(void)
     }
     /* Blocks for up to SVC_TIME_SYNC_WAIT_MS. Callers must not be the kernel
        event dispatcher task (fan-out would stall) or an esp_timer callback. */
-    return run_ntp_sync("manual");
+    return run_ntp_sync("manual", false);
+}
+
+esp_err_t svc_time_get_last_sync_time(time_t *out)
+{
+    time_t t;
+
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!state_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    t = s_last_sync_time;
+    state_unlock();
+
+    *out = t;
+    return (t > 0) ? ESP_OK : ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t svc_time_set_ntp_server(uint8_t slot, const char *host)

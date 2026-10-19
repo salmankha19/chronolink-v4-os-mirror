@@ -33,7 +33,8 @@ static QueueHandle_t     s_mailbox = NULL;
 static TaskHandle_t      s_task    = NULL;
 static SemaphoreHandle_t s_lock    = NULL;
 static svc_prayer_engine_times_t s_cache;
-static bool              s_cache_valid = false;
+static bool              s_cache_valid         = false;
+static bool              s_date_changed_pending = false;
 
 static void prayer_task(void *arg);
 
@@ -46,6 +47,23 @@ static bool lock_take(void)
 static void lock_give(void)
 {
     if (s_lock) xSemaphoreGive(s_lock);
+}
+
+/* Snapshot the current cache key (date + noon offset). Returns false if the
+   cache has never been valid. Takes the lock so callers do not read
+   s_cache fields that the worker or a manual recalculate could be writing. */
+static bool cache_get_key(uint32_t *date, int16_t *offset)
+{
+    bool ok;
+
+    if (!lock_take()) return false;
+    ok = s_cache_valid;
+    if (ok) {
+        *date   = s_cache.date_yyyymmdd;
+        *offset = s_cache.tz_offset_minutes;
+    }
+    lock_give();
+    return ok;
 }
 
 /* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 52 bytes,
@@ -303,27 +321,88 @@ static void prayer_task(void *arg)
     event_t evt;
     for (;;) {
         /* Wake on any event, or every 60 s as a self-healing fallback if
-           an event is dropped by the event bus. 60 s is short enough that
-           a missed midnight/date-change event causes at most 1 minute of
-           stale display; long enough that the task is idle in the common
-           case. */
+           an event is dropped by the event bus. 60 s also bounds the
+           00:00->00:01 delay for the midnight rollover: at most one extra
+           tick before the recalculation runs. */
         BaseType_t got = xQueueReceive(s_mailbox, &evt, pdMS_TO_TICKS(60000));
 
-        bool event_recalc = false;
+        bool do_recalc     = false;
+        bool is_date_event = false;
+
         if (got == pdTRUE) {
             if (evt.type == EVENT_TIME_UPDATE) {
+                /* NTP sync: authoritative time. Always recalc now; a
+                   pending midnight deferral is superseded. */
                 ESP_LOGD(TAG, "EVENT_TIME_UPDATE received");
-                event_recalc = true;
+                s_date_changed_pending = false;
+                do_recalc = true;
             } else if (evt.type == EVENT_TIME_DATE_CHANGED) {
+                /* Could be a midnight rollover OR a DST/offset change.
+                   Classify below from the current snapshot. */
                 ESP_LOGI(TAG, "EVENT_TIME_DATE_CHANGED received");
-                event_recalc = true;
+                is_date_event = true;
             }
         }
 
-        bool stale_recalc = cache_is_stale();
-        if (event_recalc || stale_recalc) {
-            ESP_LOGD(TAG, "recalculating (event=%d stale=%d)",
-                     (int)event_recalc, (int)stale_recalc);
+        /* Only the time-dependent logic runs when we have a valid time. */
+        svc_time_snapshot_t snap;
+        if (svc_time_get_snapshot(&snap) == ESP_OK && snap.valid) {
+            uint32_t cur_date = (uint32_t)snap.local.year  * 10000U
+                              + (uint32_t)snap.local.month *   100U
+                              + (uint32_t)snap.local.day;
+            int16_t  cur_offset = tz_offset_minutes_at_noon(
+                (int)snap.local.year, (int)snap.local.month, (int)snap.local.day);
+
+            uint32_t cached_date   = 0;
+            int16_t  cached_offset = 0;
+            bool cache_ok = cache_get_key(&cached_date, &cached_offset);
+
+            bool date_differs   = cache_ok && (cached_date   != cur_date);
+            bool offset_differs = cache_ok && (cached_offset != cur_offset);
+
+            if (offset_differs) {
+                /* DST transition or timezone change: recalculate
+                   immediately. The "delay until 00:01" rule is only for
+                   a pure date rollover. */
+                ESP_LOGI(TAG, "UTC offset changed (%d -> %d min), recalculating now",
+                         (int)cached_offset, (int)cur_offset);
+                s_date_changed_pending = false;
+                do_recalc = true;
+            } else if (date_differs) {
+                /* Pure date rollover. At 00:00 defer; past 00:00 recalc now
+                   (handles a missed event, a late tick, or a time jump). */
+                if (snap.local.hours == 0 && snap.local.minutes == 0) {
+                    if (!s_date_changed_pending) {
+                        ESP_LOGI(TAG, "date rollover detected, deferring recalc until 00:01");
+                    }
+                    s_date_changed_pending = true;
+                } else {
+                    s_date_changed_pending = false;
+                    do_recalc = true;
+                }
+            } else if (is_date_event) {
+                /* Event fired but the cache key did not change. Nothing to
+                   recalculate. */
+                ESP_LOGD(TAG, "EVENT_TIME_DATE_CHANGED but cache key unchanged, ignoring");
+            }
+
+            /* Pending flag matures the moment the clock leaves 00:00. */
+            if (s_date_changed_pending &&
+                !(snap.local.hours == 0 && snap.local.minutes == 0)) {
+                ESP_LOGI(TAG, "00:01 reached, calculating new day's prayer times");
+                s_date_changed_pending = false;
+                do_recalc = true;
+            }
+
+            /* 60 s self-heal: recalc on any other staleness, but never
+               while a midnight deferral is deliberately in progress. */
+            if (!do_recalc && !s_date_changed_pending && cache_is_stale()) {
+                do_recalc = true;
+            }
+        }
+
+        if (do_recalc) {
+            ESP_LOGD(TAG, "recalculating (pending=%d)", (int)s_date_changed_pending);
             svc_prayer_engine_service_recalculate();
 
             /* One-shot post-recalculate stack high-water (F15). */

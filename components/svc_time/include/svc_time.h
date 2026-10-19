@@ -30,6 +30,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "esp_err.h"
 #include "rtc_api.h"   /* rtc_time_t -- the HIL adapter, never hal_rtc.h */
@@ -106,6 +107,12 @@ esp_err_t svc_time_get_snapshot(svc_time_snapshot_t *out);
    (and leave *out untouched) while there is no trustworthy time. */
 esp_err_t svc_time_get_local(rtc_time_t *out);
 esp_err_t svc_time_get_utc(rtc_time_t *out);
+
+/* UTC epoch seconds of the last successful NTP sync (which also writes the
+   RTC). Returns ESP_OK when a sync has happened since the last factory
+   reset, ESP_ERR_NOT_FOUND if it never has, ESP_ERR_INVALID_STATE if the
+   service is not started, ESP_ERR_INVALID_ARG if out is NULL. */
+esp_err_t svc_time_get_last_sync_time(time_t *out);
 
 /*
  * Run one NTP sync now, in the caller's task. BLOCKS for up to 10 s plus any

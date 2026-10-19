@@ -144,9 +144,9 @@ panel families.
 - In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
   service tasks.
 
-### 4.1 Time, Sync, and Prayer State Machine (Target Logic)
+### 4.1 Time, Sync, and Prayer State Machine
 
-The firmware operates on a resilient, always-on state machine that prioritizes keeping the correct time even if the network is offline.
+The firmware operates on a resilient, always-on state machine that prioritizes keeping the correct time even if the network is offline. Implemented on branch `feat/time-state-machine`; see `STATUS.md` ("Phase 3 Additions") for the item-by-item status.
 
 **Boot Sequence:**
 1. `svc_time` reads the hardware RTC immediately. If valid, internal ESP32 time is set.
@@ -155,12 +155,14 @@ The firmware operates on a resilient, always-on state machine that prioritizes k
 4. If Wi-Fi connects, NTP syncs, updates the hardware RTC, and recalculates prayer times if the date shifted.
 
 **Hourly Fallback (ESP32 Internal Clock Correction - No Wi-Fi Needed):**
-- Every hour on the hour (e.g., `XX:00:00`), `svc_time` reads the hardware RTC.
-- If the ESP32's internal clock has drifted from the RTC by more than **1 second**, the internal clock snaps to the RTC time. (The DS3231M RTC is highly accurate, drifting only ~1 second per year, while the ESP32's internal oscillator drifts by seconds per day).
+- Once per clock hour — on the first `svc_time` tick of each clock hour, guarded by `s_last_hourly_correction_key = yyyymmddhh` — `svc_time` reads the hardware RTC.
+- If the ESP32's internal clock has drifted from the RTC by more than **1 second**, the internal clock snaps to the RTC time via `settimeofday()`. (The DS3231M RTC is highly accurate, drifting only ~1 second per year, while the ESP32's internal oscillator drifts by seconds per day.)
+- The trigger is edge-detection on the clock hour, not an exact-`XX:00:00` match, so a tick that lands a second or two late still fires exactly once. If the RTC read fails or returns an invalid timestamp, the check is skipped (logged at DEBUG) and the system clock is left unchanged.
 
 **23:00 Daily Sync (RTC Drift Correction - Wi-Fi Needed):**
-- At exactly 23:00 local time, `svc_time` triggers a one-shot NTP sync **if** Wi-Fi is connected to correct the hardware RTC.
-- If Wi-Fi is offline, this is skipped (no retries). The clock continues relying on the RTC, and the RTC relies on its own extreme accuracy until the next boot or next successful connection.
+- At the first `svc_time` tick of 23:00 local time (guarded by `s_last_daily_sync_date = yyyymmdd`), `svc_time` triggers a one-shot NTP sync **if** Wi-Fi is connected, to correct the hardware RTC. Wi-Fi state is tracked from `EVENT_NETWORK_CONNECTED` / `EVENT_NETWORK_DISCONNECTED` — `svc_time` does not call `svc_network` directly (Constitution §10).
+- The sync runs in a dedicated `daily_sync_task` so the 1 Hz `svc_time` worker tick keeps running during the up-to-10 s NTP block.
+- If Wi-Fi is offline, the sync is skipped (no retry). If the sync fails, no backoff is scheduled — the next attempt is tomorrow at 23:00. The clock continues relying on the RTC, and the RTC relies on its own extreme accuracy until the next successful sync.
 
 **Sync Telemetry (Last Known Good State):**
 - Every time an NTP sync succeeds and the hardware RTC is updated, `svc_time` records the exact Unix Epoch timestamp (`time_t`) of that success in NVS (key `last_sync_utc`). 
@@ -169,8 +171,11 @@ The firmware operates on a resilient, always-on state machine that prioritizes k
 - The web UI / config portal can read this timestamp via `svc_time_get_last_sync_time()`. The UI is responsible for converting this UTC timestamp to the user's local time. If the last sync was more than 24 hours ago, the UI should display a warning (e.g., "Warning: Clock has not synced in X days. Check Wi-Fi connection.").
 
 **00:00 to 00:01 Midnight Rollover:**
-- At 00:00:00, `svc_time` detects the date change and publishes `EVENT_TIME_DATE_CHANGED`.
-- `svc_prayer_engine_service` receives the event but **waits until 00:01** (a configurable 1-to-5 minute buffer) to recalculate the prayer times for the new day. This ensures the system has settled into the new date and prevents any edge-case race conditions at the stroke of midnight.
+- When the local date changes, `svc_time` publishes `EVENT_TIME_DATE_CHANGED`. The same event is also published on a DST / UTC-offset change (see `check_and_publish_date_change()` in `svc_time.c`).
+- `svc_prayer_engine_service` distinguishes the two cases by comparing the cache's `tz_offset_minutes` field:
+  - **Pure date rollover** — the service sets `s_date_changed_pending` on the first tick of 00:00 and recalculates on the first tick where the local clock is past 00:00. This is the intended one-minute settling window before the new day's prayer times are computed.
+  - **DST / UTC-offset change** — the service recalculates immediately; no delay.
+  - **Successful NTP sync** (`EVENT_TIME_UPDATE`) — recalculates immediately and clears any pending date-change deferral.
 
 > **Living Document Note:** 
 > This state machine is a continuous evolution process. As we discover more efficient, robust, or fool-proof sequences (e.g., handling extreme edge cases, optimizing power consumption, or improving network fallback), this section will be updated. 

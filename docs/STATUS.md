@@ -51,6 +51,14 @@ not.** Where another doc mentions a gap, this file has the detail.
 - **`svc_time`:** RTC + NTP + POSIX TZ; the first event-bus subscriber
   (`EVENT_NETWORK_CONNECTED`); publishes `EVENT_TIME_UPDATE`; ticks the
   snapshot once a second (PR 5c). Details in the `svc_time` section below.
+- **Phase 3 time & prayer state machine (`feat/time-state-machine`):**
+  hourly RTC correction (system clock snaps to RTC once per clock hour
+  if drift > 1 s), 23:00 daily NTP sync (fresh RTC time once per local
+  date; skipped if offline; no retry on failure), and
+  `svc_time_get_last_sync_time()` telemetry (UTC epoch of last successful
+  sync, persisted to NVS `time/last_sync_utc`). `svc_prayer_engine_service`
+  delays a pure date rollover recalculation until 00:01 (DST still
+  recalculates immediately). Details in the `svc_time` section below.
 - **Live clock face (PR 6):** `ui_producer` polls `svc_time` at 250 ms and
   submits a 3-command `dm_frame_t` (clear / fill_rect / draw_text) when the
   formatted local `HH:MM:SS` changes. The full-screen clear is first-frame
@@ -113,16 +121,16 @@ The design decisions below are the contract:
 - **NTP is the only sync source.** It provides UTC; `svc_time` writes
   UTC to the RTC and re-derives local on the display path.
 
-#### Planned Phase 3 Additions (Not yet implemented)
+#### Phase 3 Additions (Implemented — branch `feat/time-state-machine`)
 
-The following logic is defined in `Architecture.md` §4.1 but is currently **not** in the code. It will be added in a future PR.
+The following state machine logic (documented in `Architecture.md` §4.1) is now implemented. Each item is described below as it behaves.
 
 *Implementation Note: The logic below is subject to continuous improvement. If a better sequence is found, update `Architecture.md` first. Per `.clinerules`, this work must be done on a dedicated branch (e.g., `feat/time-state-machine`), not directly on `main`.*
 
-1. **23:00 One-Shot NTP Sync (Corrects RTC):** `svc_time_worker` needs to check for `local.hours == 23 && local.minutes == 0` and fire a single NTP sync to update the hardware RTC, without scheduling a backoff retry if it fails. Requires Wi-Fi.
-2. **Hourly ESP32 Clock Correction (From RTC):** `svc_time_worker` needs to check for `local.minutes == 0 && local.seconds == 0`. It must read the hardware RTC, calculate the `difftime`, and call `settimeofday()` if the drift exceeds 1 second. This requires **no Wi-Fi** and keeps the ESP32 internal clock perfectly aligned with the RTC.
-3. **00:01 Prayer Delay:** `svc_prayer_engine_service.c` currently recalculates immediately on `EVENT_TIME_DATE_CHANGED`. It must be updated to set a `pending` flag and wait until `local.minutes >= 1` (00:01 AM) to actually run `svc_prayer_engine_service_recalculate()`.
-4. **Sync Telemetry & NVS Storage:** `svc_time.c` must store the **UTC epoch timestamp** (`time_t`) of every successful NTP sync (which includes an RTC write) in NVS (namespace `time`, key `last_sync_utc`). Add a new public API `svc_time_get_last_sync_time(time_t *out)` so the future `svc_http` web UI can read it, apply the local timezone, and display a "Last synced X days ago" warning to the user if the network has been down.
+1. **Hourly ESP32 Clock Correction (From RTC, no Wi-Fi):** `svc_time_worker` runs an RTC-vs-system drift check once per clock hour, guarded by `s_last_hourly_correction_key = yyyymmddhh`. If the drift exceeds 1 second, `settimeofday()` snaps the system clock to the RTC. The trigger is "first tick of each clock hour", not an exact-`XX:00:00` match, so a delayed tick still fires exactly once. If the RTC read fails or returns an invalid timestamp, the check is skipped silently (logged at DEBUG).
+2. **23:00 One-Shot NTP Sync (corrects RTC, requires Wi-Fi):** `svc_time_worker` fires one NTP sync when the local clock first reaches 23:00, guarded by `s_last_daily_sync_date = yyyymmdd`. The sync runs in a dedicated `daily_sync_task` so the 1 Hz worker tick continues during the up-to-10 s NTP block. If Wi-Fi is offline, the sync is skipped (no retry). If the sync fails, no backoff is scheduled — the next attempt is tomorrow at 23:00. Wi-Fi state comes from `EVENT_NETWORK_CONNECTED` / `EVENT_NETWORK_DISCONNECTED`, so `svc_time` does not call `svc_network` directly (Constitution §10).
+3. **00:01 Prayer Delay:** `svc_prayer_engine_service` sets `s_date_changed_pending` on the first tick of 00:00 and recalculates on the first tick where the local clock is past 00:00. This gives the system one minute of settling time after the date rollover. A DST / UTC-offset change (also published by `svc_time` as `EVENT_TIME_DATE_CHANGED`) is distinguished from a date change by comparing the cache's `tz_offset_minutes` field — a pure offset change recalculates immediately, no delay. `EVENT_TIME_UPDATE` (successful NTP sync) also recalculates immediately and clears any pending deferral.
+4. **Sync Telemetry & NVS Storage:** every successful NTP sync persists its UTC epoch to NVS namespace `time`, key `last_sync_utc`. On boot, the value is read back. `svc_time_get_last_sync_time(time_t *out)` returns it (or `ESP_ERR_NOT_FOUND` if never synced). A future `svc_http` can use this to warn the user if the clock has not synced in a long time.
 
 #### NTP servers, retry and TZ storage (design agreed 2026-10-14)
 
