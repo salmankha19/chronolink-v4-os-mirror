@@ -33,6 +33,7 @@
 #include "ui_producer.h"
 #include "display_manager.h"
 #include "svc_time.h"
+#include "svc_network.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -72,6 +73,39 @@ static void ui_producer_task(void *arg)
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(UI_POLL_PERIOD_MS));
+
+        /* Check if we are in WiFi Setup (AP) mode */
+        if (svc_network_is_ap_mode()) {
+            if (strcmp(s_last_text, "AP_MODE") != 0) {
+                
+                dm_frame_t frame;
+                memset(&frame, 0, sizeof frame);
+                frame.flags = DM_FRAME_FLAG_NONE;
+                uint8_t n = 0;
+
+                dm_cmd_clear(&frame.cmds[n++], UI_COLOR_BLACK);
+                
+                // Draw Setup Instructions (using font_id 1, target height 24)
+                uint16_t fh = 24;
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 40, 1, fh, "WiFi Setup Mode");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 80, 1, fh, "Connect to:");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 110, 1, fh, "ChronoLink-Setup");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 160, 1, fh, "Open Browser:");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 190, 1, fh, "192.168.4.1");
+                
+                frame.cmd_count = n;
+                if (display_manager_submit_frame(&frame)) {
+                    strncpy(s_last_text, "AP_MODE", sizeof s_last_text - 1);
+                }
+            }
+            continue; // Skip the clock logic below
+        } else {
+            /* If we just left AP mode, force a clock redraw */
+            if (strcmp(s_last_text, "AP_MODE") == 0) {
+                s_last_text[0] = '\0';
+                first_frame = true;
+            }
+        }
 
         svc_time_snapshot_t snap;
         if (svc_time_get_snapshot(&snap) != ESP_OK || !snap.valid) {

@@ -82,7 +82,7 @@ but cannot be triggered by a user yet.
 
 Planned producer: the configuration web UI (`svc_http`, not built) is
 expected to write the flag to NVS and trigger a reboot. See STATUS.md
-"Planned web / config work".
+"Web / config work (in progress)".
 
 Effect:
 
@@ -191,4 +191,4 @@ Total ends exactly at 16 MB. The `storage` line must stay as above
   OTA. See `STATUS.md` "Planned boot work".
 - `factory` partition — **not planned**. See `partitions.md` for the
   decision and `STATUS.md` for the recovery model.
-- Producer of `BOOT_FLAG_FACTORY_RESET` (needs the web UI).
+- Producer of `BOOT_FLAG_FACTORY_RESET` (needs the web UI; see "Web / config work (in progress)" in STATUS.md).

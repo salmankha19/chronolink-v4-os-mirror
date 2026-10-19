@@ -51,6 +51,9 @@ esp_err_t svc_network_stop(void);
 /* Cached link state; does not block. */
 bool svc_network_is_connected(void);
 
+/* Returns true if the device is currently in AP (Setup) mode. */
+bool svc_network_is_ap_mode(void);
+
 /* Dotted IPv4 string, or NULL if not connected. Owned by the service;
    valid until the next disconnect. Do not free. */
 const char *svc_network_get_ip_str(void);

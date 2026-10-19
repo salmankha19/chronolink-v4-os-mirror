@@ -12,7 +12,7 @@ not.** Where another doc mentions a gap, this file has the detail.
 - No user-facing buttons. BOOT/EN on the PCB are development aids.
 - All user configuration — WiFi, time, prayer settings, display,
   firmware updates, factory reset — goes through a web UI.
-  The web UI is **not built**; see "Planned web / config work".
+  The web UI is **in progress**; see "Web / config work (in progress)".
 
 ---
 
@@ -402,7 +402,7 @@ limitation becomes unacceptable for a specific deployment. A 4 MB
 
 - **Remove BOOT-button reset code** from `boot_manager.c` — a
   development convenience that does not belong in the shipped product.
-  Replace with a config-driven trigger (see "Planned web / config work").
+  Replace with a config-driven trigger (see "Web / config work (in progress)").
 - **Full factory reset:** current data reset wipes NVS + `/storage` only.
   Does not touch `otadata`, does not force a firmware revert, does not
   clear `phy_init`. Tracked as three separate future PRs.
@@ -413,22 +413,16 @@ limitation becomes unacceptable for a specific deployment. A 4 MB
 
 ---
 
-## Planned web / config work (not started)
+## Web / config work (in progress)
 
-The design intent is that all user configuration goes through a web
-UI. None of it exists yet.
+The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
-  `GET /api/config` returns the full `svc_config_t` snapshot;
-  `POST /api/config` applies JSON patches; `POST /api/wifi` saves
-  credentials to NVS. Uses the `espressif/cjson` managed component via
-  `components/svc_http/idf_component.yml` (ESP-IDF 6.0 removed the
-  built-in `json` component). The HTML UI arrives in PR 4.2.
-- **Config UI**: set WiFi credentials, time, prayer settings, display
-  preferences.
-- **Firmware update over HTTP**: writes to an inactive OTA slot.
-- **Factory-reset trigger**: writes `BOOT_FLAG_FACTORY_RESET` to NVS
-  and reboots.
+- **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
+- **Web UI (PR 4.3):** The actual HTML page served by `svc_http` (not started).
+- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started).
+- **Factory-reset trigger (PR 4.5):** Writes `BOOT_FLAG_FACTORY_RESET` to NVS and reboots (not started).
+
 - **Producer of `BOOT_FLAG_FACTORY_RESET`**: currently no producer
   exists. The code path in `boot_manager.c` is reachable only via the
   BOOT button (dev-only).

@@ -38,6 +38,9 @@
 
 static const char *TAG = "svc_network";
 
+#define AP_SSID "ChronoLink-Setup"
+#define AP_MAX_RETRIES 3
+
 #define NVS_NAMESPACE_WIFI   "wifi"
 #define NVS_KEY_SSID         "ssid"
 #define NVS_KEY_PASS         "pass"
@@ -53,7 +56,10 @@ static const char *TAG = "svc_network";
 /* ------------------------------------------------------------------ */
 
 static bool                         s_started      = false;
+static esp_netif_t                 *s_ap_netif     = NULL;
 static bool                         s_connected    = false;
+static bool                         s_ap_mode      = false;
+static uint8_t                      s_retry_count  = 0;
 static esp_netif_t                 *s_sta_netif    = NULL;
 static esp_event_handler_instance_t s_wifi_evt_instance = NULL;
 static esp_event_handler_instance_t s_ip_evt_instance   = NULL;
@@ -232,6 +238,8 @@ static void reset_backoff(void)
 /* Event handlers                                                     */
 /* ------------------------------------------------------------------ */
 
+static void start_ap_mode(void);
+
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
@@ -259,7 +267,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             s_ip_str[0] = '\0';
             publish_disconnected(reason);
         }
-        schedule_reconnect();
+
+        s_retry_count++;
+        if (s_retry_count >= AP_MAX_RETRIES) {
+            ESP_LOGW(TAG, "Max WiFi retries reached (%d).", AP_MAX_RETRIES);
+            start_ap_mode();
+        } else {
+            schedule_reconnect();
+        }
         break;
     }
 
@@ -278,6 +293,7 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
         snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&e->ip_info.ip));
 
         s_connected = true;
+        s_retry_count = 0;
         reset_backoff();
 
         ESP_LOGI(TAG, "Got IP: %s", s_ip_str);
@@ -288,6 +304,48 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
 /* ------------------------------------------------------------------ */
 /* Public API                                                         */
 /* ------------------------------------------------------------------ */
+
+static void start_ap_mode(void)
+{
+    if (s_ap_mode) return;
+
+    ESP_LOGW(TAG, "Starting AP fallback mode (SSID: %s)", AP_SSID);
+
+    esp_wifi_stop(); // Best-effort stop of STA mode
+
+    /* Create the default AP netif so the DHCP server runs */
+    if (!s_ap_netif) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+    }
+    if (!s_ap_netif) {
+        ESP_LOGE(TAG, "Failed to create AP netif");
+        return;
+    }
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = AP_SSID,
+            .ssid_len = strlen(AP_SSID),
+            .channel = 1,
+            .authmode = WIFI_AUTH_OPEN,
+            .max_connection = 4,
+        },
+    };
+
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    if (err == ESP_OK) err = esp_wifi_start();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start AP mode: %s", esp_err_to_name(err));
+        return;
+    }
+
+    s_ap_mode = true;
+    s_started = true;
+    s_connected = false;
+    s_ip_str[0] = '\0';
+}
 
 esp_err_t svc_network_start(void)
 {
@@ -301,10 +359,29 @@ esp_err_t svc_network_start(void)
     esp_err_t cred_err = read_credentials(ssid, sizeof(ssid),
                                           pass, sizeof(pass));
     if (cred_err != ESP_OK) {
-        ESP_LOGW(TAG, "No WiFi credentials; service idle. "
-                      "Call svc_network_set_credentials() and reboot.");
-        publish_error(SVC_NETWORK_STAGE_NVS, cred_err);
-        return ESP_OK;
+        ESP_LOGW(TAG, "No WiFi credentials found. Starting AP mode.");
+
+        esp_err_t e = esp_netif_init();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "esp_netif_init failed: %s", esp_err_to_name(e));
+            return ESP_FAIL;
+        }
+        e = esp_event_loop_create_default();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "esp_event_loop_create_default failed: %s", esp_err_to_name(e));
+            return ESP_FAIL;
+        }
+
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        e = esp_wifi_init(&cfg);
+        if (e != ESP_OK) {
+            ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(e));
+            return ESP_FAIL;
+        }
+
+        s_started = true; // Allow svc_network_stop() to clean up if AP mode fails
+        start_ap_mode();
+        return s_ap_mode ? ESP_OK : ESP_FAIL;
     }
     ESP_LOGI(TAG, "Connecting to SSID '%s'", ssid);
 
@@ -443,9 +520,16 @@ esp_err_t svc_network_stop(void)
         s_ip_evt_instance = NULL;
     }
 
+    if (s_ap_netif) {
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
+    }
+
     s_connected = false;
     s_ip_str[0] = '\0';
     s_started = false;
+    s_ap_mode = false;
+    s_retry_count = 0;
     reset_backoff();
 
     ESP_LOGI(TAG, "WiFi stopped");
@@ -455,6 +539,11 @@ esp_err_t svc_network_stop(void)
 bool svc_network_is_connected(void)
 {
     return s_connected;
+}
+
+bool svc_network_is_ap_mode(void)
+{
+    return s_ap_mode;
 }
 
 const char *svc_network_get_ip_str(void)
