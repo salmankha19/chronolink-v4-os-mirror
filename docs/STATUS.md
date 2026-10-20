@@ -381,10 +381,6 @@ readers.
 
 ### Other planned boot work
 
-- **Remove BOOT-button reset code** from `boot_manager.c` — a
-  development convenience that does not belong in the shipped product.
-  The config-driven trigger now exists (`POST /api/factory-reset`,
-  PR 4.5); removing the BOOT-button path is a follow-up PR.
 - **Full factory reset:** current data reset wipes NVS + `/storage` only.
   Does not touch `otadata`, does not force a firmware revert, does not
   clear `phy_init`. Tracked as three separate future PRs.
