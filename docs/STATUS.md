@@ -370,7 +370,7 @@ readers.
 
 | Name | What it does | Status |
 |---|---|---|
-| `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + reformat `/storage`, reboot. **Not an image reset.** | Exists in `boot_manager.c`; no producer yet (needs `svc_http`) |
+| `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + reformat `/storage`, reboot. **Not an image reset.** | Exists in `boot_manager.c`; producers: caller-supplied flag, `POST /api/factory-reset` (PR 4.5) |
 | `factory` partition | Known-good golden image slot | Not present, **not planned** |
 | `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | Currently **off**; must be enabled in the first firmware that ships with the two-slot table |
 | USB reflash | Manual recovery via `esptool.py` | Always available |
@@ -402,7 +402,8 @@ limitation becomes unacceptable for a specific deployment. A 4 MB
 
 - **Remove BOOT-button reset code** from `boot_manager.c` — a
   development convenience that does not belong in the shipped product.
-  Replace with a config-driven trigger (see "Web / config work (in progress)").
+  The config-driven trigger now exists (`POST /api/factory-reset`,
+  PR 4.5); removing the BOOT-button path is a follow-up PR.
 - **Full factory reset:** current data reset wipes NVS + `/storage` only.
   Does not touch `otadata`, does not force a firmware revert, does not
   clear `phy_init`. Tracked as three separate future PRs.
@@ -419,13 +420,9 @@ The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
 - **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
-- **Web UI (PR 4.3):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, and live Prayer Times (`GET /api/prayers`). Includes a reboot endpoint (`POST /api/reboot`).
-- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started).
-- **Factory-reset trigger (PR 4.5):** Writes `BOOT_FLAG_FACTORY_RESET` to NVS and reboots (not started).
-
-- **Producer of `BOOT_FLAG_FACTORY_RESET`**: currently no producer
-  exists. The code path in `boot_manager.c` is reachable only via the
-  BOOT button (dev-only).
+- **Web UI (PR 4.3):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints.
+- **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + FATFS reformat + reboot). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
+- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started). Blocked on `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` — see "Planned boot work".
 
 ---
 

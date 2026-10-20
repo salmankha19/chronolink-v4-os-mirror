@@ -104,6 +104,17 @@
     </div>
   </div>
 
+  <!-- Factory Reset -->
+  <div class="card" style="border: 2px solid #c0392b;">
+    <h2 style="color:#c0392b;">Factory Reset</h2>
+    <p style="font-size:0.9em; color:#666;">
+      Erases all saved settings (WiFi credentials, location, prayer
+      configuration) and restarts the device in setup mode. This cannot
+      be undone.
+    </p>
+    <button style="background:#c0392b;" onclick="factoryReset()">Erase All Settings & Reset</button>
+  </div>
+
   <div id="toast">Settings Saved</div>
 
   <script>
@@ -147,6 +158,22 @@
         if (r.ok) showToast("Configuration Saved!");
         else showToast("Error saving config");
       });
+    }
+
+    function factoryReset() {
+      if (!confirm("Erase ALL settings (WiFi, location, prayer config) and reboot into setup mode?\n\nThis cannot be undone.")) {
+        return;
+      }
+      if (!confirm("Are you sure? The device will restart and need to be reconfigured from scratch.")) {
+        return;
+      }
+      showToast("Erasing and rebooting...");
+      fetch('/api/factory-reset', {method: 'POST'})
+        .then(r => {
+          if (!r.ok) showToast("Factory reset failed");
+          // On success, the device reboots; this page will drop
+        })
+        .catch(() => { /* expected: connection dies when device reboots */ });
     }
 
     function saveWifi() {

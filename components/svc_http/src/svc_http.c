@@ -6,6 +6,7 @@
 #include "svc_network.h"
 #include "svc_prayer_engine_service.h"
 #include "esp_system.h"
+#include "nvs.h"
 
 extern const unsigned char index_html[];
 extern const size_t index_html_len;
@@ -14,6 +15,13 @@ extern const size_t index_html_len;
 
 static const char *TAG = "svc_http";
 static httpd_handle_t s_server = NULL;
+
+/* One-shot boot request written by POST /api/factory-reset and read by
+ * boot_manager_init() on the next boot. MUST stay in sync with
+ * components/boot_manager/src/boot_manager.c. */
+#define NVS_NAMESPACE_BOOT_REQUEST      "boot_req"
+#define NVS_KEY_BOOT_REQUEST            "flag"
+#define NVS_BOOT_REQUEST_FACTORY_RESET  0x02u  /* == BOOT_FLAG_FACTORY_RESET */
 
 static esp_err_t send_json(httpd_req_t *req, cJSON *root)
 {
@@ -248,6 +256,46 @@ static esp_err_t post_reboot_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* POST /api/factory-reset
+ *
+ * Writes a one-shot factory-reset request to NVS and reboots. The actual
+ * wipe (NVS erase + FATFS reformat) runs in boot_manager_init() on the
+ * next boot, where all the provisioning code lives. That keeps the reset
+ * logic in one place and avoids svc_http duplicating HAL/filesystem work.
+ *
+ * SECURITY NOTE: like /api/reboot, this endpoint has no authentication.
+ * In AP mode the network is open and the device is reachable by anyone
+ * on the setup SSID. That is consistent with /api/wifi and /api/config
+ * today; a token-based auth scheme is a future PR, not this one. */
+static esp_err_t post_factory_reset_handler(httpd_req_t *req)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_BOOT_REQUEST, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open(boot_req) failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "NVS unavailable");
+        return ESP_FAIL;
+    }
+
+    err = nvs_set_u8(h, NVS_KEY_BOOT_REQUEST, NVS_BOOT_REQUEST_FACTORY_RESET);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to store boot request: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Failed to store request");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    ESP_LOGW(TAG, "Factory reset requested via API; rebooting");
+    vTaskDelay(pdMS_TO_TICKS(500));  /* let the HTTP response flush */
+    esp_restart();
+    return ESP_OK;
+}
+
 /* GET /api/prayers */
 static esp_err_t get_prayers_handler(httpd_req_t *req)
 {
@@ -291,8 +339,9 @@ esp_err_t svc_http_start(void)
         { .uri = "/api/config",   .method = HTTP_GET,  .handler = get_config_handler    },
         { .uri = "/api/config",   .method = HTTP_POST, .handler = post_config_handler   },
         { .uri = "/api/wifi",     .method = HTTP_POST, .handler = post_wifi_handler     },
-        { .uri = "/api/reboot",   .method = HTTP_POST, .handler = post_reboot_handler   },
-        { .uri = "/api/prayers",  .method = HTTP_GET,  .handler = get_prayers_handler   },
+        { .uri = "/api/reboot",        .method = HTTP_POST, .handler = post_reboot_handler        },
+        { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = post_factory_reset_handler },
+        { .uri = "/api/prayers",       .method = HTTP_GET,  .handler = get_prayers_handler        },
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {
         esp_err_t r = httpd_register_uri_handler(s_server, &handlers[i]);

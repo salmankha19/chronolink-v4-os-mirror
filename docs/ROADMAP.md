@@ -92,9 +92,10 @@ Goal: the user sets WiFi, location, method and TZ without reflashing.
   a starting reference for fields and layout; V4 endpoints differ.
 - Writes NVS: `wifi/ssid`, `wifi/pass`, `time/tz`, `ntp_server_0..2`,
   plus the future location / method keys.
-- Factory reset: writes `BOOT_FLAG_FACTORY_RESET` and reboots. That flag
-  has no producer today -- the path is reachable only from the BOOT
-  button (dev convenience).
+- Factory reset: writes `BOOT_FLAG_FACTORY_RESET` and reboots. Landed as
+  PR 4.5 (`POST /api/factory-reset` -> NVS `boot_req/flag` ->
+  `boot_manager` on next boot). The BOOT-button path remains as a dev
+  convenience and is scheduled for removal in a follow-up.
 
 ---
 

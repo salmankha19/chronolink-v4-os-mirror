@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_vfs_fat.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -21,6 +22,13 @@ static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 #define CHRONOLINK_STORAGE_MOUNT_POINT "/storage"
 #define CHRONOLINK_STORAGE_PARTITION   "storage"
+
+/* Persistent one-shot boot request (NVS namespace + key).
+ * Written by svc_http's POST /api/factory-reset handler, read and cleared
+ * here on the next boot. MUST stay in sync with svc_http.c. */
+#define NVS_NAMESPACE_BOOT_REQUEST     "boot_req"
+#define NVS_KEY_BOOT_REQUEST           "flag"
+#define NVS_BOOT_REQUEST_FACTORY_RESET 0x02u  /* == BOOT_FLAG_FACTORY_RESET */
 
 /* --------------------------------------------------------------------------
  * Boot-order init helpers
@@ -62,6 +70,42 @@ static bool factory_reset_requested(boot_flags_t flags)
         return true;
     }
     return false;
+}
+
+/* Read the one-shot boot request left by svc_http in NVS, if any, and
+ * clear it (so a failed reset does not loop). Returns BOOT_FLAG_FACTORY_RESET
+ * when the flag was set, 0 otherwise. Called from boot_manager_init() AFTER
+ * init_nvs() -- the flag lives in NVS, so it cannot be read earlier.
+ *
+ * The handle is closed before returning: do_factory_reset() calls
+ * nvs_flash_erase(), which requires all NVS handles to be released. */
+static boot_flags_t read_pending_boot_request(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_BOOT_REQUEST, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        /* Namespace doesn't exist yet = no request pending. Not an error. */
+        return 0;
+    }
+
+    uint8_t flag = 0;
+    err = nvs_get_u8(h, NVS_KEY_BOOT_REQUEST, &flag);
+    if (err != ESP_OK) {
+        nvs_close(h);
+        return 0;
+    }
+
+    /* Clear BEFORE acting: if do_factory_reset() somehow fails to wipe
+     * NVS, we still don't want to boot-loop on this flag. */
+    nvs_erase_key(h, NVS_KEY_BOOT_REQUEST);
+    nvs_commit(h);
+    nvs_close(h);
+
+    if (flag & NVS_BOOT_REQUEST_FACTORY_RESET) {
+        ESP_LOGW(TAG, "Factory reset requested via NVS (svc_http)");
+        return BOOT_FLAG_FACTORY_RESET;
+    }
+    return 0;
 }
 
 /* Wipe every persistent store that is user-owned, then reboot.
@@ -240,6 +284,8 @@ int boot_manager_init(boot_flags_t flags)
        bus does not exist yet. See the comment block above. */
     init_logging();
 
+    /* Honor a caller-supplied flag first, so a device whose NVS is
+     * unreadable can still be reset from the parameter path. */
     if (factory_reset_requested(flags)) {
         do_factory_reset();   /* does not return */
     }
@@ -247,6 +293,14 @@ int boot_manager_init(boot_flags_t flags)
     if (init_nvs() != 0) {
         return -1;
     }
+
+    /* Now that NVS is open, also honor a persistent request written by
+     * svc_http's POST /api/factory-reset handler. read_pending_boot_request()
+     * clears the flag first, so a reset that fails partway does not loop. */
+    if (factory_reset_requested(read_pending_boot_request())) {
+        do_factory_reset();   /* does not return */
+    }
+
     if (init_fatfs() != 0) {
         return -1;
     }

@@ -70,19 +70,21 @@ The phrase "factory reset" is overloaded. Three distinct mechanisms
 exist in ESP-IDF; **only the first is implemented in this codebase
 today**.
 
-### 1. Data reset — implemented, but no producer yet
+### 1. Data reset — implemented, producer is `POST /api/factory-reset`
 
 `boot_manager_init()` checks the boot flags for
 `BOOT_FLAG_FACTORY_RESET`. If present, it erases NVS, reformats
 `/storage`, and reboots.
 
-**There is currently no producer of that flag.** No button, no NVS
-key, no config file sets it today. The mechanism exists in the code
-but cannot be triggered by a user yet.
+Two producers exist:
 
-Planned producer: the configuration web UI (`svc_http`, not built) is
-expected to write the flag to NVS and trigger a reboot. See STATUS.md
-"Web / config work (in progress)".
+- **Parameter path:** a caller can pass `BOOT_FLAG_FACTORY_RESET` to
+  `boot_manager_init()`. This runs *before* `init_nvs()`, so it still
+  works on a device whose NVS is unreadable.
+- **Web UI path (PR 4.5):** `POST /api/factory-reset` writes a one-shot
+  flag to NVS namespace `boot_req` (key `flag`) and reboots. On the next
+  boot, `boot_manager_init()` reads and clears the flag immediately after
+  `init_nvs()` and runs the same `do_factory_reset()`.
 
 Effect:
 
@@ -191,4 +193,4 @@ Total ends exactly at 16 MB. The `storage` line must stay as above
   OTA. See `STATUS.md` "Planned boot work".
 - `factory` partition — **not planned**. See `partitions.md` for the
   decision and `STATUS.md` for the recovery model.
-- Producer of `BOOT_FLAG_FACTORY_RESET` (needs the web UI; see "Web / config work (in progress)" in STATUS.md).
+- Producer of `BOOT_FLAG_FACTORY_RESET`: **implemented** as `POST /api/factory-reset` (PR 4.5). See "Reset mechanisms" above.
