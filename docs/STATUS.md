@@ -419,7 +419,7 @@ The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
 - **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
-- **Web UI (PR 4.3):** The actual HTML page served by `svc_http` (not started).
+- **Web UI (PR 4.3):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, and live Prayer Times (`GET /api/prayers`). Includes a reboot endpoint (`POST /api/reboot`).
 - **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started).
 - **Factory-reset trigger (PR 4.5):** Writes `BOOT_FLAG_FACTORY_RESET` to NVS and reboots (not started).
 

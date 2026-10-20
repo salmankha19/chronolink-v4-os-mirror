@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChronoLink V4 Setup</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f4f7f6; color: #333; }
+    h1 { color: #2c3e50; text-align: center; }
+    .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .card h2 { margin-top: 0; font-size: 1.2em; color: #34495e; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+    label { display: block; margin-top: 15px; font-weight: bold; font-size: 0.9em; }
+    input[type="text"], input[type="password"], input[type="number"], select { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    button { width: 100%; padding: 12px; background: #2c3e50; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; margin-top: 20px; }
+    button:hover { background: #1a252f; }
+    .btn-wifi { background: #e67e22; }
+    .btn-wifi:hover { background: #d35400; }
+    .row { display: flex; gap: 10px; }
+    .row > div { flex: 1; }
+    .prayer-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 1.1em; }
+    .prayer-times div { background: #ecf0f1; padding: 10px; border-radius: 4px; }
+    #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 4px; padding: 16px; position: fixed; z-index: 1; left: 50%; bottom: 30px; font-size: 17px; transform: translateX(-50%); }
+    #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+    @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+    @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+  </style>
+</head>
+<body>
+  <h1>ChronoLink V4</h1>
+
+  <!-- WiFi Setup -->
+  <div class="card">
+    <h2>WiFi Configuration</h2>
+    <p style="font-size:0.9em; color:#666;">Change the WiFi network the clock connects to.</p>
+    <label>WiFi SSID</label>
+    <input type="text" id="wifi_ssid" placeholder="e.g. SK360_Guest">
+    <label>WiFi Password</label>
+    <input type="password" id="wifi_pass" placeholder="(leave blank if open network)">
+    <button class="btn-wifi" onclick="saveWifi()">Save WiFi & Reboot</button>
+  </div>
+
+  <!-- Configuration -->
+  <div class="card">
+    <h2>Location & Calculation</h2>
+    <label>Location Name</label>
+    <input type="text" id="loc_name" placeholder="e.g. Masjid">
+    
+    <div class="row">
+      <div>
+        <label>Latitude</label>
+        <input type="number" step="0.000001" id="lat">
+      </div>
+      <div>
+        <label>Longitude</label>
+        <input type="number" step="0.000001" id="lon">
+      </div>
+    </div>
+
+    <label>Calculation Method</label>
+    <select id="method">
+      <option value="0">MWL (Muslim World League)</option>
+      <option value="1">ISNA (North America)</option>
+      <option value="2">Egyptian</option>
+      <option value="3">Karachi</option>
+      <option value="4">Umm al-Qura</option>
+      <option value="5">Jafaria</option>
+    </select>
+
+    <label>Asr Madhab</label>
+    <select id="madhab">
+      <option value="0">Standard (Shafi, Maliki, Hanbali)</option>
+      <option value="1">Hanafi</option>
+    </select>
+
+    <label>High Latitude Rule</label>
+    <select id="high_lat">
+      <option value="0">Auto (Recommended)</option>
+      <option value="1">None</option>
+      <option value="2">Middle of the Night</option>
+      <option value="3">One Seventh of the Night</option>
+      <option value="4">Angle Based</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label>Zawal Buffer (min)</label>
+        <input type="number" id="zawal" min="0" max="30">
+      </div>
+    </div>
+    
+    <button onclick="saveConfig()">Save Configuration</button>
+  </div>
+
+  <!-- Prayer Times Display -->
+  <div class="card">
+    <h2>Today's Prayer Times</h2>
+    <div class="prayer-times" id="prayer_times">
+      <div>Fajr: <span id="p_fajr">--:--</span></div>
+      <div>Sunrise: <span id="p_sunrise">--:--</span></div>
+      <div>Dhuhr: <span id="p_dhuhr">--:--</span></div>
+      <div>Asr: <span id="p_asr">--:--</span></div>
+      <div>Maghrib: <span id="p_maghrib">--:--</span></div>
+      <div>Isha: <span id="p_isha">--:--</span></div>
+    </div>
+  </div>
+
+  <div id="toast">Settings Saved</div>
+
+  <script>
+    function showToast(msg) {
+      var x = document.getElementById("toast");
+      x.innerText = msg;
+      x.className = "show";
+      setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
+    }
+
+    function loadConfig() {
+      fetch('/api/config')
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('loc_name').value = data.location_name;
+          document.getElementById('lat').value = data.latitude;
+          document.getElementById('lon').value = data.longitude;
+          document.getElementById('method').value = data.method;
+          document.getElementById('madhab').value = data.madhab;
+          document.getElementById('high_lat').value = data.high_lat_rule;
+          document.getElementById('zawal').value = data.zawal_buffer_min;
+        });
+    }
+
+    function saveConfig() {
+      const data = {
+        location_name: document.getElementById('loc_name').value,
+        latitude: parseFloat(document.getElementById('lat').value),
+        longitude: parseFloat(document.getElementById('lon').value),
+        method: parseInt(document.getElementById('method').value),
+        madhab: parseInt(document.getElementById('madhab').value),
+        high_lat_rule: parseInt(document.getElementById('high_lat').value),
+        zawal_buffer_min: parseInt(document.getElementById('zawal').value)
+      };
+
+      fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      }).then(r => {
+        if (r.ok) showToast("Configuration Saved!");
+        else showToast("Error saving config");
+      });
+    }
+
+    function saveWifi() {
+      const ssid = document.getElementById('wifi_ssid').value;
+      const pass = document.getElementById('wifi_pass').value;
+      if (!ssid) { showToast("SSID required"); return; }
+      
+      showToast("Saving WiFi and rebooting...");
+      fetch('/api/wifi', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ssid: ssid, password: pass})
+      }).then(r => {
+        if (r.ok) {
+          fetch('/api/reboot', {method: 'POST'});
+        } else {
+          showToast("Error saving WiFi");
+        }
+      });
+    }
+
+    function loadPrayers() {
+      fetch('/api/prayers')
+        .then(r => r.json())
+        .then(data => {
+          if (!data.valid) return;
+          const fmt = (sec) => {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            const h12 = h % 12 || 12;
+            return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+          };
+          document.getElementById('p_fajr').innerText = fmt(data.fajr_sec);
+          document.getElementById('p_sunrise').innerText = fmt(data.sunrise_sec);
+          document.getElementById('p_dhuhr').innerText = fmt(data.dhuhr_sec);
+          document.getElementById('p_asr').innerText = fmt(data.asr_sec);
+          document.getElementById('p_maghrib').innerText = fmt(data.maghrib_sec);
+          document.getElementById('p_isha').innerText = fmt(data.isha_sec);
+        });
+    }
+
+    // Load data on start
+    loadConfig();
+    loadPrayers();
+  </script>
+</body>
+</html>

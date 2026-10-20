@@ -4,6 +4,11 @@
 #include "cJSON.h"
 #include "svc_config.h"
 #include "svc_network.h"
+#include "svc_prayer_engine_service.h"
+#include "esp_system.h"
+
+extern const unsigned char index_html[];
+extern const size_t index_html_len;
 #include <string.h>
 #include <stdlib.h>
 
@@ -49,6 +54,13 @@ static char *read_body(httpd_req_t *req, size_t max_len, int *out_len)
     buf[total_len] = '\0';
     if (out_len) *out_len = total_len;
     return buf;
+}
+
+/* GET / (Serve HTML) */
+static esp_err_t get_html_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, (const char *)index_html, index_html_len);
 }
 
 /* GET /api/config */
@@ -188,6 +200,8 @@ static esp_err_t post_config_handler(httpd_req_t *req)
     #undef APPLY
 
     if (first_err == ESP_OK) {
+        /* Force an immediate recalculation so the UI reflects new times instantly */
+        svc_prayer_engine_service_recalculate();
         httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     } else {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "One or more setters failed");
@@ -224,6 +238,40 @@ static esp_err_t post_wifi_handler(httpd_req_t *req)
     return err;
 }
 
+/* POST /api/reboot */
+static esp_err_t post_reboot_handler(httpd_req_t *req)
+{
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    ESP_LOGW(TAG, "Reboot requested via API");
+    vTaskDelay(pdMS_TO_TICKS(500)); // Give time for HTTP response to send
+    esp_restart();
+    return ESP_OK;
+}
+
+/* GET /api/prayers */
+static esp_err_t get_prayers_handler(httpd_req_t *req)
+{
+    svc_prayer_engine_times_t times = {0};
+    esp_err_t err = svc_prayer_engine_service_get_times(&times);
+    
+    cJSON *root = cJSON_CreateObject();
+    if (err == ESP_OK && times.valid) {
+        cJSON_AddBoolToObject(root, "valid", true);
+        cJSON_AddNumberToObject(root, "fajr_sec", times.fajr_sec);
+        cJSON_AddNumberToObject(root, "sunrise_sec", times.sunrise_sec);
+        cJSON_AddNumberToObject(root, "dhuhr_sec", times.dhuhr_sec);
+        cJSON_AddNumberToObject(root, "asr_sec", times.asr_sec);
+        cJSON_AddNumberToObject(root, "maghrib_sec", times.maghrib_sec);
+        cJSON_AddNumberToObject(root, "isha_sec", times.isha_sec);
+    } else {
+        cJSON_AddBoolToObject(root, "valid", false);
+    }
+
+    esp_err_t ret = send_json(req, root);
+    cJSON_Delete(root);
+    return ret;
+}
+
 esp_err_t svc_http_start(void)
 {
     if (s_server) return ESP_OK;
@@ -239,9 +287,12 @@ esp_err_t svc_http_start(void)
     }
 
     const httpd_uri_t handlers[] = {
-        { .uri = "/api/config", .method = HTTP_GET,  .handler = get_config_handler  },
-        { .uri = "/api/config", .method = HTTP_POST, .handler = post_config_handler },
-        { .uri = "/api/wifi",   .method = HTTP_POST, .handler = post_wifi_handler   },
+        { .uri = "/",             .method = HTTP_GET,  .handler = get_html_handler      },
+        { .uri = "/api/config",   .method = HTTP_GET,  .handler = get_config_handler    },
+        { .uri = "/api/config",   .method = HTTP_POST, .handler = post_config_handler   },
+        { .uri = "/api/wifi",     .method = HTTP_POST, .handler = post_wifi_handler     },
+        { .uri = "/api/reboot",   .method = HTTP_POST, .handler = post_reboot_handler   },
+        { .uri = "/api/prayers",  .method = HTTP_GET,  .handler = get_prayers_handler   },
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {
         esp_err_t r = httpd_register_uri_handler(s_server, &handlers[i]);
