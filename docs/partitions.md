@@ -118,9 +118,8 @@ user data. There is no `factory` partition, and none is planned.
 
 **Recovery mechanisms that are used instead:**
 
-- **App rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) reverts a
-  bad OTA image to the previous slot on next reset. Currently off; must
-  be enabled in the first firmware that ships.
+- **App rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`, PR 4.6)
+  reverts a bad OTA image to the previous slot on next reset.
 - **Data reset** (`BOOT_FLAG_FACTORY_RESET` in `boot_manager.c`) wipes
   NVS and reformats `/storage`, then reboots. This is not an image
   reset — the running firmware is unchanged.

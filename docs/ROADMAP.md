@@ -104,15 +104,14 @@ Goal: the user sets WiFi, location, method and TZ without reflashing.
 Goal: firmware updates over the network.
 
 - `svc_ota` (new component): `esp_https_ota`, or a local upload.
-- Enable `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` in
-  `sdkconfig.defaults` and call
-  `esp_ota_mark_app_valid_cancel_rollback()` once a new image has proven
-  itself. Without that call the image never validates, and a bad OTA is
-  unrecoverable without USB reflashing.
-- Background: `STATUS.md` "App rollback: must ship in the first
-  firmware"; `docs/boot.md` "Not implemented yet".
-- Build gotcha: a change to `sdkconfig.defaults` has no effect until the
-  persisted `sdkconfig.single_mcu` is deleted.
+- App rollback prerequisite: **met** (PR 4.6).
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` is in `sdkconfig.defaults`,
+  and `boot_manager_init()` calls
+  `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()`
+  returns. A bad OTA image that fails to reach that point is
+  automatically reverted on the next reset.
+- Build gotcha (still applies): a change to `sdkconfig.defaults` has no
+  effect until the persisted `sdkconfig.single_mcu` is deleted.
 
 ---
 

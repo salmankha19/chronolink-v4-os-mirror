@@ -339,6 +339,31 @@ int boot_manager_init(boot_flags_t flags)
     s_last_stage = BOOT_STAGE_HANDOFF;
     publish_stage(BOOT_STAGE_HANDOFF, BOOT_STATUS_OK, 0);
 
+    /* CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE requires the app to explicitly
+     * mark itself valid after a fresh OTA. If it doesn't call this before
+     * the next reset, the bootloader reverts to the previous slot.
+     *
+     * Placement: after core_os_start() returned and the HANDOFF stage was
+     * published -- i.e. the kernel and its tasks are up. Before
+     * publish_ready(), so any hypothetical failure in that path does not
+     * cost us the "image is good" mark.
+     *
+     * On a factory-flash device (or any boot after the first post-OTA
+     * boot), the image is already in VALID state and the call returns
+     * ESP_ERR_OTA_ROLLBACK_INVALID_STATE. That is the happy path, logged
+     * at DEBUG. */
+    {
+        esp_err_t ota_err = esp_ota_mark_app_valid_cancel_rollback();
+        if (ota_err == ESP_OK) {
+            ESP_LOGI(TAG, "OTA image marked valid (rollback cancelled)");
+        } else if (ota_err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+            ESP_LOGD(TAG, "OTA mark-valid skipped (already valid or not OTA'd)");
+        } else {
+            ESP_LOGW(TAG, "esp_ota_mark_app_valid_cancel_rollback failed: %s",
+                     esp_err_to_name(ota_err));
+        }
+    }
+
     s_last_stage = BOOT_STAGE_READY;
     publish_ready();
 

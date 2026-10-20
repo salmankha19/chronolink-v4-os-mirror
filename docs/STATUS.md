@@ -18,9 +18,14 @@ not.** Where another doc mentions a gap, this file has the detail.
 
 ## Implemented (working code)
 
-- **Boot:** logging, factory reset (via flag, or BOOT button held 3 s
-  — dev convenience), NVS, FATFS `/storage`, OTA partition logging,
-  hand-off to kernel.
+- **Boot:** logging, factory reset (parameter flag or
+  `POST /api/factory-reset` persistent request), NVS, FATFS `/storage`,
+  OTA partition logging, hand-off to kernel.
+- **App rollback (PR 4.6):** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
+  `boot_manager_init()` calls `esp_ota_mark_app_valid_cancel_rollback()`
+  after `core_os_start()` returns, so a freshly-OTA'd image that reaches
+  the handoff stage marks itself valid. An image that crashes or resets
+  before that point is reverted to the previous slot on the next reset.
 - **PDL:** pin map, capability flags, pin validation and
   pre-configuration.
 - **HAL:** GPIO, I2C (mutex-guarded), shared SPI (mutex-guarded),
@@ -240,8 +245,7 @@ Verify each against hardware or datasheet before fixing.
     whole boot. Consider degrading instead (the clock should keep
     time).
 13. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
-    global `-I` in `platformio.ini`, app rollback off, coredump
-    off.
+    global `-I` in `platformio.ini`, coredump off.
 14. **main/Kconfig.projbuild `CONFIG_BOARD_AUDIO_*` entries are dead.**
     BOARD_AUDIO_I2S_BCLK, BOARD_AUDIO_I2S_WS, BOARD_AUDIO_I2S_DOUT,
     and BOARD_AUDIO_SD_MODE are not read by any driver. The HAL audio
@@ -360,7 +364,7 @@ optional in an OTA project. Two OTA slots and `otadata` are sufficient.
 | Failure mode | Recovery |
 |---|---|
 | Healthy device, new firmware available | OTA update into the inactive slot |
-| OTA wrote a bad image | App rollback reverts to the previous slot (see below) |
+| OTA wrote a bad image | App rollback reverts to the previous slot (see `docs/boot.md` §2) |
 | Both slots unbootable (e.g. power loss mid-OTA) | USB reflash — accepted limitation; USB is exposed |
 | User wants to start over | Data reset: `BOOT_FLAG_FACTORY_RESET` wipes NVS + `/storage`, reboots |
 
@@ -372,31 +376,8 @@ readers.
 |---|---|---|
 | `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + reformat `/storage`, reboot. **Not an image reset.** | Exists in `boot_manager.c`; producers: caller-supplied flag, `POST /api/factory-reset` (PR 4.5) |
 | `factory` partition | Known-good golden image slot | Not present, **not planned** |
-| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | Currently **off**; must be enabled in the first firmware that ships with the two-slot table |
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | **Enabled** (PR 4.6); `boot_manager` calls `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()` |
 | USB reflash | Manual recovery via `esptool.py` | Always available |
-
-### App rollback: must ship in the first firmware (not started)
-
-`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is currently `not set`. This must
-flip before the first firmware ships, because:
-
-- The bootloader is written at flash time and is **never updated by OTA**.
-- Enabling rollback later requires a USB reflash of every deployed device.
-- Without rollback, an OTA image that fails to boot leaves the device in a
-  reset loop; the only recovery is USB reflash.
-
-The code change is small:
-
-1. Set `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` in `sdkconfig.defaults`.
-2. Call `esp_ota_mark_app_valid_cancel_rollback()` in `boot_manager` once
-   the new image has proven itself — after `core_os_start()` returns and
-   the event bus is alive. Without this call, the new image never gets
-   marked valid and the next reset rolls back.
-
-The `factory` partition conversation reopens only if the USB-reflash
-limitation becomes unacceptable for a specific deployment. A 4 MB
-`factory` slot would require shrinking `app0` / `app1` to ~3.5 MB each
-(or reducing `/storage`), which changes the max OTA image size.
 
 ### Other planned boot work
 
@@ -422,7 +403,7 @@ The design intent is that all user configuration goes through a web UI.
 - **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
 - **Web UI (PR 4.3):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints.
 - **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + FATFS reformat + reboot). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
-- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started). Blocked on `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` — see "Planned boot work".
+- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started). Its rollback prerequisite is met as of PR 4.6 (see `docs/boot.md` §2).
 
 ---
 

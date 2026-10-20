@@ -21,8 +21,8 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
 1. **ROM bootloader → second-stage bootloader** (ESP-IDF default).
    Reads the partition table, picks an app slot using `otadata`.
    There is no `factory` partition: `app0` is `ota_0` and `app1` is
-   `ota_1`. The first ever boot boots `app0`. Secure boot, flash
-   encryption and app rollback are currently **off**.
+   `ota_1`. The first ever boot boots `app0`. Secure boot and flash
+   encryption are currently **off**; app rollback is enabled (see §2).
 
 2. **`app_main()`** (`main/main.c`) calls `boot_manager_init(0)`.
 
@@ -99,15 +99,28 @@ Deliberately preserved across a data reset:
 - `otadata` — boot-slot preference is not user data.
 - `phy_init` — RF calibration is board-specific, not user data.
 
-### 2. App rollback — NOT implemented
+### 2. App rollback — implemented (PR 4.6)
 
 ESP-IDF supports automatic rollback when a newly-flashed OTA image
-fails to mark itself valid. This is currently disabled
-(`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set). A bad OTA
-image that prevents `boot_manager` from running cannot be recovered
-without USB reflashing.
+fails to mark itself valid. This is now enabled
+(`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` in `sdkconfig.defaults`).
 
-See STATUS.md "Planned boot work".
+The mechanism:
+
+1. On boot after an OTA update, the new image starts in **pending
+   verify** state.
+2. `boot_manager_init()` calls
+   `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()`
+   returns — i.e. once the kernel and its tasks are up. This transitions
+   the image to **valid** and cancels the rollback timer.
+3. If the new image crashes, hangs, or fails any earlier init step
+   (`HAL_Init()`, `core_os_init()`, `core_os_start()`) and resets before
+   reaching that call, the bootloader reverts to the previous slot on
+   the next reset.
+
+The call is a no-op on a factory-flash device or on any boot of an
+already-validated image (`ESP_ERR_OTA_ROLLBACK_INVALID_STATE`); that
+path is logged at DEBUG, not WARN.
 
 ### 3. Factory-partition boot — NOT implemented
 
@@ -187,9 +200,5 @@ Total ends exactly at 16 MB. The `storage` line must stay as above
 - Safe-mode trigger and policy beyond "skip service tasks".
 - Boot-failure events before the event bus exists.
 - OTA update service (only partition logging exists — see `STATUS.md`).
-- **App rollback** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) — currently
-  off. Must be enabled in the first firmware that ships with the
-  two-slot partition table, because the bootloader cannot be updated by
-  OTA. See `STATUS.md` "Planned boot work".
 - `factory` partition — **not planned**. See `partitions.md` for the
   decision and `STATUS.md` for the recovery model.
