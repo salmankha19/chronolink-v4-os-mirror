@@ -61,8 +61,10 @@ static void init_logging(void)
 }
 
 /* Returns true if a factory reset has been requested for this boot.
-   The only trigger is BOOT_FLAG_FACTORY_RESET (to be produced by the
-   web UI). There is no hardware trigger. */
+   Two producers: a caller-supplied BOOT_FLAG_FACTORY_RESET parameter,
+   or a persistent request written by POST /api/factory-reset and read
+   from NVS (namespace boot_req, key flag) after init_nvs(). There is
+   no hardware trigger. */
 static bool factory_reset_requested(boot_flags_t flags)
 {
     if (flags & BOOT_FLAG_FACTORY_RESET) {

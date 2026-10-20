@@ -193,4 +193,3 @@ Total ends exactly at 16 MB. The `storage` line must stay as above
   OTA. See `STATUS.md` "Planned boot work".
 - `factory` partition — **not planned**. See `partitions.md` for the
   decision and `STATUS.md` for the recovery model.
-- Producer of `BOOT_FLAG_FACTORY_RESET`: **implemented** as `POST /api/factory-reset` (PR 4.5). See "Reset mechanisms" above.
