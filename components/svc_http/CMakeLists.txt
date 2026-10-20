@@ -9,6 +9,7 @@ idf_component_register(
         svc_network
         svc_prayer_engine_service
         nvs_flash
+        app_update
         log
         freertos
 )

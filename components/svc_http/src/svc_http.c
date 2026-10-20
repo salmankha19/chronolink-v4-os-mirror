@@ -7,6 +7,26 @@
 #include "svc_prayer_engine_service.h"
 #include "esp_system.h"
 #include "nvs.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+
+/* Compile-time gate: POST /api/ota must not ship without rollback
+ * enabled. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y (PR 4.6) makes a
+ * failed OTA image revert automatically. Without it, a bad image that
+ * crashes before boot_manager marks it valid would brick the device. */
+#ifndef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+#error "POST /api/ota requires CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y."
+#endif
+
+/* OTA shared secret. Required in the X-OTA-Token header on POST /api/ota.
+ * Compile-time; changing it requires a rebuild. Prevents drive-by flashing
+ * from the open AP setup network (ChronoLink-Setup). Override via
+ * -DOTA_SHARED_TOKEN=... in build_flags or edit the default below. */
+#ifndef OTA_SHARED_TOKEN
+#define OTA_SHARED_TOKEN "change-me-before-flashing"
+#endif
+
+#define OTA_CHUNK_SIZE 4096
 
 extern const unsigned char index_html[];
 extern const size_t index_html_len;
@@ -296,6 +316,136 @@ static esp_err_t post_factory_reset_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* POST /api/ota
+ *
+ * Raw-body firmware uploader. Streams a .bin from the request body to
+ * the inactive OTA slot in OTA_CHUNK_SIZE chunks, verifies the image via
+ * esp_ota_end(), points the bootloader at the new slot, and reboots. On
+ * any failure calls esp_ota_abort() and leaves the running image
+ * untouched.
+ *
+ * Security: requires the X-OTA-Token header to match OTA_SHARED_TOKEN
+ * (compile-time). This removes the drive-by-flashing risk from the open
+ * AP setup network. The token is visible to anyone who can read the
+ * firmware binary -- acceptable for a home device; a stronger scheme
+ * (per-device NVS token) is a future PR.
+ *
+ * Rollback safety: relies on PR 4.6. If the new image crashes before
+ * boot_manager_init() reaches esp_ota_mark_app_valid_cancel_rollback(),
+ * the bootloader reverts to the current slot on the next reset. The
+ * build-time #error in this file guarantees that. */
+static esp_err_t post_ota_handler(httpd_req_t *req)
+{
+    /* 1. Token check (constant-time-ish strcmp; fine for this threat model) */
+    char token_buf[64];
+    if (httpd_req_get_hdr_value_str(req, "X-OTA-Token", token_buf, sizeof(token_buf)) != ESP_OK
+        || strcmp(token_buf, OTA_SHARED_TOKEN) != 0) {
+        httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Bad or missing X-OTA-Token");
+        ESP_LOGW(TAG, "OTA rejected: bad or missing token");
+        return ESP_FAIL;
+    }
+
+    /* 2. Content-Length sanity */
+    if (req->content_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
+    if (!next) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA slot");
+        return ESP_FAIL;
+    }
+    if ((uint32_t)req->content_len > next->size) {
+        ESP_LOGW(TAG, "OTA rejected: content_len=%d > slot size=%lu",
+                 (int)req->content_len, (unsigned long)next->size);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Image larger than OTA slot");
+        return ESP_FAIL;
+    }
+
+    /* 3. Begin (sequential writes: no whole-image buffering) */
+    esp_ota_handle_t handle = 0;
+    esp_err_t err = esp_ota_begin(next, OTA_WITH_SEQUENTIAL_WRITES, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    /* 4. Stream: recv -> write in OTA_CHUNK_SIZE chunks */
+    char *buf = malloc(OTA_CHUNK_SIZE);
+    if (!buf) {
+        esp_ota_abort(handle);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    int total_written = 0;
+    err = ESP_OK;
+
+    while (remaining > 0) {
+        int to_recv = (remaining < OTA_CHUNK_SIZE) ? remaining : OTA_CHUNK_SIZE;
+        int received = httpd_req_recv(req, buf, to_recv);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            /* Not fatal: the client is slow, try again. */
+            continue;
+        }
+        if (received < 0) {
+            ESP_LOGE(TAG, "httpd_req_recv failed: %d", received);
+            err = ESP_FAIL;
+            break;
+        }
+        err = esp_ota_write(handle, buf, (size_t)received);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed at %d/%d: %s",
+                     total_written, (int)req->content_len, esp_err_to_name(err));
+            break;
+        }
+        remaining -= received;
+        total_written += received;
+        if ((total_written % (OTA_CHUNK_SIZE * 8)) == 0) {
+            ESP_LOGI(TAG, "OTA progress: %d / %d bytes",
+                     total_written, (int)req->content_len);
+        }
+    }
+    free(buf);
+
+    if (err != ESP_OK || remaining != 0) {
+        esp_ota_abort(handle);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
+        return ESP_FAIL;
+    }
+
+    /* 5. End: verifies image magic and app descriptor checksum */
+    err = esp_ota_end(handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed (invalid image?): %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Image invalid");
+        return ESP_FAIL;
+    }
+
+    /* 6. Point the bootloader at the new slot */
+    err = esp_ota_set_boot_partition(next);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Set boot failed");
+        return ESP_FAIL;
+    }
+
+    /* 7. Respond, wait for the response to flush, reboot */
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"bytes\":%d}", total_written);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+
+    ESP_LOGW(TAG, "OTA complete: %d bytes written to %s, rebooting",
+             total_written, next->label);
+    vTaskDelay(pdMS_TO_TICKS(500));  /* let the HTTP response flush */
+    esp_restart();
+    return ESP_OK;
+}
+
 /* GET /api/prayers */
 static esp_err_t get_prayers_handler(httpd_req_t *req)
 {
@@ -327,6 +477,10 @@ esp_err_t svc_http_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.max_uri_handlers = 8;
+    /* OTA handler calls esp_ota_* which needs more stack than a JSON
+     * handler. 8192 is conservative; default 4096 has no margin for a
+     * streaming upload with abort paths. */
+    config.stack_size = 8192;
 
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -341,6 +495,7 @@ esp_err_t svc_http_start(void)
         { .uri = "/api/wifi",     .method = HTTP_POST, .handler = post_wifi_handler     },
         { .uri = "/api/reboot",        .method = HTTP_POST, .handler = post_reboot_handler        },
         { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = post_factory_reset_handler },
+        { .uri = "/api/ota",           .method = HTTP_POST, .handler = post_ota_handler            },
         { .uri = "/api/prayers",       .method = HTTP_GET,  .handler = get_prayers_handler        },
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {

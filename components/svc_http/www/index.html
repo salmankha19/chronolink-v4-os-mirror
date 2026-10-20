@@ -115,6 +115,22 @@
     <button style="background:#c0392b;" onclick="factoryReset()">Erase All Settings & Reset</button>
   </div>
 
+  <!-- Firmware Update (OTA) -->
+  <div class="card" style="border: 2px solid #2980b9;">
+    <h2 style="color:#2980b9;">Firmware Update</h2>
+    <p style="font-size:0.9em; color:#666;">
+      Upload a <code>.bin</code> firmware image. The device flashes the
+      inactive OTA slot, reboots into it, and validates itself on the
+      next boot. If the new image fails to reach the handoff stage, the
+      bootloader reverts to the current firmware automatically.
+    </p>
+    <label>OTA Token</label>
+    <input type="password" id="ota_token" placeholder="compile-time shared secret (see OTA_SHARED_TOKEN)">
+    <label>Firmware Image (.bin)</label>
+    <input type="file" id="ota_file" accept=".bin,application/octet-stream" style="width:100%;padding:10px;margin-top:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
+    <button style="background:#2980b9;" onclick="uploadOTA()">Upload & Flash</button>
+  </div>
+
   <div id="toast">Settings Saved</div>
 
   <script>
@@ -158,6 +174,35 @@
         if (r.ok) showToast("Configuration Saved!");
         else showToast("Error saving config");
       });
+    }
+
+    function uploadOTA() {
+      const fileInput = document.getElementById('ota_file');
+      const token     = document.getElementById('ota_token').value;
+      if (!fileInput.files.length) { showToast("Choose a .bin firmware file first"); return; }
+      if (!token)                   { showToast("OTA token required"); return; }
+      const file = fileInput.files[0];
+      if (!file.name.toLowerCase().endsWith('.bin')) {
+        showToast("File must end in .bin"); return;
+      }
+      if (file.size === 0) { showToast("Empty file"); return; }
+      if (!confirm(`Flash ${file.name} (${file.size} bytes) and reboot?\n\nIf the new image fails to boot, the device reverts to the current firmware.`)) return;
+
+      showToast("Uploading… do not power off or close this tab");
+
+      fetch('/api/ota', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-OTA-Token': token
+        },
+        body: file
+      })
+      .then(r => {
+        if (!r.ok) { showToast("OTA failed: HTTP " + r.status); throw new Error('OTA failed'); }
+        showToast("Flashed. Rebooting…");
+      })
+      .catch(() => { /* expected when the device reboots mid-fetch */ });
     }
 
     function factoryReset() {

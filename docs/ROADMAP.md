@@ -103,13 +103,18 @@ Goal: the user sets WiFi, location, method and TZ without reflashing.
 
 Goal: firmware updates over the network.
 
-- `svc_ota` (new component): `esp_https_ota`, or a local upload.
-- App rollback prerequisite: **met** (PR 4.6).
-  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` is in `sdkconfig.defaults`,
-  and `boot_manager_init()` calls
-  `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()`
-  returns. A bad OTA image that fails to reach that point is
-  automatically reverted on the next reset.
+- **Landed (PR 4.7): local upload.** `POST /api/ota` in `svc_http`
+  accepts a raw `.bin` (`application/octet-stream`), gated by the
+  `X-OTA-Token` header, and streams it to the inactive OTA slot via
+  `esp_ota_begin` / `esp_ota_write` / `esp_ota_end` /
+  `esp_ota_set_boot_partition`. Reboots on success; `esp_ota_abort()`
+  on any failure. Compile-time gate: `#error` if
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set.
+- **Remaining: `svc_ota` component with `esp_https_ota`.** Pull-based
+  OTA from an HTTPS URL, meant for fleet management. The upload path
+  above is the "flash by hand from a browser" workflow that unblocks
+  firmware updates today.
+- App rollback prerequisite: **met** (PR 4.6). See `docs/boot.md` §2.
 - Build gotcha (still applies): a change to `sdkconfig.defaults` has no
   effect until the persisted `sdkconfig.single_mcu` is deleted.
 

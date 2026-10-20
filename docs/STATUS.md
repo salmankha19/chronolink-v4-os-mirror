@@ -26,6 +26,14 @@ not.** Where another doc mentions a gap, this file has the detail.
   after `core_os_start()` returns, so a freshly-OTA'd image that reaches
   the handoff stage marks itself valid. An image that crashes or resets
   before that point is reverted to the previous slot on the next reset.
+- **OTA over HTTP (PR 4.7):** `POST /api/ota` in `svc_http` streams a
+  raw firmware image (`application/octet-stream`) to the inactive OTA
+  slot via `esp_ota_begin` / `esp_ota_write` / `esp_ota_end` /
+  `esp_ota_set_boot_partition`, then reboots. Guarded by a compile-time
+  `X-OTA-Token` shared secret (`OTA_SHARED_TOKEN`) and a build-time
+  `#error` if `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set. On any
+  failure calls `esp_ota_abort()` and leaves the running image
+  untouched.
 - **PDL:** pin map, capability flags, pin validation and
   pre-configuration.
 - **HAL:** GPIO, I2C (mutex-guarded), shared SPI (mutex-guarded),
@@ -399,7 +407,7 @@ The design intent is that all user configuration goes through a web UI.
 - **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
 - **Web UI (PR 4.3):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints.
 - **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + FATFS reformat + reboot). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
-- **Firmware update over HTTP (PR 4.4):** Writes to an inactive OTA slot (not started). Its rollback prerequisite is met as of PR 4.6 (see `docs/boot.md` §2).
+- **Firmware update over HTTP (PR 4.7):** `POST /api/ota` accepts a raw firmware image (`application/octet-stream`), requires the `X-OTA-Token` header, streams it in 4 KB chunks to the inactive OTA slot, and reboots into it on success. Compile-time gate: `#error` if `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set. Failure at any stage calls `esp_ota_abort()` and leaves the running image untouched.
 
 ---
 
