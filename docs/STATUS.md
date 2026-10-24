@@ -235,9 +235,6 @@ Verify each against hardware or datasheet before fixing.
    shared SPI bus.
 6. **ST7796S backend** bypasses the `HAL_SPI` mutex and manages DC
    itself.
-7. **`HAL_GPIO_Init`** still configures GPIO2 as an output (leftover
-   example). Mask-versus-index handling in `hal_gpio_safe.c` is
-   ambiguous, and `GPIO_PIN_COUNT` 48 rejects GPIO48.
 8. **Sensors:** failed probe is permanent; `HAL_Sensors_Init` always
    returns OK; SHT4x CRC not checked.
 9. **I2C** uses the legacy driver with deprecation checks
@@ -323,6 +320,11 @@ Verify each against hardware or datasheet before fixing.
   `strnlen(..., sizeof(field))`, which copies the full field when full and
   leaves shorter values NUL-terminated (`wcfg` is memset first). NVS
   encryption remains a separate hardening item.
+
+  - **`HAL_GPIO_Init`** still configures GPIO2 as an output (leftover
+   example). Mask-versus-index handling in `hal_gpio_safe.c` is
+   ambiguous, and `GPIO_PIN_COUNT` 48 rejects GPIO48.
+    - *Status: Resolved in code (Doc updated during HIL OTA verification).*
 
 ---
 
