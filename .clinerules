@@ -91,14 +91,14 @@ The human's terminal is PowerShell on Windows.
 - If a build appears hung and no `pio`/`ninja` process is running, do not
   re-run it. Stop and ask the human to check Task Manager.
 
-## Pin sources (as of this writing — being consolidated in PR 3)
+## Pin sources
 
-Known duplication: `pdl_pins.h`, `components/chronolink_hal/Kconfig`,
-`main/Kconfig.projbuild`, `board_pins.h`, `pdl_compat.h`,
-`components/hil/include/pin_config.h`, and some `#ifndef` fallbacks in
-`hal_audio_max98357a.c`. Treat `pdl_pins.h` as the reference until the
-consolidation PR merges. Do not add a new source. If asked to touch a
-pin, check all of the above first.
+`pdl_pins.h` is the reference for every physical pin. Duplication
+remains in `components/chronolink_hal/Kconfig`,
+`main/Kconfig.projbuild`, `board_pins.h`, `pdl_compat.h`, and
+`components/hil/include/pin_config.h`. (The `hal_audio_max98357a.c`
+fallback was removed in PR 3 and is no longer a source.)
+Do not add a new source. If asked to touch a pin, check all of the above first.
 
 ---
 
