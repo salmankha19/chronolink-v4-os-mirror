@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-19 at commit `3391c84` (PR: high-lat AUTO, Jafaria clamp, midnight continuity, isha wrap, svc_time offset, WiFi truncation, Phase 3 time state machine). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-10-24 at commit `cfdc9ce` (PR: svc_http REST APIs, AP fallback, web UI, factory reset, app rollback, OTA upload). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
