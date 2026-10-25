@@ -182,6 +182,15 @@ The firmware operates on a resilient, always-on state machine that prioritizes k
 > 
 > **Workflow Rule:** Any modification to this sequence requires a dedicated Git branch (e.g., `feat/time-logic-update`), a code review, and an update to this exact document in the *same* PR. Never commit changes to this logic directly to `main`.
 
+### 4.2 Prayer times: three-tier model
+
+The prayer-times pipeline has three layers of user-visible time
+(astronomical / adhan / jamat) plus auxiliary and Ramadan endpoints.
+The full model — concepts, jamat anchors, seasonal offsets, rounding,
+presets, tomorrow's jamat, and the pre-5.1a migration path — is in
+[prayer-times-model.md](prayer-times-model.md). This section is only
+the pointer; the domain model lives there.
+
 ---
 
 ## 5. Known deviations from the rules

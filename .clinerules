@@ -153,6 +153,12 @@ Recent merged work (kept here so you do not re-litigate it):
   slot; `X-OTA-Token` shared secret; `#error` gate if rollback off;
   `esp_ota_abort()` on any failure.
 
+Prayer times domain model: `docs/prayer-times-model.md`. Read it before
+any change touching `svc_prayer_engine`, `svc_prayer_engine_service`,
+`svc_config`, or the prayer-times section of `svc_http`. Anything it
+declares out-of-scope is out-of-scope until a new PR updates that
+document.
+
 ## Anti-patterns to reject immediately
 
 - Adding `-DCONFIG_X=1` to `platformio.ini` build_flags

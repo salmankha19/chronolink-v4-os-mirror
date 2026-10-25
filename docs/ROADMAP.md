@@ -66,6 +66,8 @@ location and method, and does something at each.
   madhab, iqamah offsets, adhan mode, display preferences. *(Landed as PR 12;
   the schema is in `components/svc_config/include/svc_config.h`.)*
 - Wire to the display: next prayer name and countdown on the face.
+- Phase 2 prayer-times refinement (seasonal jamat, presets, tomorrow
+  notification) is specified in [prayer-times-model.md](prayer-times-model.md).
 
 ---
 
