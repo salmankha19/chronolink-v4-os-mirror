@@ -147,7 +147,7 @@ static esp_err_t get_config_handler(httpd_req_t *req)
 /* POST /api/config */
 static esp_err_t post_config_handler(httpd_req_t *req)
 {
-    char *buf = read_body(req, 2048, NULL);
+    char *buf = read_body(req, 4096, NULL);
     if (!buf) return ESP_FAIL;
 
     cJSON *root = cJSON_Parse(buf);
@@ -238,6 +238,59 @@ static esp_err_t post_config_handler(httpd_req_t *req)
             if (cJSON_IsNumber(item)) {
                 APPLY(svc_config_set_adhan_offset((svc_config_prayer_t)i, (uint16_t)item->valueint));
             }
+        }
+    }
+
+    /* 5.1b: jamat[] array. Each entry: {winter_anchor, winter_offset,
+       summer_anchor, summer_offset, round_min}. Server-side setters
+       (svc_config_set_jamat_season / _set_jamat_round) enforce range
+       and anchor-per-prayer validity; on failure the APPLY macro logs
+       and continues, and a non-OK first_err returns 500. */
+    cJSON *jamat_arr = cJSON_GetObjectItem(root, "jamat");
+    if (cJSON_IsArray(jamat_arr)) {
+        int n = cJSON_GetArraySize(jamat_arr);
+        for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT && i < n; i++) {
+            cJSON *j = cJSON_GetArrayItem(jamat_arr, i);
+            if (!cJSON_IsObject(j)) continue;
+
+            cJSON *w_anchor = cJSON_GetObjectItem(j, "winter_anchor");
+            cJSON *w_offset = cJSON_GetObjectItem(j, "winter_offset");
+            cJSON *s_anchor = cJSON_GetObjectItem(j, "summer_anchor");
+            cJSON *s_offset = cJSON_GetObjectItem(j, "summer_offset");
+            cJSON *round_m  = cJSON_GetObjectItem(j, "round_min");
+
+            if (cJSON_IsNumber(w_anchor) && cJSON_IsNumber(w_offset)) {
+                APPLY(svc_config_set_jamat_season(
+                    (svc_config_prayer_t)i, 0,
+                    (svc_config_jamat_anchor_t)w_anchor->valueint,
+                    (uint16_t)w_offset->valueint));
+            }
+            if (cJSON_IsNumber(s_anchor) && cJSON_IsNumber(s_offset)) {
+                APPLY(svc_config_set_jamat_season(
+                    (svc_config_prayer_t)i, 1,
+                    (svc_config_jamat_anchor_t)s_anchor->valueint,
+                    (uint16_t)s_offset->valueint));
+            }
+            if (cJSON_IsNumber(round_m)) {
+                APPLY(svc_config_set_jamat_round(
+                    (svc_config_prayer_t)i,
+                    (uint8_t)round_m->valueint));
+            }
+        }
+    }
+
+    /* 5.1b: season object with the two transition dates. */
+    cJSON *season_obj = cJSON_GetObjectItem(root, "season");
+    if (cJSON_IsObject(season_obj)) {
+        cJSON *sm = cJSON_GetObjectItem(season_obj, "summer_start_month");
+        cJSON *sd = cJSON_GetObjectItem(season_obj, "summer_start_day");
+        cJSON *wm = cJSON_GetObjectItem(season_obj, "winter_start_month");
+        cJSON *wd = cJSON_GetObjectItem(season_obj, "winter_start_day");
+        if (cJSON_IsNumber(sm) && cJSON_IsNumber(sd) &&
+            cJSON_IsNumber(wm) && cJSON_IsNumber(wd)) {
+            APPLY(svc_config_set_season(
+                (uint8_t)sm->valueint, (uint8_t)sd->valueint,
+                (uint8_t)wm->valueint, (uint8_t)wd->valueint));
         }
     }
 

@@ -91,6 +91,198 @@
     <button onclick="saveConfig()">Save Configuration</button>
   </div>
 
+  <!-- Adhan Safety Margins -->
+  <div class="card">
+    <h2>Adhan Safety Margins (minutes)</h2>
+    <p style="font-size:0.9em; color:#666;">
+      Added to the astronomical calculation before display. Usually 0-5 min.
+      This shifts the <b>adhan</b>; jamat is set separately below.
+    </p>
+    <div class="row">
+      <div><label>Fajr</label><input type="number" id="adhan_off_fajr" min="0" max="60" value="0"></div>
+      <div><label>Dhuhr</label><input type="number" id="adhan_off_dhuhr" min="0" max="60" value="0"></div>
+      <div><label>Asr</label><input type="number" id="adhan_off_asr" min="0" max="60" value="0"></div>
+      <div><label>Maghrib</label><input type="number" id="adhan_off_maghrib" min="0" max="60" value="0"></div>
+      <div><label>Isha</label><input type="number" id="adhan_off_isha" min="0" max="60" value="0"></div>
+    </div>
+  </div>
+
+  <!-- Jamat & Season Configuration -->
+  <div class="card">
+    <h2>Jamat &amp; Season Configuration</h2>
+    <p style="font-size:0.9em; color:#666;">
+      Congregational times per prayer. <b>Winter</b> and <b>summer</b> have
+      independent anchors and offsets. Rounding (shared across seasons)
+      snaps the computed jamat to the nearest N-minute boundary from
+      midnight.
+    </p>
+    <div style="overflow-x:auto;">
+      <table style="width:100%;font-size:0.85em;border-collapse:collapse;min-width:640px;">
+        <thead>
+          <tr style="background:#ecf0f1;">
+            <th style="padding:8px;text-align:left;">Prayer</th>
+            <th style="padding:8px;text-align:left;">Winter Anchor</th>
+            <th style="padding:8px;text-align:left;">W. Offset (min)</th>
+            <th style="padding:8px;text-align:left;">Summer Anchor</th>
+            <th style="padding:8px;text-align:left;">S. Offset (min)</th>
+            <th style="padding:8px;text-align:left;">Round (min)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:6px;">Fajr</td>
+            <td style="padding:6px;"><select id="jamat_fajr_w_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+              <option value="2">Sunrise − offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_fajr_w_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_fajr_s_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+              <option value="2">Sunrise − offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_fajr_s_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_fajr_round">
+              <option value="0">0 (none)</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select></td>
+          </tr>
+          <tr>
+            <td style="padding:6px;">Dhuhr</td>
+            <td style="padding:6px;"><select id="jamat_dhuhr_w_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_dhuhr_w_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_dhuhr_s_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_dhuhr_s_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_dhuhr_round">
+              <option value="0">0 (none)</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select></td>
+          </tr>
+          <tr>
+            <td style="padding:6px;">Asr</td>
+            <td style="padding:6px;"><select id="jamat_asr_w_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_asr_w_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_asr_s_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_asr_s_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_asr_round">
+              <option value="0">0 (none)</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select></td>
+          </tr>
+          <tr>
+            <td style="padding:6px;">Maghrib</td>
+            <td style="padding:6px;"><select id="jamat_maghrib_w_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_maghrib_w_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_maghrib_s_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_maghrib_s_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_maghrib_round">
+              <option value="0">0 (none)</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select></td>
+          </tr>
+          <tr>
+            <td style="padding:6px;">Isha</td>
+            <td style="padding:6px;"><select id="jamat_isha_w_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+              <option value="3">Midnight − offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_isha_w_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_isha_s_anchor">
+              <option value="0">Disabled</option>
+              <option value="1">Adhan + offset</option>
+              <option value="3">Midnight − offset</option>
+            </select></td>
+            <td style="padding:6px;"><input type="number" id="jamat_isha_s_offset" min="0" max="1440" value="0" style="width:80px;"></td>
+            <td style="padding:6px;"><select id="jamat_isha_round">
+              <option value="0">0 (none)</option>
+              <option value="2">2</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <label style="margin-top:20px;">Season transition dates (default UK: Mar 25 / Oct 25)</label>
+    <div class="row">
+      <div>
+        <label style="font-size:0.85em;">Summer starts (month)</label>
+        <input type="number" id="season_sum_m" min="1" max="12" value="3">
+      </div>
+      <div>
+        <label style="font-size:0.85em;">Summer starts (day)</label>
+        <input type="number" id="season_sum_d" min="1" max="31" value="25">
+      </div>
+      <div>
+        <label style="font-size:0.85em;">Winter starts (month)</label>
+        <input type="number" id="season_win_m" min="1" max="12" value="10">
+      </div>
+      <div>
+        <label style="font-size:0.85em;">Winter starts (day)</label>
+        <input type="number" id="season_win_d" min="1" max="31" value="25">
+      </div>
+    </div>
+
+    <button onclick="saveConfig()" style="margin-top:20px;">Save All Configuration</button>
+
+    <label style="margin-top:20px;">Or apply a named preset (overwrites method, madhab, jamat, season)</label>
+    <div class="row">
+      <div>
+        <select id="preset_select">
+          <option value="0">UK (MWL, Standard)</option>
+          <option value="1">Pakistan (Karachi, Hanafi)</option>
+        </select>
+      </div>
+      <div>
+        <button onclick="applyPreset()" style="margin-top:0;">Apply Preset</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Prayer Times Display (three tiers) -->
   <div class="card">
     <h2>Today's Prayer Times</h2>
@@ -175,6 +367,7 @@
       fetch('/api/config')
         .then(r => r.json())
         .then(data => {
+          // Existing fields
           document.getElementById('loc_name').value = data.location_name;
           document.getElementById('lat').value = data.latitude;
           document.getElementById('lon').value = data.longitude;
@@ -182,18 +375,109 @@
           document.getElementById('madhab').value = data.madhab;
           document.getElementById('high_lat').value = data.high_lat_rule;
           document.getElementById('zawal').value = data.zawal_buffer_min;
+
+          // 5.1b: adhan safety margins (array of 5)
+          const adhan_off = data.adhan_offsets || [0,0,0,0,0];
+          const adhan_ids = ['fajr','dhuhr','asr','maghrib','isha'];
+          for (let i = 0; i < 5; i++) {
+            const el = document.getElementById('adhan_off_' + adhan_ids[i]);
+            if (el) el.value = adhan_off[i] || 0;
+          }
+
+          // 5.1b: jamat array (array of 5 objects)
+          const jamat = data.jamat || [];
+          const jamat_ids = ['fajr','dhuhr','asr','maghrib','isha'];
+          for (let i = 0; i < 5 && i < jamat.length; i++) {
+            const p = jamat_ids[i];
+            const j = jamat[i];
+            const setVal = (id, v) => {
+              const el = document.getElementById(id);
+              if (el && v !== undefined && v !== null) el.value = v;
+            };
+            setVal('jamat_' + p + '_w_anchor', j.winter_anchor);
+            setVal('jamat_' + p + '_w_offset', j.winter_offset);
+            setVal('jamat_' + p + '_s_anchor', j.summer_anchor);
+            setVal('jamat_' + p + '_s_offset', j.summer_offset);
+            setVal('jamat_' + p + '_round',    j.round_min);
+          }
+
+          // 5.1b: season object
+          const season = data.season || {};
+          const setEl = (id, v) => {
+            const el = document.getElementById(id);
+            if (el && v !== undefined && v !== null) el.value = v;
+          };
+          setEl('season_sum_m', season.summer_start_month);
+          setEl('season_sum_d', season.summer_start_day);
+          setEl('season_win_m', season.winter_start_month);
+          setEl('season_win_d', season.winter_start_day);
         });
     }
 
     function saveConfig() {
+      const val = (id) => document.getElementById(id).value;
+      const num = (id) => parseInt(document.getElementById(id).value, 10) || 0;
+
       const data = {
-        location_name: document.getElementById('loc_name').value,
-        latitude: parseFloat(document.getElementById('lat').value),
-        longitude: parseFloat(document.getElementById('lon').value),
-        method: parseInt(document.getElementById('method').value),
-        madhab: parseInt(document.getElementById('madhab').value),
-        high_lat_rule: parseInt(document.getElementById('high_lat').value),
-        zawal_buffer_min: parseInt(document.getElementById('zawal').value)
+        location_name: val('loc_name'),
+        latitude: parseFloat(val('lat')),
+        longitude: parseFloat(val('lon')),
+        method: parseInt(val('method'), 10),
+        madhab: parseInt(val('madhab'), 10),
+        high_lat_rule: parseInt(val('high_lat'), 10),
+        zawal_buffer_min: num('zawal'),
+
+        // 5.1b additions
+        adhan_offsets: [
+          num('adhan_off_fajr'),
+          num('adhan_off_dhuhr'),
+          num('adhan_off_asr'),
+          num('adhan_off_maghrib'),
+          num('adhan_off_isha')
+        ],
+        jamat: [
+          {
+            winter_anchor: num('jamat_fajr_w_anchor'),
+            winter_offset: num('jamat_fajr_w_offset'),
+            summer_anchor: num('jamat_fajr_s_anchor'),
+            summer_offset: num('jamat_fajr_s_offset'),
+            round_min:     num('jamat_fajr_round')
+          },
+          {
+            winter_anchor: num('jamat_dhuhr_w_anchor'),
+            winter_offset: num('jamat_dhuhr_w_offset'),
+            summer_anchor: num('jamat_dhuhr_s_anchor'),
+            summer_offset: num('jamat_dhuhr_s_offset'),
+            round_min:     num('jamat_dhuhr_round')
+          },
+          {
+            winter_anchor: num('jamat_asr_w_anchor'),
+            winter_offset: num('jamat_asr_w_offset'),
+            summer_anchor: num('jamat_asr_s_anchor'),
+            summer_offset: num('jamat_asr_s_offset'),
+            round_min:     num('jamat_asr_round')
+          },
+          {
+            winter_anchor: num('jamat_maghrib_w_anchor'),
+            winter_offset: num('jamat_maghrib_w_offset'),
+            summer_anchor: num('jamat_maghrib_s_anchor'),
+            summer_offset: num('jamat_maghrib_s_offset'),
+            round_min:     num('jamat_maghrib_round')
+          },
+          {
+            winter_anchor: num('jamat_isha_w_anchor'),
+            winter_offset: num('jamat_isha_w_offset'),
+            summer_anchor: num('jamat_isha_s_anchor'),
+            summer_offset: num('jamat_isha_s_offset'),
+            round_min:     num('jamat_isha_round')
+          }
+        ],
+        season: {
+          summer_start_month: num('season_sum_m'),
+          summer_start_day:   num('season_sum_d'),
+          winter_start_month: num('season_win_m'),
+          winter_start_day:   num('season_win_d')
+        }
       };
 
       fetch('/api/config', {
@@ -201,8 +485,13 @@
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data)
       }).then(r => {
-        if (r.ok) showToast("Configuration Saved!");
-        else showToast("Error saving config");
+        if (r.ok) {
+          showToast("Configuration Saved!");
+          // Refresh prayer times card to reflect new offsets
+          setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
+        } else {
+          showToast("Error saving config — check device log");
+        }
       });
     }
 
@@ -249,6 +538,29 @@
           // On success, the device reboots; this page will drop
         })
         .catch(() => { /* expected: connection dies when device reboots */ });
+    }
+
+    function applyPreset() {
+      const preset = parseInt(document.getElementById('preset_select').value, 10);
+      const name = preset === 0 ? 'UK' : 'Pakistan';
+      if (!confirm('Apply preset "' + name + '"?\n\nThis overwrites method, madhab, jamat configuration, and season dates. Location and display preferences are preserved.')) {
+        return;
+      }
+      fetch('/api/config/preset', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({preset: preset})
+      }).then(r => {
+        if (r.ok) {
+          showToast('Preset applied — reloading form…');
+          setTimeout(() => {
+            loadConfig();
+            if (typeof loadPrayers === 'function') loadPrayers();
+          }, 500);
+        } else {
+          showToast('Error applying preset');
+        }
+      });
     }
 
     function saveWifi() {

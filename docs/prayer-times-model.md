@@ -363,7 +363,7 @@ Old NVS keys stay readable for firmware downgrade (never erased by 5.1a).
 
 `svc_config_set_iqamah_offset()` continues to work — it writes the same
 offset to both seasons, preserving pre-5.1a behaviour. Removal is a
-5.1b follow-up once the web UI no longer uses the old field.
+5.1c follow-up (`refactor(config): drop iqamah mirror`).
 
 ---
 
@@ -447,9 +447,9 @@ reference this document rather than re-deriving the model.
 
 | PR | Scope | Status |
 |---|---|---|
-| **5.1a** | Backend: seasonal jamat, three-tier snapshot, today+tomorrow, `/api/config/preset` | Ready to implement |
+| **5.1a** | Backend: seasonal jamat, three-tier snapshot, today+tomorrow, `/api/config/preset` | Implemented in PR 5.1a |
 | **5.1a.1** | `refactor:` extract `adhan_calculator` + `jamat_calculator` | After 5.1a merges |
-| **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | After 5.1a merges |
+| **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | Implemented in this PR |
 | **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | After 5.1b |
 | **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | After 5.1b |
 
