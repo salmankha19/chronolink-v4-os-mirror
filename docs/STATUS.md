@@ -321,10 +321,12 @@ Verify each against hardware or datasheet before fixing.
   leaves shorter values NUL-terminated (`wcfg` is memset first). NVS
   encryption remains a separate hardening item.
 
-  - **`HAL_GPIO_Init`** still configures GPIO2 as an output (leftover
+- **`HAL_GPIO_Init`** still configures GPIO2 as an output (leftover
    example). Mask-versus-index handling in `hal_gpio_safe.c` is
    ambiguous, and `GPIO_PIN_COUNT` 48 rejects GPIO48.
     - *Status: Resolved in code (Doc updated during HIL OTA verification).*
+
+- **DST Rollover Verified on Hardware (Oct 25, 2026):** The POSIX TZ string (`GMT0BST,M3.5.0/1,M10.5.0`) correctly triggered the clock to fall back from `01:59:59` (BST) to `01:00:00` (GMT). The prayer engine correctly pre-calculated for the offset change at midnight, preventing any mid-day time jumps. OTA rollback was also verified on hardware.
 
 ---
 
