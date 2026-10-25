@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -91,16 +91,46 @@
     <button onclick="saveConfig()">Save Configuration</button>
   </div>
 
-  <!-- Prayer Times Display -->
+  <!-- Prayer Times Display (three tiers) -->
   <div class="card">
     <h2>Today's Prayer Times</h2>
+    <p style="font-size:0.9em; color:#666;">
+      Season: <b id="p_season">--</b> &middot;
+      Sehri ends: <b id="p_sehri">--:--</b> &middot;
+      Iftar: <b id="p_iftar">--:--</b>
+    </p>
     <div class="prayer-times" id="prayer_times">
-      <div>Fajr: <span id="p_fajr">--:--</span></div>
+      <div>
+        Fajr: <b id="p_fajr">--:--</b>
+        <small>&middot; jamat <span id="p_j_fajr">--:--</span></small>
+        <small style="color:#888;">&middot; astro <span id="p_a_fajr">--:--</span></small>
+        <span id="p_change_fajr" style="color:#c0392b;font-size:0.85em;"></span>
+      </div>
       <div>Sunrise: <span id="p_sunrise">--:--</span></div>
-      <div>Dhuhr: <span id="p_dhuhr">--:--</span></div>
-      <div>Asr: <span id="p_asr">--:--</span></div>
-      <div>Maghrib: <span id="p_maghrib">--:--</span></div>
-      <div>Isha: <span id="p_isha">--:--</span></div>
+      <div>
+        Dhuhr: <b id="p_dhuhr">--:--</b>
+        <small>&middot; jamat <span id="p_j_dhuhr">--:--</span></small>
+        <small style="color:#888;">&middot; astro <span id="p_a_dhuhr">--:--</span></small>
+        <span id="p_change_dhuhr" style="color:#c0392b;font-size:0.85em;"></span>
+      </div>
+      <div>
+        Asr: <b id="p_asr">--:--</b>
+        <small>&middot; jamat <span id="p_j_asr">--:--</span></small>
+        <small style="color:#888;">&middot; astro <span id="p_a_asr">--:--</span></small>
+        <span id="p_change_asr" style="color:#c0392b;font-size:0.85em;"></span>
+      </div>
+      <div>
+        Maghrib: <b id="p_maghrib">--:--</b>
+        <small>&middot; jamat <span id="p_j_maghrib">--:--</span></small>
+        <small style="color:#888;">&middot; astro <span id="p_a_maghrib">--:--</span></small>
+        <span id="p_change_maghrib" style="color:#c0392b;font-size:0.85em;"></span>
+      </div>
+      <div>
+        Isha: <b id="p_isha">--:--</b>
+        <small>&middot; jamat <span id="p_j_isha">--:--</span></small>
+        <small style="color:#888;">&middot; astro <span id="p_a_isha">--:--</span></small>
+        <span id="p_change_isha" style="color:#c0392b;font-size:0.85em;"></span>
+      </div>
     </div>
   </div>
 
@@ -246,18 +276,53 @@
         .then(data => {
           if (!data.valid) return;
           const fmt = (sec) => {
+            if (sec === null || sec === undefined) return '—';
             const h = Math.floor(sec / 3600);
             const m = Math.floor((sec % 3600) / 60);
             const ampm = h >= 12 ? 'PM' : 'AM';
             const h12 = h % 12 || 12;
             return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
           };
-          document.getElementById('p_fajr').innerText = fmt(data.fajr_sec);
-          document.getElementById('p_sunrise').innerText = fmt(data.sunrise_sec);
-          document.getElementById('p_dhuhr').innerText = fmt(data.dhuhr_sec);
-          document.getElementById('p_asr').innerText = fmt(data.asr_sec);
-          document.getElementById('p_maghrib').innerText = fmt(data.maghrib_sec);
-          document.getElementById('p_isha').innerText = fmt(data.isha_sec);
+
+          document.getElementById('p_season').innerText = data.season ? 'Summer' : 'Winter';
+          document.getElementById('p_sehri').innerText  = fmt(data.ramadan.sehri_end_sec);
+          document.getElementById('p_iftar').innerText  = fmt(data.ramadan.iftar_sec);
+
+          const adhan = data.adhan;
+          const ast   = data.astronomical;
+          document.getElementById('p_fajr').innerText    = fmt(adhan.fajr_sec);
+          document.getElementById('p_sunrise').innerText = fmt(data.auxiliary.sunrise_sec);
+          document.getElementById('p_dhuhr').innerText   = fmt(adhan.dhuhr_sec);
+          document.getElementById('p_asr').innerText     = fmt(adhan.asr_sec);
+          document.getElementById('p_maghrib').innerText = fmt(adhan.maghrib_sec);
+          document.getElementById('p_isha').innerText    = fmt(adhan.isha_sec);
+
+          document.getElementById('p_a_fajr').innerText    = fmt(ast.fajr_sec);
+          document.getElementById('p_a_dhuhr').innerText   = fmt(ast.dhuhr_sec);
+          document.getElementById('p_a_asr').innerText     = fmt(ast.asr_sec);
+          document.getElementById('p_a_maghrib').innerText = fmt(ast.maghrib_sec);
+          document.getElementById('p_a_isha').innerText    = fmt(ast.isha_sec);
+
+          const j  = data.jamat.today_sec    || [];
+          const jt = data.jamat.tomorrow_sec || [];
+          document.getElementById('p_j_fajr').innerText    = fmt(j[0]);
+          document.getElementById('p_j_dhuhr').innerText   = fmt(j[1]);
+          document.getElementById('p_j_asr').innerText     = fmt(j[2]);
+          document.getElementById('p_j_maghrib').innerText = fmt(j[3]);
+          document.getElementById('p_j_isha').innerText    = fmt(j[4]);
+
+          // "Tomorrow changes" hint.
+          const names = ['fajr','dhuhr','asr','maghrib','isha'];
+          for (let i = 0; i < names.length; i++) {
+            const el = document.getElementById('p_change_' + names[i]);
+            if (!el) continue;
+            if (j[i] === null || j[i] === undefined ||
+                jt[i] === null || jt[i] === undefined) {
+              el.innerText = '';
+              continue;
+            }
+            el.innerText = (jt[i] !== j[i]) ? `→ tomorrow ${fmt(jt[i])}` : '';
+          }
         });
     }
 

@@ -77,6 +77,48 @@ typedef enum {
     SVC_CONFIG_ADHAN_MODE_COUNT = 3,
 } svc_config_adhan_mode_t;
 
+/* Jamat anchor: how the congregational time is derived from a base time. */
+typedef enum {
+    SVC_CONFIG_JAMAT_DISABLED       = 0,
+    SVC_CONFIG_JAMAT_ADHAN_PLUS     = 1,  /* jamat = adhan + offset        */
+    SVC_CONFIG_JAMAT_SUNRISE_MINUS  = 2,  /* Fajr only: jamat = sunrise - offset */
+    SVC_CONFIG_JAMAT_MIDNIGHT_MINUS = 3,  /* Isha only: jamat = midnight - offset */
+    SVC_CONFIG_JAMAT_ANCHOR_COUNT   = 4,
+} svc_config_jamat_anchor_t;
+
+/* One season's jamat rule for one prayer. */
+typedef struct {
+    uint8_t  anchor;       /* svc_config_jamat_anchor_t */
+    uint16_t offset_min;
+} jamat_season_cfg_t;
+
+/* Both seasons + rounding for one prayer. Rounding is shared between
+   seasons (it reflects how the mosque publishes its sign, not season). */
+typedef struct {
+    jamat_season_cfg_t winter;
+    jamat_season_cfg_t summer;
+    uint8_t round_min;     /* 0, 2, 5, 10, 15, 20, 30; 0 = no rounding */
+} jamat_per_prayer_cfg_t;
+
+/* Two fixed dates split the year: summer = [summer_start, winter_start),
+   winter = the complement. Both dates are (month, day); year wraps. */
+typedef struct {
+    uint8_t summer_start_month;
+    uint8_t summer_start_day;
+    uint8_t winter_start_month;
+    uint8_t winter_start_day;
+} season_cfg_t;
+
+typedef enum {
+    SVC_CONFIG_PRESET_UK       = 0,
+    SVC_CONFIG_PRESET_PAKISTAN = 1,
+    SVC_CONFIG_PRESET_COUNT    = 2,
+} svc_config_preset_t;
+
+/* Valid values for jamat_per_prayer_cfg_t.round_min. The setter rejects
+   anything not on this list so the web UI dropdown and the API agree. */
+bool svc_config_round_min_is_valid(uint8_t round_min);
+
 /* Snapshot of all configuration fields. */
 typedef struct {
     char     location_name[SVC_CONFIG_NAME_MAX]; /* "Masjid", "Home", etc. "" if unset */
@@ -85,7 +127,14 @@ typedef struct {
     double   longitude;
     svc_config_method_t method;
     svc_config_madhab_t madhab;
+    /* DEPRECATED legacy mirror of jamat[i].winter.offset_min. Populated
+       automatically. Kept for backward compatibility with the pre-5.1a
+       API (`svc_config_set_iqamah_offset`) and web UI field
+       "iqamah_offsets". Removed in 5.1b when the UI is updated. */
     uint16_t iqamah_offset_min[SVC_CONFIG_PRAYER_COUNT];
+
+    jamat_per_prayer_cfg_t jamat[SVC_CONFIG_PRAYER_COUNT];
+    season_cfg_t           season;
 
     svc_config_adhan_mode_t adhan_mode;
     uint8_t  adhan_volume;          /* 0..100; no digital volume control on shipped PCB */
@@ -127,7 +176,32 @@ esp_err_t svc_config_set_location(double lat, double lon);
 esp_err_t svc_config_clear_location(void);
 esp_err_t svc_config_set_method(svc_config_method_t m);
 esp_err_t svc_config_set_madhab(svc_config_madhab_t m);
+/* DEPRECATED. Writes to jamat[p].winter.offset_min AND
+   jamat[p].summer.offset_min (both seasons), preserving pre-5.1a
+   behaviour. Use svc_config_set_jamat_season() for per-season control. */
 esp_err_t svc_config_set_iqamah_offset(svc_config_prayer_t p, uint16_t minutes);
+
+/* Set one prayer's jamat rule for one season (0 = winter, 1 = summer).
+   Validates anchor for the prayer: SUNRISE_MINUS only for FAJR,
+   MIDNIGHT_MINUS only for ISHA. offset_min <= 1440. */
+esp_err_t svc_config_set_jamat_season(svc_config_prayer_t p, uint8_t season,
+                                      svc_config_jamat_anchor_t anchor,
+                                      uint16_t offset_min);
+
+/* Set one prayer's rounding. Rejects values not in the valid list. */
+esp_err_t svc_config_set_jamat_round(svc_config_prayer_t p, uint8_t round_min);
+
+/* Set the two season transition dates. Both must be valid (month 1-12,
+   day 1-31). The two dates must differ. */
+esp_err_t svc_config_set_season(uint8_t summer_m, uint8_t summer_d,
+                                uint8_t winter_m, uint8_t winter_d);
+
+/* Apply a named preset. Overwrites method, madhab, high_lat_rule,
+   jamat[], season. Does NOT touch location_name, latitude, longitude,
+   adhan_mode, adhan_volume, brightness_mode, auto_brightness,
+   night_lamp_enable, zawal_buffer_min, or per-prayer adhan_offset_min.
+   Persists the affected fields to NVS. */
+esp_err_t svc_config_apply_preset(svc_config_preset_t preset);
 esp_err_t svc_config_set_adhan_mode(svc_config_adhan_mode_t mode);
 esp_err_t svc_config_set_adhan_volume(uint8_t volume_0_100);
 esp_err_t svc_config_set_brightness_mode(uint8_t mode);

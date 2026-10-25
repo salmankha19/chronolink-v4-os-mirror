@@ -122,6 +122,23 @@ static esp_err_t get_config_handler(httpd_req_t *req)
         cJSON_AddItemToArray(adhan_offsets, cJSON_CreateNumber(cfg.adhan_offset_min[i]));
     }
 
+    /* 5.1a seasonal jamat config. */
+    cJSON *jamat_arr = cJSON_AddArrayToObject(root, "jamat");
+    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
+        cJSON *p = cJSON_CreateObject();
+        cJSON_AddNumberToObject(p, "winter_anchor", cfg.jamat[i].winter.anchor);
+        cJSON_AddNumberToObject(p, "winter_offset", cfg.jamat[i].winter.offset_min);
+        cJSON_AddNumberToObject(p, "summer_anchor", cfg.jamat[i].summer.anchor);
+        cJSON_AddNumberToObject(p, "summer_offset", cfg.jamat[i].summer.offset_min);
+        cJSON_AddNumberToObject(p, "round_min",     cfg.jamat[i].round_min);
+        cJSON_AddItemToArray(jamat_arr, p);
+    }
+    cJSON *season = cJSON_AddObjectToObject(root, "season");
+    cJSON_AddNumberToObject(season, "summer_start_month", cfg.season.summer_start_month);
+    cJSON_AddNumberToObject(season, "summer_start_day",   cfg.season.summer_start_day);
+    cJSON_AddNumberToObject(season, "winter_start_month", cfg.season.winter_start_month);
+    cJSON_AddNumberToObject(season, "winter_start_day",   cfg.season.winter_start_day);
+
     esp_err_t err = send_json(req, root);
     cJSON_Delete(root);
     return err;
@@ -455,12 +472,74 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     if (err == ESP_OK && times.valid) {
         cJSON_AddBoolToObject(root, "valid", true);
-        cJSON_AddNumberToObject(root, "fajr_sec", times.fajr_sec);
-        cJSON_AddNumberToObject(root, "sunrise_sec", times.sunrise_sec);
-        cJSON_AddNumberToObject(root, "dhuhr_sec", times.dhuhr_sec);
-        cJSON_AddNumberToObject(root, "asr_sec", times.asr_sec);
-        cJSON_AddNumberToObject(root, "maghrib_sec", times.maghrib_sec);
-        cJSON_AddNumberToObject(root, "isha_sec", times.isha_sec);
+        cJSON_AddNumberToObject(root, "season", times.season);
+
+        /* Nested three-tier shape (new in 5.1a): astronomical / adhan /
+           jamat / auxiliary / ramadan. Consumers read finished values;
+           no offset math in the UI. */
+
+        cJSON *ast = cJSON_AddObjectToObject(root, "astronomical");
+        cJSON_AddNumberToObject(ast, "fajr_sec",    times.astronomical_fajr_sec);
+        cJSON_AddNumberToObject(ast, "dhuhr_sec",   times.astronomical_dhuhr_sec);
+        cJSON_AddNumberToObject(ast, "asr_sec",     times.astronomical_asr_sec);
+        cJSON_AddNumberToObject(ast, "maghrib_sec", times.astronomical_maghrib_sec);
+        cJSON_AddNumberToObject(ast, "isha_sec",    times.astronomical_isha_sec);
+
+        cJSON *adhan = cJSON_AddObjectToObject(root, "adhan");
+        cJSON_AddNumberToObject(adhan, "fajr_sec",    times.fajr_sec);
+        cJSON_AddNumberToObject(adhan, "dhuhr_sec",   times.dhuhr_sec);
+        cJSON_AddNumberToObject(adhan, "asr_sec",     times.asr_sec);
+        cJSON_AddNumberToObject(adhan, "maghrib_sec", times.maghrib_sec);
+        cJSON_AddNumberToObject(adhan, "isha_sec",    times.isha_sec);
+
+        cJSON *jamat = cJSON_AddObjectToObject(root, "jamat");
+        cJSON *jamat_today    = cJSON_AddArrayToObject(jamat, "today_sec");
+        cJSON *jamat_tomorrow = cJSON_AddArrayToObject(jamat, "tomorrow_sec");
+        for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+            cJSON_AddItemToArray(jamat_today,
+                times.jamat_sec[p] == UINT32_MAX
+                    ? cJSON_CreateNull()
+                    : cJSON_CreateNumber(times.jamat_sec[p]));
+            cJSON_AddItemToArray(jamat_tomorrow,
+                times.jamat_tomorrow_sec[p] == UINT32_MAX
+                    ? cJSON_CreateNull()
+                    : cJSON_CreateNumber(times.jamat_tomorrow_sec[p]));
+        }
+
+        cJSON *aux = cJSON_AddObjectToObject(root, "auxiliary");
+        cJSON_AddNumberToObject(aux, "sunrise_sec",     times.sunrise_sec);
+        cJSON_AddNumberToObject(aux, "sunset_sec",      times.sunset_sec);
+        cJSON_AddNumberToObject(aux, "midnight_sec",    times.midnight_sec);
+        cJSON_AddNumberToObject(aux, "zawal_start_sec", times.zawal_start_sec);
+        cJSON_AddNumberToObject(aux, "asr_yellow_sec",  times.asr_yellow_sec);
+
+        cJSON *ram = cJSON_AddObjectToObject(root, "ramadan");
+        cJSON_AddNumberToObject(ram, "sehri_end_sec", times.sehri_end_sec);
+        cJSON_AddNumberToObject(ram, "iftar_sec",     times.iftar_sec);
+
+        /* Flat aliases for backward compatibility with pre-5.1a
+           consumers. */
+        cJSON_AddNumberToObject(root, "fajr_sec",         times.fajr_sec);
+        cJSON_AddNumberToObject(root, "sunrise_sec",      times.sunrise_sec);
+        cJSON_AddNumberToObject(root, "dhuhr_sec",        times.dhuhr_sec);
+        cJSON_AddNumberToObject(root, "asr_sec",          times.asr_sec);
+        cJSON_AddNumberToObject(root, "maghrib_sec",      times.maghrib_sec);
+        cJSON_AddNumberToObject(root, "isha_sec",         times.isha_sec);
+        cJSON_AddNumberToObject(root, "sehri_end_sec",    times.sehri_end_sec);
+        cJSON_AddNumberToObject(root, "iftar_sec",        times.iftar_sec);
+
+        cJSON *flat_jamat = cJSON_AddArrayToObject(root, "jamat_sec");
+        cJSON *flat_jamat_tm = cJSON_AddArrayToObject(root, "jamat_tomorrow_sec");
+        for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+            cJSON_AddItemToArray(flat_jamat,
+                times.jamat_sec[p] == UINT32_MAX
+                    ? cJSON_CreateNull()
+                    : cJSON_CreateNumber(times.jamat_sec[p]));
+            cJSON_AddItemToArray(flat_jamat_tm,
+                times.jamat_tomorrow_sec[p] == UINT32_MAX
+                    ? cJSON_CreateNull()
+                    : cJSON_CreateNumber(times.jamat_tomorrow_sec[p]));
+        }
     } else {
         cJSON_AddBoolToObject(root, "valid", false);
     }
@@ -470,13 +549,45 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
     return ret;
 }
 
+/* POST /api/config/preset
+ *
+ * Body: {"preset": 0} for UK, {"preset": 1} for Pakistan.
+ * Applies the preset then triggers an immediate recalculation. */
+static esp_err_t post_preset_handler(httpd_req_t *req)
+{
+    char *buf = read_body(req, 128, NULL);
+    if (!buf) return ESP_FAIL;
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *preset = cJSON_GetObjectItem(root, "preset");
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsNumber(preset)) {
+        err = svc_config_apply_preset((svc_config_preset_t)preset->valueint);
+    }
+    cJSON_Delete(root);
+
+    if (err == ESP_OK) {
+        svc_prayer_engine_service_recalculate();
+        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid preset");
+    }
+    return err;
+}
+
 esp_err_t svc_http_start(void)
 {
     if (s_server) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 10;
     /* OTA handler calls esp_ota_* which needs more stack than a JSON
      * handler. 8192 is conservative; default 4096 has no margin for a
      * streaming upload with abort paths. */
@@ -491,7 +602,8 @@ esp_err_t svc_http_start(void)
     const httpd_uri_t handlers[] = {
         { .uri = "/",             .method = HTTP_GET,  .handler = get_html_handler      },
         { .uri = "/api/config",   .method = HTTP_GET,  .handler = get_config_handler    },
-        { .uri = "/api/config",   .method = HTTP_POST, .handler = post_config_handler   },
+        { .uri = "/api/config",         .method = HTTP_POST, .handler = post_config_handler   },
+        { .uri = "/api/config/preset",  .method = HTTP_POST, .handler = post_preset_handler   },
         { .uri = "/api/wifi",     .method = HTTP_POST, .handler = post_wifi_handler     },
         { .uri = "/api/reboot",        .method = HTTP_POST, .handler = post_reboot_handler        },
         { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = post_factory_reset_handler },

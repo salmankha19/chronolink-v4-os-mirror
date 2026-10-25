@@ -8,7 +8,7 @@
  *
  * Consumers subscribe to EVENT_PRAYER_TIMES_UPDATED on the event bus.
  * IMPORTANT: that event is a SIGNAL ONLY -- the payload is truncated
- * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 52). Do NOT
+ * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 120). Do NOT
  * memcpy the payload. On receiving the event, call
  * svc_prayer_engine_service_get_times() to read the full snapshot.
  *
@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
+#include "svc_config.h"   /* SVC_CONFIG_PRAYER_COUNT, season_cfg_t (jamat tiers) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,17 +32,63 @@ typedef struct {
     uint32_t date_yyyymmdd;      /* cache key: recalculate when this changes */
     int16_t  tz_offset_minutes;  /* cache key: recalculate when this changes;
                                     = local - UTC at noon of target date */
+    uint8_t  season;             /* 0 = winter, 1 = summer (for diagnostics) */
 
+    /* -----------------------------------------------------------------
+     * Tier 1: ASTRONOMICAL local time. Engine output: astronomical
+     * calculation (sun angle / declination / equation of time) +
+     * longitude correction + timezone offset, expressed as local civil
+     * time (seconds since local midnight). NO user-configurable offsets
+     * applied -- this is what the astronomy says the prayer instant is.
+     * ----------------------------------------------------------------- */
+    uint32_t astronomical_fajr_sec;
+    uint32_t astronomical_dhuhr_sec;
+    uint32_t astronomical_asr_sec;
+    uint32_t astronomical_maghrib_sec;
+    uint32_t astronomical_isha_sec;
+
+    /* -----------------------------------------------------------------
+     * Tier 2: ADHAN. Astronomical + adhan_offset_min[]. What the mosque
+     * actually calls. (Field names kept as `*_sec` for backward
+     * compatibility with pre-5.1a consumers.)
+     * ----------------------------------------------------------------- */
     uint32_t fajr_sec;
-    uint32_t sunrise_sec;
     uint32_t dhuhr_sec;
-    uint32_t zawal_start_sec;
     uint32_t asr_sec;
-    uint32_t asr_yellow_sec;
     uint32_t maghrib_sec;
-    uint32_t sunset_sec;
     uint32_t isha_sec;
+
+    /* -----------------------------------------------------------------
+     * Tier 3: JAMAT. Adhan (or sunrise/midnight) + seasonal offset +
+     * rounding. UINT32_MAX means "no jamat this season" (anchor
+     * DISABLED) or "cannot be computed for this date".
+     * ----------------------------------------------------------------- */
+    uint32_t jamat_sec[SVC_CONFIG_PRAYER_COUNT];
+    /* Tomorrow's jamat, same order and sentinel. Consumers compare
+       jamat_tomorrow_sec[p] != jamat_sec[p] to warn the user today
+       ("Tomorrow Asr jamat is 3:50"). Computed on the same recalculate
+       using tomorrow's own season and timezone offset, so midnight
+       rollover, season transitions, and DST transitions are all
+       reflected consistently. */
+    uint32_t jamat_tomorrow_sec[SVC_CONFIG_PRAYER_COUNT];
+
+    /* -----------------------------------------------------------------
+     * Auxiliary -- astronomical events, not prayers. No adhan_offset
+     * applied (raw engine output).
+     * ----------------------------------------------------------------- */
+    uint32_t sunrise_sec;
+    uint32_t sunset_sec;
     uint32_t midnight_sec;
+    uint32_t zawal_start_sec;
+    uint32_t asr_yellow_sec;
+
+    /* -----------------------------------------------------------------
+     * Ramadan endpoints (astronomical tier).
+     *   sehri_end_sec = astronomical_fajr_sec (pre adhan-offset)
+     *   iftar_sec     = sunset_sec
+     * ----------------------------------------------------------------- */
+    uint32_t sehri_end_sec;
+    uint32_t iftar_sec;
 } svc_prayer_engine_times_t;
 
 /*

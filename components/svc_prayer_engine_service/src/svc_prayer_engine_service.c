@@ -66,7 +66,7 @@ static bool cache_get_key(uint32_t *date, int16_t *offset)
     return ok;
 }
 
-/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 52 bytes,
+/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 120 bytes,
    event_t.data is 32 bytes. Consumers must call
    svc_prayer_engine_service_get_times() to read the full snapshot. */
 static void publish_times_updated(const svc_prayer_engine_times_t *t)
@@ -76,6 +76,92 @@ static void publish_times_updated(const svc_prayer_engine_times_t *t)
     memset(&evt, 0, sizeof(evt));
     evt.type = EVENT_PRAYER_TIMES_UPDATED;
     event_bus_publish(&evt);
+}
+
+/* ---------------------------------------------------------------------
+ * Seasonal jamat computation helpers (5.1a)
+ * ------------------------------------------------------------------- */
+
+/* True if (m, d) is in [start, end) with year-wrap. */
+static bool date_in_range(uint8_t m, uint8_t d,
+                          uint8_t start_m, uint8_t start_d,
+                          uint8_t end_m, uint8_t end_d)
+{
+    uint16_t v = (uint16_t)m * 100u + d;
+    uint16_t s = (uint16_t)start_m * 100u + start_d;
+    uint16_t e = (uint16_t)end_m   * 100u + end_d;
+    if (s <= e) return v >= s && v < e;
+    return v >= s || v < e;
+}
+
+/* Summer if (m, d) is in [summer_start, winter_start). */
+static uint8_t current_season(const season_cfg_t *s, uint8_t m, uint8_t d)
+{
+    return date_in_range(m, d, s->summer_start_month, s->summer_start_day,
+                         s->winter_start_month, s->winter_start_day) ? 1u : 0u;
+}
+
+/* Round `sec` to the nearest multiple of `round_min * 60` seconds from
+   local midnight. round_min == 0 means "return sec unchanged". */
+static uint32_t round_to_min(uint32_t sec, uint8_t round_min)
+{
+    if (round_min == 0) return sec;
+    uint32_t step = (uint32_t)round_min * 60u;
+    uint32_t half = step / 2u;
+    return ((sec + half) / step) * step;
+}
+
+/* Compute one prayer's jamat from its anchor value and cfg. Returns
+   UINT32_MAX if the anchor is DISABLED or the target is invalid. */
+static uint32_t compute_jamat(uint32_t adhan_sec,
+                              uint32_t sunrise_sec,
+                              uint32_t midnight_sec,
+                              const jamat_season_cfg_t *cfg,
+                              uint8_t round_min)
+{
+    if (cfg->anchor == SVC_CONFIG_JAMAT_DISABLED) return UINT32_MAX;
+
+    uint32_t base;
+    uint32_t off_s = (uint32_t)cfg->offset_min * 60u;
+
+    switch (cfg->anchor) {
+    case SVC_CONFIG_JAMAT_ADHAN_PLUS:
+        base = adhan_sec + off_s;
+        break;
+    case SVC_CONFIG_JAMAT_SUNRISE_MINUS:
+        if (sunrise_sec == UINT32_MAX || sunrise_sec < off_s) return UINT32_MAX;
+        base = sunrise_sec - off_s;
+        break;
+    case SVC_CONFIG_JAMAT_MIDNIGHT_MINUS:
+        if (midnight_sec == UINT32_MAX || midnight_sec < off_s) return UINT32_MAX;
+        base = midnight_sec - off_s;
+        break;
+    default:
+        return UINT32_MAX;
+    }
+    return round_to_min(base, round_min);
+}
+
+/* Advance (y, m, d) by one calendar day. Uses timegm/gmtime_r so
+   month/year rollover and leap years are handled by the libc. Returns
+   the input on failure -- caller checks against known-good values. */
+static void date_advance_one_day(uint16_t y, uint8_t m, uint8_t d,
+                                 uint16_t *oy, uint8_t *om, uint8_t *od)
+{
+    struct tm t = {0};
+    t.tm_year = (int)y - 1900;
+    t.tm_mon  = (int)m - 1;
+    t.tm_mday = (int)d + 1;
+    t.tm_isdst = 0;
+    time_t e = timegm(&t);
+    struct tm out = {0};
+    if (e == (time_t)-1 || gmtime_r(&e, &out) == NULL) {
+        *oy = y; *om = m; *od = d;
+        return;
+    }
+    *oy = (uint16_t)(out.tm_year + 1900);
+    *om = (uint8_t)(out.tm_mon + 1);
+    *od = (uint8_t)out.tm_mday;
 }
 
 esp_err_t svc_prayer_engine_service_start(void)
@@ -229,20 +315,96 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
 
     result.tz_offset_minutes = tz_offset_min;
 
+    /* Tier 1: astronomical (raw engine output, no user offsets). */
+    result.astronomical_fajr_sec    = raw.fajr_sec;
+    result.astronomical_dhuhr_sec   = raw.dhuhr_sec;
+    result.astronomical_asr_sec     = raw.asr_sec;
+    result.astronomical_maghrib_sec = raw.maghrib_sec;
+    result.astronomical_isha_sec    = raw.isha_sec;
+
+    /* Auxiliary times. Astronomical events, no adhan_offset. */
     result.sunrise_sec    = raw.sunrise_sec;
     result.sunset_sec     = raw.sunset_sec;
     result.asr_yellow_sec = raw.asr_yellow_sec;
     result.midnight_sec   = raw.midnight_sec;
 
+    uint32_t zawal_off = (uint32_t)cfg.zawal_buffer_min * 60U;
+    result.zawal_start_sec = (raw.dhuhr_sec > zawal_off)
+                           ? (raw.dhuhr_sec - zawal_off) : 0U;
+
+    /* Tier 2: adhan (astronomical + adhan_offset). */
     result.fajr_sec    = raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60U;
     result.dhuhr_sec   = raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60U;
     result.asr_sec     = raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60U;
     result.maghrib_sec = raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60U;
     result.isha_sec    = raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60U;
 
-    uint32_t zawal_off = (uint32_t)cfg.zawal_buffer_min * 60U;
-    result.zawal_start_sec = (raw.dhuhr_sec > zawal_off)
-                           ? (raw.dhuhr_sec - zawal_off) : 0U;
+    /* Ramadan endpoints (astronomical tier). */
+    result.sehri_end_sec = raw.fajr_sec;
+    result.iftar_sec     = raw.sunset_sec;
+
+    /* Tier 3: jamat (today), seasonal. Winter/summer decision uses the
+       target date. */
+    uint8_t season = current_season(&cfg.season,
+                                    (uint8_t)snap.local.month,
+                                    (uint8_t)snap.local.day);
+    result.season = season;
+
+    uint32_t adhan_secs[SVC_CONFIG_PRAYER_COUNT] = {
+        result.fajr_sec, result.dhuhr_sec, result.asr_sec,
+        result.maghrib_sec, result.isha_sec
+    };
+    for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+        const jamat_season_cfg_t *jc = (season == 0)
+            ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
+        result.jamat_sec[p] = compute_jamat(
+            adhan_secs[p],
+            raw.sunrise_sec,
+            raw.midnight_sec,
+            jc,
+            cfg.jamat[p].round_min);
+    }
+
+    /* Tier 3: jamat (tomorrow), for the "change tomorrow" notification.
+       Non-fatal: on any failure, tomorrow's entries stay UINT32_MAX. */
+    for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+        result.jamat_tomorrow_sec[p] = UINT32_MAX;
+    }
+    {
+        uint16_t tm_y; uint8_t tm_m, tm_d;
+        date_advance_one_day((uint16_t)snap.local.year,
+                             (uint8_t)snap.local.month,
+                             (uint8_t)snap.local.day,
+                             &tm_y, &tm_m, &tm_d);
+        int16_t tm_tz_off_min = tz_offset_minutes_at_noon(tm_y, tm_m, tm_d);
+        double  tm_tz_off     = (double)tm_tz_off_min / 60.0;
+
+        svc_prayer_times_t tm_raw = {0};
+        esp_err_t tm_err = svc_prayer_engine_calculate(
+            (int)tm_y, (int)tm_m, (int)tm_d,
+            cfg.latitude, cfg.longitude, tm_tz_off,
+            method, madhab, highlat, &tm_raw);
+        if (tm_err == ESP_OK) {
+            uint8_t tm_season = current_season(&cfg.season, tm_m, tm_d);
+            uint32_t tm_adhan[SVC_CONFIG_PRAYER_COUNT] = {
+                tm_raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60u,
+                tm_raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60u,
+                tm_raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60u,
+                tm_raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60u,
+                tm_raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60u,
+            };
+            for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+                const jamat_season_cfg_t *jc = (tm_season == 0)
+                    ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
+                result.jamat_tomorrow_sec[p] = compute_jamat(
+                    tm_adhan[p],
+                    tm_raw.sunrise_sec,
+                    tm_raw.midnight_sec,
+                    jc,
+                    cfg.jamat[p].round_min);
+            }
+        }
+    }
 
     result.valid = true;
 
@@ -253,13 +415,34 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
 
     publish_times_updated(&result);
 
-    ESP_LOGI(TAG, "prayer times updated (date=%lu offset=%d min): "
-                  "fajr=%u dhuhr=%u asr=%u maghrib=%u isha=%u",
+    ESP_LOGI(TAG, "prayer times updated (date=%lu offset=%d min season=%s): "
+                  "fajr=%u dhuhr=%u asr=%u maghrib=%u isha=%u "
+                  "j_fajr=%u j_dhuhr=%u j_asr=%u j_maghrib=%u j_isha=%u",
              (unsigned long)result.date_yyyymmdd,
              (int)result.tz_offset_minutes,
+             result.season ? "summer" : "winter",
              (unsigned)result.fajr_sec, (unsigned)result.dhuhr_sec,
              (unsigned)result.asr_sec, (unsigned)result.maghrib_sec,
-             (unsigned)result.isha_sec);
+             (unsigned)result.isha_sec,
+             (unsigned)result.jamat_sec[0], (unsigned)result.jamat_sec[1],
+             (unsigned)result.jamat_sec[2], (unsigned)result.jamat_sec[3],
+             (unsigned)result.jamat_sec[4]);
+
+    static const char *const s_prayer_names[SVC_CONFIG_PRAYER_COUNT] = {
+        "Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"
+    };
+    for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+        if (result.jamat_sec[p] != UINT32_MAX
+            && result.jamat_tomorrow_sec[p] != UINT32_MAX
+            && result.jamat_sec[p] != result.jamat_tomorrow_sec[p]) {
+            ESP_LOGI(TAG, "jamat change tomorrow: %s %02u:%02u -> %02u:%02u",
+                     s_prayer_names[p],
+                     (unsigned)((result.jamat_sec[p] % 86400u) / 3600u),
+                     (unsigned)(((result.jamat_sec[p] % 86400u) % 3600u) / 60u),
+                     (unsigned)((result.jamat_tomorrow_sec[p] % 86400u) / 3600u),
+                     (unsigned)(((result.jamat_tomorrow_sec[p] % 86400u) % 3600u) / 60u));
+        }
+    }
     return ESP_OK;
 }
 

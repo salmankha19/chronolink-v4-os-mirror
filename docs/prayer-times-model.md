@@ -3,7 +3,8 @@
 The authoritative description of how prayer times, adhan times, and
 jamat times are modelled, computed, and exposed in ChronoLink V4 OS.
 
-**Status:** design complete (2026-10-25). Implementation lands in PR 5.1a.
+**Status:** design complete (2026-10-25); implemented in PR 5.1a
+(`svc_config`, `svc_prayer_engine_service`, `svc_http`, web UI).
 Where this document and the code disagree, the code wins — fix the document.
 
 **Related documents:** [Architecture.md](Architecture.md) §4 (runtime
