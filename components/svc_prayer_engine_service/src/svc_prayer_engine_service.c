@@ -301,7 +301,7 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     err = svc_prayer_engine_calculate(
         (int)snap.local.year, (int)snap.local.month, (int)snap.local.day,
         cfg.latitude, cfg.longitude, tz_off,
-        method, madhab, highlat, &raw);
+        method, madhab, highlat, cfg.custom_fajr_angle, cfg.custom_isha_angle, &raw);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "calculate failed: %s", esp_err_to_name(err));
         return err;
@@ -383,7 +383,7 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         esp_err_t tm_err = svc_prayer_engine_calculate(
             (int)tm_y, (int)tm_m, (int)tm_d,
             cfg.latitude, cfg.longitude, tm_tz_off,
-            method, madhab, highlat, &tm_raw);
+            method, madhab, highlat, cfg.custom_fajr_angle, cfg.custom_isha_angle, &tm_raw);
         if (tm_err == ESP_OK) {
             uint8_t tm_season = current_season(&cfg.season, tm_m, tm_d);
             uint32_t tm_adhan[SVC_CONFIG_PRAYER_COUNT] = {

@@ -31,8 +31,7 @@ Does **not** cover:
   `components/svc_prayer_engine/include/prayertimes/PrayerTimes.hpp` and
   `src/prayertimes/PrayerTimes.cpp`
 - UI layout decisions (ticker vs colour vs note)
-- user-editable custom angles — PR 5.3 (Moonsighting Committee
-  landed in PR 5.2, see §3.5)
+- (Nothing. All planned calculation methods and custom angles are implemented.)
 
 ---
 
@@ -480,7 +479,7 @@ reference this document rather than re-deriving the model.
 | **5.1a.1** | `refactor:` extract `adhan_calculator` + `jamat_calculator` | After 5.1a merges |
 | **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | Implemented in this PR |
 | **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | Implemented in this PR |
-| **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | After 5.1b |
+| **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | Implemented in this PR |
 
 ---
 

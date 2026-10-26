@@ -20,8 +20,8 @@
 extern "C" {
 #endif
 
-/* Calculation methods. Values 0..6 match svc_config_method_t exactly
-   (Moonsighting included); the service layer casts config -> engine 1:1. */
+/* Calculation methods. Values 0..7 match svc_config_method_t exactly
+   (Moonsighting and Custom included); the service layer casts config -> engine 1:1. */
 typedef enum {
     SVC_PRAYER_METHOD_MWL           = 0,
     SVC_PRAYER_METHOD_ISNA          = 1,
@@ -30,7 +30,8 @@ typedef enum {
     SVC_PRAYER_METHOD_UMM_AL_QURA   = 4,
     SVC_PRAYER_METHOD_JAFARIA       = 5,
     SVC_PRAYER_METHOD_MOONSIGHTING  = 6,
-    SVC_PRAYER_METHOD_COUNT         = 7,
+    SVC_PRAYER_METHOD_CUSTOM        = 7,
+    SVC_PRAYER_METHOD_COUNT         = 8,
 } svc_prayer_method_t;
 
 typedef enum {
@@ -119,6 +120,8 @@ esp_err_t svc_prayer_engine_calculate(
     svc_prayer_method_t method,
     svc_prayer_madhab_t madhab,
     svc_prayer_highlat_t highlat,
+    double custom_fajr_angle,
+    double custom_isha_angle,
     svc_prayer_times_t *out
 );
 

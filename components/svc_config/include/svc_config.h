@@ -42,9 +42,9 @@ extern "C" {
 /* Capacity of location_name including the terminating NUL. */
 #define SVC_CONFIG_NAME_MAX 64
 
-/* Calculation method IDs. Values 0..6 match svc_prayer_method_t
-   exactly. Moonsighting Committee (6) applies seasonal twilight bounds
-   in the engine (see docs/prayer-times-model.md §3.5). */
+/* Calculation method IDs. Values 0..7 match svc_prayer_method_t
+   exactly. Moonsighting Committee (6) applies seasonal twilight bounds.
+   Custom (7) uses user-provided Fajr/Isha angles. */
 typedef enum {
     SVC_CONFIG_METHOD_MWL         = 0,
     SVC_CONFIG_METHOD_ISNA        = 1,
@@ -53,7 +53,8 @@ typedef enum {
     SVC_CONFIG_METHOD_UMM_AL_QURA = 4,
     SVC_CONFIG_METHOD_JAFARIA      = 5,  /* Shia Ithna-Ashari */
     SVC_CONFIG_METHOD_MOONSIGHTING = 6,
-    SVC_CONFIG_METHOD_COUNT        = 7,
+    SVC_CONFIG_METHOD_CUSTOM       = 7,  /* user-editable Fajr/Isha angles */
+    SVC_CONFIG_METHOD_COUNT        = 8,
 } svc_config_method_t;
 
 typedef enum {
@@ -129,6 +130,8 @@ typedef struct {
     double   longitude;
     svc_config_method_t method;
     svc_config_madhab_t madhab;
+    double   custom_fajr_angle; /* Used only if method == CUSTOM */
+    double   custom_isha_angle; /* Used only if method == CUSTOM */
     /* DEPRECATED legacy mirror of jamat[i].winter.offset_min. Populated
        automatically. Kept for backward compatibility with the pre-5.1a
        API (`svc_config_set_iqamah_offset`) and web UI field
@@ -177,6 +180,9 @@ esp_err_t svc_config_set_location_name(const char *name);
 esp_err_t svc_config_set_location(double lat, double lon);
 esp_err_t svc_config_clear_location(void);
 esp_err_t svc_config_set_method(svc_config_method_t m);
+
+/* Set custom Fajr and Isha angles (0.0 to 30.0). Validates range. */
+esp_err_t svc_config_set_custom_angles(double fajr, double isha);
 esp_err_t svc_config_set_madhab(svc_config_madhab_t m);
 /* DEPRECATED. Writes to jamat[p].winter.offset_min AND
    jamat[p].summer.offset_min (both seasons), preserving pre-5.1a

@@ -107,6 +107,8 @@ static esp_err_t get_config_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "longitude", cfg.longitude);
     cJSON_AddNumberToObject(root, "method", cfg.method);
     cJSON_AddNumberToObject(root, "madhab", cfg.madhab);
+    cJSON_AddNumberToObject(root, "custom_fajr_angle", cfg.custom_fajr_angle);
+    cJSON_AddNumberToObject(root, "custom_isha_angle", cfg.custom_isha_angle);
     cJSON_AddNumberToObject(root, "adhan_mode", cfg.adhan_mode);
     cJSON_AddNumberToObject(root, "adhan_volume", cfg.adhan_volume);
     cJSON_AddNumberToObject(root, "brightness_mode", cfg.brightness_mode);
@@ -190,6 +192,12 @@ static esp_err_t post_config_handler(httpd_req_t *req)
     if (cJSON_IsNumber(madhab)) {
         APPLY(svc_config_set_madhab((svc_config_madhab_t)madhab->valueint));
     }
+    cJSON *c_fajr = cJSON_GetObjectItem(root, "custom_fajr_angle");
+    cJSON *c_isha = cJSON_GetObjectItem(root, "custom_isha_angle");
+    if (cJSON_IsNumber(c_fajr) && cJSON_IsNumber(c_isha)) {
+        APPLY(svc_config_set_custom_angles(c_fajr->valuedouble, c_isha->valuedouble));
+    }
+
     cJSON *hl = cJSON_GetObjectItem(root, "high_lat_rule");
     if (cJSON_IsNumber(hl)) {
         APPLY(svc_config_set_high_lat_rule((uint8_t)hl->valueint));

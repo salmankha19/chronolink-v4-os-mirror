@@ -22,6 +22,8 @@ static const char *TAG = "svc_config";
 #define NVS_KEY_LON_UDEG       "lon_udeg"
 #define NVS_KEY_METHOD         "method"     /* uint8 */
 #define NVS_KEY_MADHAB         "madhab"     /* uint8 */
+#define NVS_KEY_CUST_FAJR      "cust_f_ang" /* int32 milli-degrees */
+#define NVS_KEY_CUST_ISHA      "cust_i_ang" /* int32 milli-degrees */
 #define NVS_KEY_ADHAN_MODE     "adhan_mode"
 #define NVS_KEY_ADHAN_VOL      "adhan_vol"  /* uint8, 0..100 */
 #define NVS_KEY_BRIGHT_MODE    "bright_mode"
@@ -179,6 +181,8 @@ static void set_defaults(svc_config_t *c)
     c->location_valid    = false;
     c->method            = SVC_CONFIG_METHOD_MWL;
     c->madhab            = SVC_CONFIG_MADHAB_STANDARD;
+    c->custom_fajr_angle = 18.0;
+    c->custom_isha_angle = 18.0;
     c->adhan_mode        = SVC_CONFIG_ADHAN_OFF;
     c->adhan_volume      = 70;
     c->brightness_mode   = 0;
@@ -282,6 +286,14 @@ static void load_from_nvs_unlocked(void)
         s_cache.method = (svc_config_method_t)v;
     } else if (v >= SVC_CONFIG_METHOD_COUNT) {
         ESP_LOGW(TAG, "stored method %u out of range -- using default", v);
+    }
+
+    int32_t cust_ang = 0;
+    if (nvs_get_i32(s_nvs, NVS_KEY_CUST_FAJR, &cust_ang) == ESP_OK && cust_ang >= 0 && cust_ang <= 30000) {
+        s_cache.custom_fajr_angle = (double)cust_ang / 1000.0;
+    }
+    if (nvs_get_i32(s_nvs, NVS_KEY_CUST_ISHA, &cust_ang) == ESP_OK && cust_ang >= 0 && cust_ang <= 30000) {
+        s_cache.custom_isha_angle = (double)cust_ang / 1000.0;
     }
 
     v = 0;
@@ -849,3 +861,27 @@ esp_err_t svc_config_apply_preset(svc_config_preset_t preset)
     lock_give();
     return ESP_OK;
 }
+
+esp_err_t svc_config_set_custom_angles(double fajr, double isha)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if (fajr < 0.0 || fajr > 30.0 || isha < 0.0 || isha > 30.0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    s_cache.custom_fajr_angle = fajr;
+    s_cache.custom_isha_angle = isha;
+
+    int32_t f_milli = (int32_t)(fajr * 1000.0 + 0.5);
+    int32_t i_milli = (int32_t)(isha * 1000.0 + 0.5);
+
+    esp_err_t e1 = persist_i32(NVS_KEY_CUST_FAJR, f_milli);
+    esp_err_t e2 = persist_i32(NVS_KEY_CUST_ISHA, i_milli);
+
+    lock_give();
+    if (e1 != ESP_OK) return e1;
+    return e2;
+}
+

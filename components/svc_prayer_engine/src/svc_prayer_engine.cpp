@@ -53,6 +53,8 @@ esp_err_t svc_prayer_engine_calculate(
     svc_prayer_method_t method,
     svc_prayer_madhab_t madhab,
     svc_prayer_highlat_t highlat,
+    double custom_fajr_angle,
+    double custom_isha_angle,
     svc_prayer_times_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
@@ -84,6 +86,12 @@ esp_err_t svc_prayer_engine_calculate(
     case SVC_PRAYER_METHOD_UMM_AL_QURA: m = prayertimes::UMM_AL_QURA; break;
     case SVC_PRAYER_METHOD_JAFARIA:      m = prayertimes::JAFARIA;      break;
     case SVC_PRAYER_METHOD_MOONSIGHTING: m = prayertimes::MOONSIGHTING; break;
+    case SVC_PRAYER_METHOD_CUSTOM:
+        m = prayertimes::MWL;
+        m.fajr_angle = custom_fajr_angle;
+        m.isha_angle = custom_isha_angle;
+        m.is_moonsighting = false;
+        break;
     default: return ESP_ERR_INVALID_ARG;
     }
 
