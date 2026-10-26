@@ -604,7 +604,8 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
 
 /* POST /api/config/preset
  *
- * Body: {"preset": 0} for UK, {"preset": 1} for Pakistan.
+ * Body: {"preset": 0} for UK, {"preset": 1} for Pakistan,
+ *       {"preset": 2} for UK (Moonsighting).
  * Applies the preset then triggers an immediate recalculation. */
 static esp_err_t post_preset_handler(httpd_req_t *req)
 {

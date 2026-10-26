@@ -42,17 +42,18 @@ extern "C" {
 /* Capacity of location_name including the terminating NUL. */
 #define SVC_CONFIG_NAME_MAX 64
 
-/* Calculation method IDs. Values 0..4 match svc_prayer_method_t
-   exactly; 5 (Jafaria) is a distinct method that maps 1:1 through
-   the service layer. */
+/* Calculation method IDs. Values 0..6 match svc_prayer_method_t
+   exactly. Moonsighting Committee (6) applies seasonal twilight bounds
+   in the engine (see docs/prayer-times-model.md §3.5). */
 typedef enum {
     SVC_CONFIG_METHOD_MWL         = 0,
     SVC_CONFIG_METHOD_ISNA        = 1,
     SVC_CONFIG_METHOD_EGYPTIAN    = 2,
     SVC_CONFIG_METHOD_KARACHI     = 3,
     SVC_CONFIG_METHOD_UMM_AL_QURA = 4,
-    SVC_CONFIG_METHOD_JAFARIA     = 5,  /* Shia Ithna-Ashari */
-    SVC_CONFIG_METHOD_COUNT       = 6,
+    SVC_CONFIG_METHOD_JAFARIA      = 5,  /* Shia Ithna-Ashari */
+    SVC_CONFIG_METHOD_MOONSIGHTING = 6,
+    SVC_CONFIG_METHOD_COUNT        = 7,
 } svc_config_method_t;
 
 typedef enum {
@@ -110,9 +111,10 @@ typedef struct {
 } season_cfg_t;
 
 typedef enum {
-    SVC_CONFIG_PRESET_UK       = 0,
-    SVC_CONFIG_PRESET_PAKISTAN = 1,
-    SVC_CONFIG_PRESET_COUNT    = 2,
+    SVC_CONFIG_PRESET_UK                = 0,
+    SVC_CONFIG_PRESET_PAKISTAN          = 1,
+    SVC_CONFIG_PRESET_UK_MOONSIGHTING   = 2,
+    SVC_CONFIG_PRESET_COUNT             = 3,
 } svc_config_preset_t;
 
 /* Valid values for jamat_per_prayer_cfg_t.round_min. The setter rejects

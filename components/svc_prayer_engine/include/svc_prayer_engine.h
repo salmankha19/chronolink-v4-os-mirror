@@ -20,16 +20,17 @@
 extern "C" {
 #endif
 
-/* Calculation methods. Values 0..5 match svc_config_method_t exactly
-   (Jafaria included); the service layer casts config -> engine 1:1. */
+/* Calculation methods. Values 0..6 match svc_config_method_t exactly
+   (Moonsighting included); the service layer casts config -> engine 1:1. */
 typedef enum {
-    SVC_PRAYER_METHOD_MWL         = 0,
-    SVC_PRAYER_METHOD_ISNA        = 1,
-    SVC_PRAYER_METHOD_EGYPTIAN    = 2,
-    SVC_PRAYER_METHOD_KARACHI     = 3,
-    SVC_PRAYER_METHOD_UMM_AL_QURA = 4,
-    SVC_PRAYER_METHOD_JAFARIA     = 5,
-    SVC_PRAYER_METHOD_COUNT       = 6,
+    SVC_PRAYER_METHOD_MWL           = 0,
+    SVC_PRAYER_METHOD_ISNA          = 1,
+    SVC_PRAYER_METHOD_EGYPTIAN      = 2,
+    SVC_PRAYER_METHOD_KARACHI       = 3,
+    SVC_PRAYER_METHOD_UMM_AL_QURA   = 4,
+    SVC_PRAYER_METHOD_JAFARIA       = 5,
+    SVC_PRAYER_METHOD_MOONSIGHTING  = 6,
+    SVC_PRAYER_METHOD_COUNT         = 7,
 } svc_prayer_method_t;
 
 typedef enum {

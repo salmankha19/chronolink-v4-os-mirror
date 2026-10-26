@@ -82,7 +82,8 @@ esp_err_t svc_prayer_engine_calculate(
     case SVC_PRAYER_METHOD_EGYPTIAN:    m = prayertimes::EGYPTIAN;    break;
     case SVC_PRAYER_METHOD_KARACHI:     m = prayertimes::KARACHI;     break;
     case SVC_PRAYER_METHOD_UMM_AL_QURA: m = prayertimes::UMM_AL_QURA; break;
-    case SVC_PRAYER_METHOD_JAFARIA:     m = prayertimes::JAFARIA;     break;
+    case SVC_PRAYER_METHOD_JAFARIA:      m = prayertimes::JAFARIA;      break;
+    case SVC_PRAYER_METHOD_MOONSIGHTING: m = prayertimes::MOONSIGHTING; break;
     default: return ESP_ERR_INVALID_ARG;
     }
 

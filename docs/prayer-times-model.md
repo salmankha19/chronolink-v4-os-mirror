@@ -31,8 +31,8 @@ Does **not** cover:
   `components/svc_prayer_engine/include/prayertimes/PrayerTimes.hpp` and
   `src/prayertimes/PrayerTimes.cpp`
 - UI layout decisions (ticker vs colour vs note)
-- methods not yet implemented (Moonsighting Committee — PR 5.2;
-  user-editable custom angles — PR 5.3)
+- user-editable custom angles — PR 5.3 (Moonsighting Committee
+  landed in PR 5.2, see §3.5)
 
 ---
 
@@ -152,6 +152,33 @@ target 15:45 → jamat **15:45**. Day 4 Asr adhan 15:32 → target 15:47 →
 jamat **15:45** (still). Day 8 Asr adhan 15:35 → target 15:50 → jamat
 **15:50** (changed). The jamat time "sticks" for ~7 days, then steps.
 
+### 3.5 Moonsighting Committee method
+
+The Moonsighting Committee method (Khalid Shaukat, common in the UK and
+North America) uses 18° for both Fajr and Isha, but applies a seasonal
+adjustment to prevent Fajr from being too early and Isha too late at high
+latitudes. The firmware ports the exact `batoulapps/adhan-js` algorithm:
+a piecewise-linear interpolation across six year segments, giving a "safe"
+boundary of N minutes before sunrise (Fajr) and M minutes after sunset
+(Isha). The angle-based value is then clamped to this boundary: if the
+angle would put Fajr before the safeFajr bound (or the angle is
+unreachable / NaN), safeFajr is used. Symmetric for Isha.
+
+The seasonal table replaces the high-latitude rule's function for this
+method: angle NaN → safe bound; angle too early/late → safe bound; angle
+within bounds → angle wins.
+
+**Important interaction with High-Latitude Rule:** The AUTO high-latitude
+rule runs *first*. At latitudes >48° (like the UK), AUTO resolves to
+SEVENTH_OF_THE_NIGHT. In summer (e.g. June at 51°N), the seventh-of-night
+bound is *tighter* (closer to sunrise) than the Moonsighting seasonal bound.
+Because the seasonal bound only clamps if it is *earlier* than the current
+Fajr, the seventh-of-night bound wins in summer.
+
+For exact `adhan-js` / Pillar app parity, the user must explicitly set
+**High Latitude Rule = None** in the web UI, allowing the Moonsighting
+seasonal table to run unhindered.
+
 ---
 
 ## 4. Season model
@@ -209,6 +236,7 @@ region. Presets live in `svc_config.c`, applied via
 |---|---|---|---|
 | `SVC_CONFIG_PRESET_UK` (factory default) | MWL | Standard | Fajr `SUNRISE_MINUS` 45 winter / disabled summer. Dhuhr +70 / +25. |
 | `SVC_CONFIG_PRESET_PAKISTAN` | Karachi | Hanafi | Fajr +20 both seasons. Dhuhr +70 both. |
+| `SVC_CONFIG_PRESET_UK_MOONSIGHTING` | Moonsighting | Standard | Same jamat rules as UK, but Moonsighting method (adhan-js parity). |
 
 **A preset touches:** `method`, `madhab`, `high_lat_rule`, `jamat[]`,
 `season`. **A preset does not touch:** `location_name`, `latitude`,
@@ -417,8 +445,9 @@ remain, backed by the deprecated mirror and the unchanged adhan field.
 
 ### 10.3 `POST /api/config/preset`
 
-Body `{"preset": 0}` (UK) or `{"preset": 1}` (Pakistan). Applies preset,
-triggers immediate recalculation, returns `{"status":"ok"}`.
+Body `{"preset": 0}` (UK, MWL), `{"preset": 1}` (Pakistan, Karachi), or
+`{"preset": 2}` (UK Moonsighting). Applies preset, triggers immediate
+recalculation, returns `{"status":"ok"}`.
 
 ---
 
@@ -450,7 +479,7 @@ reference this document rather than re-deriving the model.
 | **5.1a** | Backend: seasonal jamat, three-tier snapshot, today+tomorrow, `/api/config/preset` | Implemented in PR 5.1a |
 | **5.1a.1** | `refactor:` extract `adhan_calculator` + `jamat_calculator` | After 5.1a merges |
 | **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | Implemented in this PR |
-| **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | After 5.1b |
+| **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | Implemented in this PR |
 | **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | After 5.1b |
 
 ---

@@ -20,6 +20,9 @@ struct Method {
     // Asr shadow factor: 1.0 for Standard (Shafi, Maliki, Hanbali),
     // 2.0 for Hanafi.
     double asr_shadow_factor;
+
+    // True for Moonsighting Committee method (applies seasonal adjustments)
+    bool is_moonsighting;
 };
 
 // --- Built-in Methods ---
@@ -30,7 +33,8 @@ constexpr Method MWL = {
     .isha_interval = 0,
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
 };
 
 constexpr Method ISNA = {
@@ -39,7 +43,8 @@ constexpr Method ISNA = {
     .isha_interval = 0,
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
 };
 
 constexpr Method EGYPTIAN = {
@@ -48,7 +53,8 @@ constexpr Method EGYPTIAN = {
     .isha_interval = 0,
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
 };
 
 constexpr Method KARACHI = {
@@ -57,7 +63,8 @@ constexpr Method KARACHI = {
     .isha_interval = 0,
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
 };
 
 constexpr Method UMM_AL_QURA = {
@@ -66,7 +73,8 @@ constexpr Method UMM_AL_QURA = {
     .isha_interval = 90, // 90 mins after Maghrib
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
 };
 
 constexpr Method JAFARIA = {
@@ -75,7 +83,18 @@ constexpr Method JAFARIA = {
     .isha_interval = 0,
     .maghrib_angle = 4.0, // Maghrib 4 degrees
     .midnight_angle = 0.0,
-    .asr_shadow_factor = 1.0
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = false
+};
+
+constexpr Method MOONSIGHTING = {
+    .fajr_angle = 18.0,
+    .isha_angle = 18.0,
+    .isha_interval = 0,
+    .maghrib_angle = 0.0,
+    .midnight_angle = 0.0,
+    .asr_shadow_factor = 1.0,
+    .is_moonsighting = true
 };
 
 } // namespace prayertimes

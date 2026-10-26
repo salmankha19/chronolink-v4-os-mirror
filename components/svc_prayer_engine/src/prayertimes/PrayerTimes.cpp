@@ -35,6 +35,79 @@ static double fix_hour(double a) {
     return (a < 0) ? a + 24.0 : a;
 }
 
+/* -------------------------------------------------------------------------
+ * Moonsighting Committee seasonal helpers.
+ *
+ * Faithful port of batoulapps/adhan-js Astronomical.ts. Produces the number
+ * of minutes before sunrise (morning) or after sunset (evening) that
+ * constitutes the "safe" twilight bound for the given latitude and day.
+ * The seasonal tables interpolate across six segments of the year, anchored
+ * on the winter solstice (roughly). These are used as BOUNDS in calculate(),
+ * not as a blend: if the angle-based time is invalid or violates the bound,
+ * the safe value is used instead.
+ * ------------------------------------------------------------------------- */
+
+/* Days since the winter solstice, mod 365 or 366. Anchor is 10 days after
+   Jan 1 for the north, 172 (or 173 in leap) days before Jan 1 for the south
+   (equivalent to adhan-js southernOffset). dayOfYear is 1..365 (or 1..366). */
+static int days_since_solstice(int year, int month, int day, double latitude)
+{
+    static const int cum_days[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    bool is_leap = ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0);
+    int doy = cum_days[month - 1] + day + ((is_leap && month > 2) ? 1 : 0);
+
+    int days_in_year = is_leap ? 366 : 365;
+    int dyy;
+    if (latitude >= 0.0) {
+        dyy = (doy + 10) % days_in_year;
+    } else {
+        int southern_offset = is_leap ? 173 : 172;
+        dyy = doy - southern_offset;
+        if (dyy < 0) dyy += days_in_year;
+    }
+    return dyy;
+}
+
+/* Piecewise interpolation over dyy, shared by both twilight helpers. */
+static double interpolate_season(double a, double b, double c, double d, int dyy)
+{
+    if (dyy < 91) {
+        return a + ((b - a) / 91.0) * dyy;
+    } else if (dyy < 137) {
+        return b + ((c - b) / 46.0) * (dyy - 91);
+    } else if (dyy < 183) {
+        return c + ((d - c) / 46.0) * (dyy - 137);
+    } else if (dyy < 229) {
+        return d + ((c - d) / 46.0) * (dyy - 183);
+    } else if (dyy < 275) {
+        return c + ((b - c) / 46.0) * (dyy - 229);
+    } else {
+        return b + ((a - b) / 91.0) * (dyy - 275);
+    }
+}
+
+/* Minutes before sunrise for Moonsighting safe Fajr bound. */
+static double season_adj_fajr(double latitude, int dyy)
+{
+    double abs_lat = fabs(latitude);
+    double a = 75.0 + (28.65 / 55.0) * abs_lat;
+    double b = 75.0 + (19.44 / 55.0) * abs_lat;
+    double c = 75.0 + (32.74 / 55.0) * abs_lat;
+    double d = 75.0 + (48.10 / 55.0) * abs_lat;
+    return interpolate_season(a, b, c, d, dyy);
+}
+
+/* Minutes after sunset for Moonsighting safe Isha bound (Shafaq General). */
+static double season_adj_isha(double latitude, int dyy)
+{
+    double abs_lat = fabs(latitude);
+    double a = 75.0 + (25.60 / 55.0) * abs_lat;
+    double b = 75.0 + ( 2.05 / 55.0) * abs_lat;
+    double c = 75.0 - ( 9.21 / 55.0) * abs_lat;
+    double d = 75.0 + ( 6.14 / 55.0) * abs_lat;
+    return interpolate_season(a, b, c, d, dyy);
+}
+
 // --- Astronomical Calculations ---
 
 double PrayerTimesCalculator::julian_date(int year, int month, int day) {
@@ -249,6 +322,32 @@ PrayerTimes PrayerTimesCalculator::calculate(
         // (Jafaria, 4 deg) Maghrib is later than sunset, and a sunset-based
         // limit could put Isha before Maghrib at high latitude.
         if (isnan(isha) || (isha - maghrib) > isha_portion) isha = maghrib + isha_portion;
+    }
+
+    // Moonsighting Committee seasonal bound (adhan-js parity).
+    // The seasonal tables give a "safe" twilight bound as a fixed number of
+    // minutes before sunrise (Fajr) or after sunset (Isha). We clamp the
+    // angle-based value to this bound: Fajr cannot be earlier than safeFajr,
+    // Isha cannot be later than safeIsha. When the angle yields NaN (polar
+    // regions where the sun never reaches the angle), the safe bound is used
+    // directly.
+    if (method.is_moonsighting) {
+        int dyy = days_since_solstice(date.year, date.month, date.day, coords.latitude);
+        double adj_fajr_min = season_adj_fajr(coords.latitude, dyy);
+        double adj_isha_min = season_adj_isha(coords.latitude, dyy);
+
+        // adhan-js rounds the adjustment to the nearest second:
+        //   sunrise + round(adj_min * -60)   [sunrise/adjustment in seconds]
+        // Our sunrise/isha are in hours, so divide by 3600 to convert the
+        // rounded seconds back to hours.
+        double adj_fajr_sec = round(adj_fajr_min * 60.0);
+        double adj_isha_sec = round(adj_isha_min * 60.0);
+
+        double safe_fajr = sunrise - adj_fajr_sec / 3600.0;
+        double safe_isha = sunset  + adj_isha_sec / 3600.0;
+
+        if (isnan(fajr) || safe_fajr > fajr) fajr = safe_fajr;
+        if (isnan(isha) || safe_isha < isha) isha = safe_isha;
     }
 
     // Islamic midnight: halfway between sunset and the (clamped) Fajr,

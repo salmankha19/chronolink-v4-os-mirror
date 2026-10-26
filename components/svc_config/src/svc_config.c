@@ -80,7 +80,7 @@ static void preset_jamat_both(jamat_per_prayer_cfg_t *j,
    summer +25 so jamat lands ~13:15-13:30 year-round. Maghrib round 2. */
 static void apply_uk_preset(svc_config_t *c)
 {
-    c->method        = SVC_CONFIG_METHOD_MWL;   /* Moonsighting has its own preset in 5.5 */
+    c->method        = SVC_CONFIG_METHOD_MWL;
     c->madhab        = SVC_CONFIG_MADHAB_STANDARD;
     c->high_lat_rule = 0;
 
@@ -146,12 +146,19 @@ static void apply_pakistan_preset(svc_config_t *c)
     }
 }
 
+static void apply_uk_moonsighting_preset(svc_config_t *c)
+{
+    apply_uk_preset(c);
+    c->method = SVC_CONFIG_METHOD_MOONSIGHTING;
+}
+
 static void apply_preset_unlocked(svc_config_t *c, svc_config_preset_t preset)
 {
     switch (preset) {
-    case SVC_CONFIG_PRESET_PAKISTAN: apply_pakistan_preset(c); break;
+    case SVC_CONFIG_PRESET_PAKISTAN:        apply_pakistan_preset(c);        break;
+    case SVC_CONFIG_PRESET_UK_MOONSIGHTING: apply_uk_moonsighting_preset(c); break;
     case SVC_CONFIG_PRESET_UK:
-    default:                         apply_uk_preset(c);       break;
+    default:                                apply_uk_preset(c);              break;
     }
 }
 

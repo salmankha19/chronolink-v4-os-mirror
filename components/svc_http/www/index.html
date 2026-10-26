@@ -64,6 +64,7 @@
       <option value="3">Karachi</option>
       <option value="4">Umm al-Qura</option>
       <option value="5">Jafaria</option>
+      <option value="6">Moonsighting Committee</option>
     </select>
 
     <label>Asr Madhab</label>
@@ -275,6 +276,7 @@
         <select id="preset_select">
           <option value="0">UK (MWL, Standard)</option>
           <option value="1">Pakistan (Karachi, Hanafi)</option>
+          <option value="2">UK (Moonsighting, Standard)</option>
         </select>
       </div>
       <div>
@@ -542,7 +544,8 @@
 
     function applyPreset() {
       const preset = parseInt(document.getElementById('preset_select').value, 10);
-      const name = preset === 0 ? 'UK' : 'Pakistan';
+      const names = ['UK', 'Pakistan', 'UK (Moonsighting)'];
+      const name = names[preset] || 'Unknown';
       if (!confirm('Apply preset "' + name + '"?\n\nThis overwrites method, madhab, jamat configuration, and season dates. Location and display preferences are preserved.')) {
         return;
       }
