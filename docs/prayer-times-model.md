@@ -61,6 +61,25 @@ ends at the true Fajr — the fast begins at the astronomy, not at the call
 to prayer. Same for Iftar: it breaks at sunset, not at the Jafaria
 maghrib angle (which is 15+ minutes later in summer).
 
+### 2.1 Minute rounding (PR 5.4)
+
+`hours_to_sec()` in `svc_prayer_engine.cpp` converts the engine's decimal
+hours to seconds. As of PR 5.4 it rounds **up** to the next whole minute
+(ceiling) before any offsets are applied: Fajr 05:06:15 becomes 05:07:00,
+never 05:06:00. This guarantees a published time is never earlier than
+the astronomical instant. Adhan offsets (`adhan_offset_min[]`) and jamat
+anchors/offsets then operate on minute-aligned values, so every published
+`*_sec` field is a multiple of 60, with two documented exceptions:
+
+- `asr_yellow_sec` may hold `UINT32_MAX` (the "sun never reached 5°"
+  sentinel), which is not a multiple of 60.
+- `isha_sec` / `midnight_sec` are clamped at 172799 (2 days − 1 s) as a
+  safety net; that clamp value is not a multiple of 60 either, though it
+  is unreachable in normal operation.
+
+The sub-minute astronomical accuracy described in `STATUS.md` is
+unchanged; only the published resolution is whole minutes.
+
 ---
 
 ## 3. Jamat model

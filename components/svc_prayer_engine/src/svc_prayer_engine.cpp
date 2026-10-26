@@ -21,9 +21,17 @@ static uint32_t hours_to_sec(double h)
     // returns true, so !isfinite() would miss NaN and hit the UB cast
     // (uint32_t)NaN below. isnan() is proven working (PR 16).
     if (isnan(h)) return 0;
+    // Round UP to the next whole minute (ceiling). A published prayer
+    // time must never be earlier than the astronomical instant; ceiling
+    // guarantees that. Convert hours -> minutes, ceil, then back to
+    // seconds. Adhan offsets and jamat calculations in
+    // svc_prayer_engine_service operate on the resulting minute-aligned
+    // values.
+    //
     // Do not wrap to 24h. Isha and Midnight can exceed 86400.
     // Clamp at 2 days (172799) just as a safety net.
-    double s = h * 3600.0 + 0.5;
+    double m = h * 60.0;
+    double s = ceil(m) * 60.0;
     if (s < 0.0) s = 0.0;
     if (s > 172799.0) s = 172799.0;
     return (uint32_t)s;

@@ -50,8 +50,13 @@ typedef enum {
 
 /* Output. Most times are seconds since local midnight (0..86399).
    Isha and Islamic midnight may be up to 172799 (i.e. after midnight,
-   same day +1) when they fall after 00:00. If any prayer cannot be
-   calculated (extreme latitude), valid is false and numeric fields are 0.
+   same day +1) when they fall after 00:00. As of PR 5.4 every field is
+   rounded UP to a whole minute (a multiple of 60) before publication,
+   with two documented exceptions: asr_yellow_sec may hold UINT32_MAX as
+   a "sun never reached 5 deg" sentinel, and isha_sec / midnight_sec are
+   clamped at 172799 (2 days - 1 s) as a safety net. If any prayer cannot
+   be calculated (extreme latitude), valid is false and numeric fields
+   are 0.
 
    asr_yellow_sec uses UINT32_MAX as a sentinel for "sun does not reach
    5 degrees above the horizon today" (high-latitude winter), distinct
