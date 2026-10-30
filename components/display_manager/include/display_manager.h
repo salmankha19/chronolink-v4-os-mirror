@@ -25,10 +25,11 @@ extern "C" {
 
 #define DM_MAX_CMDS_PER_FRAME 16
 /* Room for "HH:MM:SS" (8 chars) plus the terminating NUL = 9 bytes minimum;
-   16 leaves headroom for a longer face (date, AM/PM). Must stay > 8: at 8 an
-   8-char text has no room for the NUL, and font_engine_draw_text() walks the
-   string until it finds one. */
-#define DM_MAX_TEXT_LEN       16
+   16 leaves headroom for a longer face (date, AM/PM). Bumped to 32 in
+   PR 5.5b to accommodate the time-invalid banner text. Must stay > 8: at 8
+   an 8-char text has no room for the NUL, and font_engine_draw_text()
+   walks the string until it finds one. */
+#define DM_MAX_TEXT_LEN       32
 #define DM_MAX_ICONS          16
 #define DM_FRAME_QUEUE_DEPTH  3   /* triple-buffer + 1 spare */
 

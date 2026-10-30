@@ -5,6 +5,7 @@
 #include "svc_config.h"
 #include "svc_network.h"
 #include "svc_prayer_engine_service.h"
+#include "svc_timetable.h"
 #include "esp_system.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
@@ -32,6 +33,8 @@ extern const unsigned char index_html[];
 extern const size_t index_html_len;
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>   /* fsync(), fileno() for the timetable upload */
 
 static const char *TAG = "svc_http";
 static httpd_handle_t s_server = NULL;
@@ -149,6 +152,22 @@ static esp_err_t get_config_handler(httpd_req_t *req)
 /* POST /api/config */
 static esp_err_t post_config_handler(httpd_req_t *req)
 {
+    /* If a partial user timetable is present, require explicit confirm. */
+    svc_timetable_metadata_t _meta = {0};
+    if (svc_timetable_get_metadata(&_meta) == ESP_OK
+        && _meta.file_present
+        && _meta.source == SVC_TIMETABLE_SOURCE_USER
+        && _meta.partial) {
+        char _hdr[8];
+        if (httpd_req_get_hdr_value_str(req, "X-Confirm-Timetable-Override",
+                                        _hdr, sizeof(_hdr)) != ESP_OK) {
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"warning\":\"user_timetable_partial\"}");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     char *buf = read_body(req, 4096, NULL);
     if (!buf) return ESP_FAIL;
 
@@ -534,6 +553,7 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
     if (err == ESP_OK && times.valid) {
         cJSON_AddBoolToObject(root, "valid", true);
         cJSON_AddNumberToObject(root, "season", times.season);
+        cJSON_AddNumberToObject(root, "source", times.source);
 
         /* Nested three-tier shape (new in 5.1a): astronomical / adhan /
            jamat / auxiliary / ramadan. Consumers read finished values;
@@ -617,6 +637,21 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
  * Applies the preset then triggers an immediate recalculation. */
 static esp_err_t post_preset_handler(httpd_req_t *req)
 {
+    svc_timetable_metadata_t _meta = {0};
+    if (svc_timetable_get_metadata(&_meta) == ESP_OK
+        && _meta.file_present
+        && _meta.source == SVC_TIMETABLE_SOURCE_USER
+        && _meta.partial) {
+        char _hdr[8];
+        if (httpd_req_get_hdr_value_str(req, "X-Confirm-Timetable-Override",
+                                        _hdr, sizeof(_hdr)) != ESP_OK) {
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, "{\"warning\":\"user_timetable_partial\"}");
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
     char *buf = read_body(req, 128, NULL);
     if (!buf) return ESP_FAIL;
 
@@ -643,13 +678,110 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
     return err;
 }
 
+/* GET /api/timetable -- metadata only */
+static esp_err_t get_timetable_handler(httpd_req_t *req)
+{
+    svc_timetable_metadata_t meta = {0};
+    svc_timetable_get_metadata(&meta);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "present", meta.file_present);
+    cJSON_AddNumberToObject(root, "source", meta.source);
+    cJSON_AddNumberToObject(root, "year", meta.year);
+    cJSON_AddNumberToObject(root, "day_count", meta.day_count);
+    cJSON_AddStringToObject(root, "generated_at", meta.generated_at);
+    cJSON_AddBoolToObject(root, "jamat_included", meta.jamat_included);
+    cJSON_AddBoolToObject(root, "partial", meta.partial);
+    cJSON_AddBoolToObject(root, "regenerating", svc_prayer_engine_service_is_regenerating());
+
+    esp_err_t err = send_json(req, root);
+    cJSON_Delete(root);
+    return err;
+}
+
+/* POST /api/timetable/regenerate */
+static esp_err_t post_timetable_regen_handler(httpd_req_t *req)
+{
+    esp_err_t err = svc_timetable_generate_full_year();
+    if (err == ESP_OK) {
+        svc_prayer_engine_service_recalculate();
+        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Regeneration failed");
+    }
+    return err;
+}
+
+/* DELETE /api/timetable */
+static esp_err_t delete_timetable_handler(httpd_req_t *req)
+{
+    esp_err_t err = svc_timetable_delete();
+    if (err == ESP_OK) {
+        svc_prayer_engine_service_recalculate();
+        httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
+    }
+    return err;
+}
+
+/* POST /api/timetable -- upload user file */
+static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
+{
+    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or too-large body");
+        return ESP_FAIL;
+    }
+
+    FILE *f = fopen(SVC_TIMETABLE_PATH_TMP, "w");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot open file");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(4096);
+    if (!buf) {
+        fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int to_recv = remaining < 4096 ? remaining : 4096;
+        int received = httpd_req_recv(req, buf, to_recv);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (received < 0) {
+            free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
+            return ESP_FAIL;
+        }
+        fwrite(buf, 1, received, f);
+        remaining -= received;
+    }
+    free(buf);
+    fflush(f); fsync(fileno(f)); fclose(f);
+
+    if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
+        remove(SVC_TIMETABLE_PATH_TMP);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Rename failed");
+        return ESP_FAIL;
+    }
+
+    svc_timetable_reload();
+    svc_prayer_engine_service_recalculate();
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
 esp_err_t svc_http_start(void)
 {
     if (s_server) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 14;
     /* OTA handler calls esp_ota_* which needs more stack than a JSON
      * handler. 8192 is conservative; default 4096 has no margin for a
      * streaming upload with abort paths. */
@@ -670,6 +802,10 @@ esp_err_t svc_http_start(void)
         { .uri = "/api/reboot",        .method = HTTP_POST, .handler = post_reboot_handler        },
         { .uri = "/api/factory-reset", .method = HTTP_POST, .handler = post_factory_reset_handler },
         { .uri = "/api/ota",           .method = HTTP_POST, .handler = post_ota_handler            },
+        { .uri = "/api/timetable",            .method = HTTP_GET,    .handler = get_timetable_handler         },
+        { .uri = "/api/timetable",            .method = HTTP_POST,   .handler = post_timetable_upload_handler },
+        { .uri = "/api/timetable",            .method = HTTP_DELETE, .handler = delete_timetable_handler      },
+        { .uri = "/api/timetable/regenerate", .method = HTTP_POST,   .handler = post_timetable_regen_handler  },
         { .uri = "/api/prayers",       .method = HTTP_GET,  .handler = get_prayers_handler        },
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {

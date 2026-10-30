@@ -18,7 +18,7 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_timetable`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
 | 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/`, future `src/app/*` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
@@ -66,6 +66,7 @@ flowchart TB
         TIME[svc_time]
         CFG[svc_config]
         SM[state_manager]
+        TT[svc_timetable]
         RB[remote_bridge]
     end
     subgraph KERN["Kernel (4)"]
@@ -89,6 +90,8 @@ flowchart TB
     CORE --> DM
     DM --> HALC
     TIME --> HILC
+    TT --> CFG
+    TT --> TIME
     TIME --> EB
     HILC --> HALC
     HILC --> FE
@@ -119,17 +122,25 @@ flowchart TB
   on its own worker task; a failed sync is retried by an `esp_timer`
   backoff (1 min -> 5 min -> 15 min -> 1 h). Only UTC is ever written to
   the RTC; local time is derived at read time from the POSIX TZ rule.
+- `svc_timetable_init()` runs before the prayer service. It parses the
+  year timetable from `/storage/timetable.json` into a 128 KB buffer,
+  extracts today and tomorrow into RAM, and frees the buffer.
+- `svc_prayer_engine_service_start()` calculates the initial times. If
+  the timetable is stale or missing, it spawns a background `regen_task`
+  (8 KB stack) to regenerate the 365-day file.
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.
 - `ui_producer` runs one task on core 0 (`ui_prod`, `tskIDLE_PRIORITY + 2`,
   3072 B stack) that wakes every 250 ms, reads `svc_time_get_snapshot()`,
   and submits a clock frame through `display_manager_submit_frame()` only
-  when the formatted local `H:MM AM/PM` changes. Each frame carries two
-  `DM_CMD_DRAW_TEXT_SCALED` commands (time, meridiem). The first frame
-  adds a full-screen clear; later frames need no per-frame erase because
-  each scaled glyph blit paints its full rect including background.
-  Rendering on change keeps the 3-slot frame queue from filling.
+  when the formatted local string changes. Each frame carries one
+  `DM_CMD_DRAW_TEXT_SCALED` command for the clock string, plus (when the
+  RTC is untrusted) a fill_rect and two scaled-text commands for the red
+  warning banner. The first frame adds a full-screen clear; later frames
+  need no per-frame erase because each scaled glyph blit paints its full
+  rect including background. Rendering on change keeps the 3-slot frame
+  queue from filling.
 
 Two font formats, two panel families: `FONT_FORMAT_MONO_1BPP`
 (per-pixel draw; `FONT_BUILTIN_8X8`, id 0) is the correct
@@ -169,6 +180,14 @@ The firmware operates on a resilient, always-on state machine that prioritizes k
 - **This timestamp is strictly stored in UTC**, not local time. This ensures it remains accurate across DST shifts or timezone changes.
 - If the 23:00 sync fails (no Wi-Fi, no internet, or NTP server unreachable), the system does **not** overwrite this timestamp.
 - The web UI / config portal can read this timestamp via `svc_time_get_last_sync_time()`. The UI is responsible for converting this UTC timestamp to the user's local time. If the last sync was more than 24 hours ago, the UI should display a warning (e.g., "Warning: Clock has not synced in X days. Check Wi-Fi connection.").
+
+**RTC Trust Policy (PR 5.5b):**
+
+- `svc_time` reads the RTC even when the oscillator-stop flag (OSF) is set, so the UI has a value to display (`--:--` if untrusted).
+- `svc_time_snapshot_t.rtc_untrusted` is true if OSF is set OR the RTC year is strictly less than the firmware build year (parsed from the `__DATE__` compile-time macro).
+- `svc_prayer_engine_service` refuses to publish prayer times while `rtc_untrusted` is true.
+- The UI shows a "Starting..." splash on boot, `--:--` for an untrusted RTC, and a two-line "Time invalid / Check internet" banner after 60 seconds (so normal WiFi+NTP boots don't flash it).
+- Once NTP syncs, `rtc_untrusted` is cleared and the display switches to the clock.
 
 **00:00 to 00:01 Midnight Rollover:**
 - When the local date changes, `svc_time` publishes `EVENT_TIME_DATE_CHANGED`. The same event is also published on a DST / UTC-offset change (see `check_and_publish_date_change()` in `svc_time.c`).

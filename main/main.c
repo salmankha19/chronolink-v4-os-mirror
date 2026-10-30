@@ -9,9 +9,11 @@
  *   3. svc_config_start()   — Configuration service (NVS namespace "config")
  *   4. ui_producer_start()  — Start declarative UI frame producer
  *   5. svc_time_start()     — RTC + NTP time service (first event-bus subscriber)
- *   6. svc_prayer_engine_service_start() — Prayer times + EVENT_PRAYER_TIMES_UPDATED
- *   7. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
- *   8. audio_test_init()    — Initialize audio (if enabled)
+ *   6. svc_timetable_init() — Load year timetable from /storage (if present)
+ *   7. svc_prayer_engine_service_start() — Prayer times + EVENT_PRAYER_TIMES_UPDATED
+ *   8. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
+ *   9. svc_http_start()     — HTTP server (REST + web UI + OTA)
+ *  10. audio_test_init()    — Initialize audio (if enabled)
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -25,6 +27,7 @@
 #include "svc_network.h"
 #include "svc_config.h"
 #include "svc_prayer_engine_service.h"
+#include "svc_timetable.h"
 #include "svc_http.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
@@ -74,6 +77,16 @@ void app_main(void)
        Otherwise it starts in "not valid" state and warms up on the
        first EVENT_TIME_UPDATE (successful NTP sync).
        Non-fatal on failure. */
+    /* Initialise timetable BEFORE the prayer service starts, so the first
+       recalculation can use the file if present. */
+    {
+        esp_err_t tt_err = svc_timetable_init();
+        if (tt_err != ESP_OK) {
+            ESP_LOGI(TAG, "svc_timetable_init: %s (will regenerate)",
+                     esp_err_to_name(tt_err));
+        }
+    }
+
     esp_err_t prayer_err = svc_prayer_engine_service_start();
     if (prayer_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_prayer_engine_service_start failed: %s",

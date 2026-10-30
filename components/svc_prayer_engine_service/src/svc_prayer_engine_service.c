@@ -11,6 +11,7 @@
 #include "svc_config.h"
 #include "svc_time.h"
 #include "svc_prayer_engine.h"
+#include "svc_timetable.h"
 #include "event_bus.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -23,7 +24,7 @@
 static const char *TAG = "svc_prayer_eng_svc";
 
 #define MAILBOX_LEN        4
-#define TASK_STACK         4096
+#define TASK_STACK         8192
 #define TASK_PRIO          (tskIDLE_PRIORITY + 2)
 #define TASK_CORE          0
 #define LOCK_TIMEOUT_MS    1000
@@ -35,6 +36,7 @@ static SemaphoreHandle_t s_lock    = NULL;
 static svc_prayer_engine_times_t s_cache;
 static bool              s_cache_valid         = false;
 static bool              s_date_changed_pending = false;
+static volatile bool     s_regenerating        = false;
 
 static void prayer_task(void *arg);
 
@@ -164,6 +166,57 @@ static void date_advance_one_day(uint16_t y, uint8_t m, uint8_t d,
     *od = (uint8_t)out.tm_mday;
 }
 
+/* Background task: regenerate the year timetable (~1 s). On success,
+   triggers a recalculate which now reads the file. */
+static void regen_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "regenerating timetable...");
+    esp_err_t err = svc_timetable_generate_full_year();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "regen failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "regen complete, refreshing cache");
+        svc_prayer_engine_service_recalculate();
+    }
+    s_regenerating = false;
+    vTaskDelete(NULL);
+}
+
+static bool timetable_needs_regen(void)
+{
+    return svc_timetable_needs_regen_from_config();
+}
+
+/* File value if has_file, else fresh value. */
+static uint32_t merge_adhan(bool has_file, uint32_t file_val, uint32_t fresh_val)
+{
+    return has_file ? file_val : fresh_val;
+}
+
+/* Validate a jamat against its adhan and the next prayer's time.
+   - file_val < adhan_val         : reject (fall back to computed)
+   - file_val >= next_val != 0    : accept with warn (mosque authority)
+   - else                         : accept silently */
+static uint32_t merge_jamat(bool has_file, uint32_t file_val,
+                            uint32_t computed_val,
+                            uint32_t adhan_val,
+                            uint32_t next_val,
+                            const char *name)
+{
+    if (!has_file) return computed_val;
+    if (file_val < adhan_val) {
+        ESP_LOGW(TAG, "timetable jamat[%s]=%u < adhan=%u -- using computed",
+                 name, (unsigned)file_val, (unsigned)adhan_val);
+        return computed_val;
+    }
+    if (next_val != 0 && file_val >= next_val) {
+        ESP_LOGW(TAG, "timetable jamat[%s]=%u >= next=%u -- accepting (mosque authority)",
+                 name, (unsigned)file_val, (unsigned)next_val);
+    }
+    return file_val;
+}
+
 esp_err_t svc_prayer_engine_service_start(void)
 {
     if (s_started) return ESP_OK;
@@ -287,6 +340,31 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Year guard: never publish prayer times for an implausible year. */
+    if (snap.rtc_untrusted) {
+        ESP_LOGW(TAG, "time is untrusted (OSF set or corrupt year) -- refusing to publish");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (snap.local.year < 2020 || snap.local.year > 2100) {
+        ESP_LOGW(TAG, "year %u outside [2020,2100] -- refusing to compute",
+                 (unsigned)snap.local.year);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Timetable awareness. */
+    if (s_started) {
+        svc_timetable_set_current_date(snap.local.year, snap.local.month, snap.local.day);
+        if (!s_regenerating && timetable_needs_regen()) {
+            s_regenerating = true;
+            if (xTaskCreate(regen_task, "tt_regen", 8192, NULL,
+                            tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+                ESP_LOGW(TAG, "failed to spawn regen task");
+                s_regenerating = false;
+            }
+        }
+    }
+
     /* Offset at local noon of the target date (DST-safe). */
     int16_t tz_offset_min = tz_offset_minutes_at_noon(
         (int)snap.local.year, (int)snap.local.month, (int)snap.local.day);
@@ -307,41 +385,79 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         return err;
     }
 
-    /* Apply per-prayer adhan offsets and copy the rest. */
+    /* Build result. Fresh values serve as fallback; timetable overrides
+       per field when present. */
     svc_prayer_engine_times_t result = {0};
     result.date_yyyymmdd = (uint32_t)snap.local.year  * 10000U
                          + (uint32_t)snap.local.month * 100U
                          + (uint32_t)snap.local.day;
-
     result.tz_offset_minutes = tz_offset_min;
 
-    /* Tier 1: astronomical (raw engine output, no user offsets). */
+    svc_timetable_day_t tt_today = {0}, tt_tomorrow = {0};
+    svc_timetable_get_today(&tt_today);
+    svc_timetable_get_tomorrow(&tt_tomorrow);
+
+    /* Fresh adhan values (for fallback and for the tripwire). */
+    uint32_t fresh_adhan[5] = {
+        raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60U,
+        raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60U,
+        raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60U,
+        raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60U,
+        raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60U,
+    };
+
+    /* Astronomical tier (always fresh). */
     result.astronomical_fajr_sec    = raw.fajr_sec;
     result.astronomical_dhuhr_sec   = raw.dhuhr_sec;
     result.astronomical_asr_sec     = raw.asr_sec;
     result.astronomical_maghrib_sec = raw.maghrib_sec;
     result.astronomical_isha_sec    = raw.isha_sec;
 
-    /* Auxiliary times. Astronomical events, no adhan_offset. */
-    result.sunrise_sec    = raw.sunrise_sec;
+    /* Merge adhan tier. */
+    result.fajr_sec    = merge_adhan(tt_today.has_fajr,    tt_today.fajr,    fresh_adhan[0]);
+    result.dhuhr_sec   = merge_adhan(tt_today.has_dhuhr,   tt_today.dhuhr,   fresh_adhan[1]);
+    result.asr_sec     = merge_adhan(tt_today.has_asr,     tt_today.asr,     fresh_adhan[2]);
+    result.maghrib_sec = merge_adhan(tt_today.has_maghrib, tt_today.maghrib, fresh_adhan[3]);
+    result.isha_sec    = merge_adhan(tt_today.has_isha,    tt_today.isha,    fresh_adhan[4]);
+
+    /* Auxiliary. */
+    uint32_t sunrise_used  = merge_adhan(tt_today.has_sunrise,     tt_today.sunrise,     raw.sunrise_sec);
+    uint32_t midnight_used = merge_adhan(tt_today.has_midnight,    tt_today.midnight,    raw.midnight_sec);
+    result.sunrise_sec    = sunrise_used;
     result.sunset_sec     = raw.sunset_sec;
-    result.asr_yellow_sec = raw.asr_yellow_sec;
-    result.midnight_sec   = raw.midnight_sec;
+    result.asr_yellow_sec = merge_adhan(tt_today.has_asr_yellow,   tt_today.asr_yellow,  raw.asr_yellow_sec);
+    result.midnight_sec   = midnight_used;
 
     uint32_t zawal_off = (uint32_t)cfg.zawal_buffer_min * 60U;
-    result.zawal_start_sec = (raw.dhuhr_sec > zawal_off)
-                           ? (raw.dhuhr_sec - zawal_off) : 0U;
+    uint32_t fresh_zawal = (raw.dhuhr_sec > zawal_off) ? (raw.dhuhr_sec - zawal_off) : 0U;
+    result.zawal_start_sec = merge_adhan(tt_today.has_zawal_start, tt_today.zawal_start, fresh_zawal);
 
-    /* Tier 2: adhan (astronomical + adhan_offset). */
-    result.fajr_sec    = raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60U;
-    result.dhuhr_sec   = raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60U;
-    result.asr_sec     = raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60U;
-    result.maghrib_sec = raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60U;
-    result.isha_sec    = raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60U;
+    result.sehri_end_sec = merge_adhan(tt_today.has_sehri_end, tt_today.sehri_end, raw.fajr_sec);
+    result.iftar_sec     = merge_adhan(tt_today.has_iftar,     tt_today.iftar,     raw.sunset_sec);
 
-    /* Ramadan endpoints (astronomical tier). */
-    result.sehri_end_sec = raw.fajr_sec;
-    result.iftar_sec     = raw.sunset_sec;
+    /* Source tag. */
+    result.source = (uint8_t)svc_timetable_get_source();
+
+    /* Tripwire: compare file values against fresh; >60 s mismatch uses fresh. */
+    #define TT_TRIPWIRE(idx, field, name) do { \
+        if (tt_today.has_##field) { \
+            uint32_t _d = (tt_today.field > fresh_adhan[idx]) \
+                        ? (tt_today.field - fresh_adhan[idx]) \
+                        : (fresh_adhan[idx] - tt_today.field); \
+            if (_d > 60U) { \
+                ESP_LOGW(TAG, "timetable[%s]=%u differs from fresh=%u by %u s -- using fresh", \
+                         name, (unsigned)tt_today.field, (unsigned)fresh_adhan[idx], (unsigned)_d); \
+                result.field##_sec = fresh_adhan[idx]; \
+            } \
+        } \
+    } while (0)
+
+    TT_TRIPWIRE(0, fajr,    "fajr");
+    TT_TRIPWIRE(1, dhuhr,   "dhuhr");
+    TT_TRIPWIRE(2, asr,     "asr");
+    TT_TRIPWIRE(3, maghrib, "maghrib");
+    TT_TRIPWIRE(4, isha,    "isha");
+    #undef TT_TRIPWIRE
 
     /* Tier 3: jamat (today), seasonal. Winter/summer decision uses the
        target date. */
@@ -354,19 +470,38 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         result.fajr_sec, result.dhuhr_sec, result.asr_sec,
         result.maghrib_sec, result.isha_sec
     };
+    static const char *const s_names[SVC_CONFIG_PRAYER_COUNT] = {
+        "fajr","dhuhr","asr","maghrib","isha"
+    };
+    /* Next prayer's time for bracket validation:
+       Fajr ends at sunrise; Dhuhr at Asr; Asr at Maghrib; Maghrib at Isha;
+       Isha at Islamic midnight. */
+    uint32_t next_sec[SVC_CONFIG_PRAYER_COUNT] = {
+        sunrise_used,
+        adhan_secs[2],
+        adhan_secs[3],
+        adhan_secs[4],
+        midnight_used,
+    };
     for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
         const jamat_season_cfg_t *jc = (season == 0)
             ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
-        result.jamat_sec[p] = compute_jamat(
+        uint32_t computed = compute_jamat(
             adhan_secs[p],
-            raw.sunrise_sec,
-            raw.midnight_sec,
+            sunrise_used,           /* merged sunrise */
+            midnight_used,          /* merged midnight */
             jc,
             cfg.jamat[p].round_min);
+        result.jamat_sec[p] = merge_jamat(
+            tt_today.has_jamat[p],
+            tt_today.jamat[p],
+            computed,
+            adhan_secs[p],
+            next_sec[p],
+            s_names[p]);
     }
 
-    /* Tier 3: jamat (tomorrow), for the "change tomorrow" notification.
-       Non-fatal: on any failure, tomorrow's entries stay UINT32_MAX. */
+    /* Tier 3: jamat (tomorrow). Prefer file, fall back to fresh + computed. */
     for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
         result.jamat_tomorrow_sec[p] = UINT32_MAX;
     }
@@ -393,15 +528,27 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
                 tm_raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60u,
                 tm_raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60u,
             };
+            uint32_t tm_sunrise_used  = merge_adhan(tt_tomorrow.has_sunrise,  tt_tomorrow.sunrise,  tm_raw.sunrise_sec);
+            uint32_t tm_midnight_used = merge_adhan(tt_tomorrow.has_midnight, tt_tomorrow.midnight, tm_raw.midnight_sec);
+            uint32_t tm_next[SVC_CONFIG_PRAYER_COUNT] = {
+                tm_sunrise_used, tm_adhan[2], tm_adhan[3], tm_adhan[4], tm_midnight_used,
+            };
             for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
                 const jamat_season_cfg_t *jc = (tm_season == 0)
                     ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
-                result.jamat_tomorrow_sec[p] = compute_jamat(
+                uint32_t computed = compute_jamat(
                     tm_adhan[p],
-                    tm_raw.sunrise_sec,
-                    tm_raw.midnight_sec,
+                    tm_sunrise_used,
+                    tm_midnight_used,
                     jc,
                     cfg.jamat[p].round_min);
+                result.jamat_tomorrow_sec[p] = merge_jamat(
+                    tt_tomorrow.has_jamat[p],
+                    tt_tomorrow.jamat[p],
+                    computed,
+                    tm_adhan[p],
+                    tm_next[p],
+                    s_names[p]);
             }
         }
     }
@@ -483,6 +630,11 @@ esp_err_t svc_prayer_engine_service_get_times(svc_prayer_engine_times_t *out)
     lock_give();
 
     return valid ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+bool svc_prayer_engine_service_is_regenerating(void)
+{
+    return s_regenerating;
 }
 
 /* Worker task: drains the mailbox. Recalculates on EVENT_TIME_UPDATE,

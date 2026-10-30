@@ -7,7 +7,7 @@ core1_task) executes them via HAL_GFX through display_manager_process_frame().
 
 ## Memory
 3 slots (`DM_FRAME_QUEUE_DEPTH`), each `sizeof(dm_frame_t)` bytes -- about
-1.4 KB in total at `DM_MAX_TEXT_LEN` 16. The queue and the submit mutex are
+2.1 KB in total at `DM_MAX_TEXT_LEN` 32. The queue and the submit mutex are
 created by `xQueueCreate()` / `xSemaphoreCreateMutex()` in
 `display_manager_init()`; there is no heap allocation in the execution hot
 path and none after init.

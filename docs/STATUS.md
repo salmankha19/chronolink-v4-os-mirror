@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-24 at commit `cfdc9ce` (PR: svc_http REST APIs, AP fallback, web UI, factory reset, app rollback, OTA upload). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-10-30 at commit `HEAD` (PR: year timetable, RTC trust UX). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -59,6 +59,16 @@ not.** Where another doc mentions a gap, this file has the detail.
 - **`svc_prayer_engine` (PR 13):** pure C++ prayer time calculation. Standalone library in `components/svc_prayer_engine/include/prayertimes/` (no ESP-IDF dependency; usable outside this project). Computes Fajr, Sunrise, Dhuhr, Zawal Start, Asr, Asr Yellowing (preferred end), Maghrib, Sunset (true astronomical), Isha, Islamic Midnight for a given date, coordinates, timezone offset, and method (MWL, ISNA, Egyptian, Karachi, Umm al-Qura, Jafaria, Moonsighting Committee, Custom Angles). High-latitude fallback supports AUTO (seventh-of-night above 48° latitude, middle-of-night at or below 48°), plus explicit NONE, MIDDLE_NIGHT, SEVENTH_OF_THE_NIGHT, and ANGLE_BASED rules selectable via the wrapper. Default is AUTO. **Verified against AlAdhan API** across four global cities (Horsham, Karachi, Makkah, New York) — Fajr/Sunrise/Dhuhr/Maghrib/Isha within ±30 s after PR 19 (sub-minute precision). As of PR 5.4 the engine rounds **up** to the next whole minute before publication, so displayed times may be up to one minute later than the sub-minute AlAdhan comparison; the underlying astronomical calculation is unchanged. Asr is intentionally *not* compared to AlAdhan: AlAdhan samples solar declination at noon, while this engine samples at the Asr instant, so the post-PR-19 Asr differs from AlAdhan by up to ~100 s in favour of the more accurate iterated declination. Wrapper API: `svc_prayer_engine_calculate()`. The high-latitude fallback uses clamping (PrayTimes.org style) rather than NaN-only. AUTO selects one-seventh-of-night whenever |lat| > 48° or any twilight angle the method uses is unreachable at the summer solstice (|lat| > 66.5 − angle). The unreachable-angle branch covers Egyptian from ~47.0°N — the exact-48° boundary is no longer special-cased. Middle-of-night is used otherwise (Middle East, South Asia). Both branches depend only on latitude + method, so the rule cannot flip mid-year.
 
   Islamic midnight is max(sunset→clamped-Fajr midpoint, Isha) — never earlier than Isha, and continuous day-to-day (the old "fall back to a sunrise-based definition when midnight < isha" jumped by up to 1.4 h near the clamp boundary). Isha and midnight are computed as offsets from the wrapped maghrib/sunset values, so the maghrib→isha and sunset→midnight intervals stay correct even when civil time is far from solar time (western Alaska, Jafaria at ~60°N). (PR 18) Jafaria method reachable: `svc_config_method_t` extended to `JAFARIA = 5, COUNT = 6`, matching `svc_prayer_method_t` 1:1. Date validation rejects non-existent days (e.g. 31 Feb, 29 Feb in non-leap years). `asr_yellow_sec == UINT32_MAX` when the sun never reaches 5° above the horizon (high-latitude winter); distinct from `valid == false`. On error, the API returns without writing `*out` — callers must check the return code before reading fields. (PR 19) Sun-position sampling is now iterated per event rather than fixed at 0h UT: `mid` is converged once, then each angle event and Asr is iterated 2-3× at `jd − lon/360 + t/24` until the declination sample stabilises (<1 s residual). This closes the equinox accuracy gap Claude's PyEphem review measured at ±125 s, verified on hardware 2026-10-17: Fajr/Sunrise/Dhuhr/Asr/Maghrib/Isha deltas vs the 0h-UT baseline exactly match the Python `mode2` prediction (+15 / +25 / −6 / −59 / −88 / −92 s).
+- **`svc_timetable` (PR 5.5):** year-calculated prayer timetable at
+  `/storage/timetable.json`. Firmware regenerates on boot / on any
+  prayer config change; user can upload a mosque's own timetable. Both
+  file types store final local-time seconds. Per-field fallback on
+  **read** (never on upload): missing fields are computed from config
+  each recalculate. Tripwire compares file values against a fresh
+  engine call (>60 s mismatch serves fresh). Year guard `[2020, 2100]`.
+  Jamat bracket validation rejects jamat < adhan, warns if jamat ≥
+  next prayer. Atomic write via `.tmp` + rename. Config-change warning:
+  server returns 409 for partial user file unless client confirms.
 - **`svc_prayer_engine_service` (PR 15, extended PR 5.1a):** runtime service that reads `svc_config` (location, method, madhab, high-latitude rule, adhan offsets, zawal buffer) and `svc_time` (local date), calls `svc_prayer_engine_calculate()`, applies per-prayer adhan offsets (`adhan_offset_min[]`), computes zawal start (`dhuhr - zawal_buffer_min`), and publishes `EVENT_PRAYER_TIMES_UPDATED`. **PR 5.1a additions:** publishes a three-tier snapshot — `astronomical_*` (astronomical calculation + timezone, no user offsets), `*_sec` (adhan = astronomical + `adhan_offset_min[]`), `jamat_sec[]` (seasonal jamat, with per-prayer rounding) — plus auxiliary times (`sunrise_sec`, `sunset_sec`, `midnight_sec`, `zawal_start_sec`, `asr_yellow_sec`), Ramadan endpoints (`sehri_end_sec`, `iftar_sec`), and `jamat_tomorrow_sec[]` for the "tomorrow changes" notification. Consumers read finished values; no offset math in the UI. Public API: `svc_prayer_engine_service_start()`, `_recalculate()`, `_get_times()`. The event is a signal only (payload truncated to 32 bytes); consumers must call `_get_times()` for the full snapshot. Recalculation is triggered by `EVENT_TIME_UPDATE` (successful NTP sync) and by `EVENT_TIME_DATE_CHANGED` (local date or UTC offset change). (PR 17) Rolls over at midnight and at DST transitions: `svc_time` publishes `EVENT_TIME_DATE_CHANGED` when the local calendar date or the effective UTC offset changes; the service subscribes, recalculates, and self-heals within 60 s if the event is dropped. Timezone offset is taken at **noon of the target date** (not at call time), so a DST-transition day's prayer times all use the same offset. Design intent for the whole prayer-times model is in [prayer-times-model.md](prayer-times-model.md).
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
@@ -75,10 +85,10 @@ not.** Where another doc mentions a gap, this file has the detail.
   delays a pure date rollover recalculation until 00:01 (DST still
   recalculates immediately). Details in the `svc_time` section below.
 - **Live clock face (PR 6):** `ui_producer` polls `svc_time` at 250 ms and
-  submits a 3-command `dm_frame_t` (clear / fill_rect / draw_text) when the
-  formatted local `HH:MM:SS` changes. The full-screen clear is first-frame
-  only; later frames are fill_rect + draw_text. The old placeholder (which
-  only called `display_manager_init()`) is gone.
+  submits a frame only when the formatted local string changes. (Superseded
+  by PR 8's scaled RGB565 text and PR 5.5b's single-string + optional
+  banner architecture; this bullet records the historical PR 6 design.)
+  The old placeholder (which only called `display_manager_init()`) is gone.
 - **Scalable time face (PR 8):** `ui_producer` renders `H:MM AM/PM`
   via `font_engine`'s new `FONT_FORMAT_RGB565` path. `HAL_GFX_BlitScaled`
   is a new HAL primitive; `FONT_UI_SANS` (id 1) is a placeholder RGB565
@@ -146,6 +156,7 @@ The following state machine logic (documented in `Architecture.md` §4.1) is now
 2. **23:00 One-Shot NTP Sync (corrects RTC, requires Wi-Fi):** `svc_time_worker` fires one NTP sync when the local clock first reaches 23:00, guarded by `s_last_daily_sync_date = yyyymmdd`. The sync runs in a dedicated `daily_sync_task` so the 1 Hz worker tick continues during the up-to-10 s NTP block. If Wi-Fi is offline, the sync is skipped (no retry). If the sync fails, no backoff is scheduled — the next attempt is tomorrow at 23:00. Wi-Fi state comes from `EVENT_NETWORK_CONNECTED` / `EVENT_NETWORK_DISCONNECTED`, so `svc_time` does not call `svc_network` directly (Constitution §10).
 3. **00:01 Prayer Delay:** `svc_prayer_engine_service` sets `s_date_changed_pending` on the first tick of 00:00 and recalculates on the first tick where the local clock is past 00:00. This gives the system one minute of settling time after the date rollover. A DST / UTC-offset change (also published by `svc_time` as `EVENT_TIME_DATE_CHANGED`) is distinguished from a date change by comparing the cache's `tz_offset_minutes` field — a pure offset change recalculates immediately, no delay. `EVENT_TIME_UPDATE` (successful NTP sync) also recalculates immediately and clears any pending deferral.
 4. **Sync Telemetry & NVS Storage:** every successful NTP sync persists its UTC epoch to NVS namespace `time`, key `last_sync_utc`. On boot, the value is read back. `svc_time_get_last_sync_time(time_t *out)` returns it (or `ESP_ERR_NOT_FOUND` if never synced). A future `svc_http` can use this to warn the user if the clock has not synced in a long time.
+5. **RTC Trust Policy (PR 5.5b):** `svc_time` reads the RTC even if the oscillator-stop flag (OSF) is set. `svc_time_snapshot_t.rtc_untrusted` is true if OSF is set OR the RTC year is strictly less than the firmware build year (parsed from the `__DATE__` compile-time macro). The UI displays `--:--` and a warning banner after 60 seconds if untrusted. Prayer times are not published while untrusted.
 
 #### NTP servers, retry and TZ storage (design agreed 2026-10-14)
 
@@ -187,6 +198,12 @@ Three NTP slots live in NVS namespace `time`:
   returning the value captured at sync time. The default TZ is the UK POSIX
   string `GMT0BST,M3.5.0/1,M10.5.0` (GMT/BST with automatic DST): a
   dev/QA target until `svc_http` can store the user's zone.
+- **RTC Trust & Invalid UX (PR 5.5b):** The snapshot gains `rtc_untrusted`.
+  The UI shows a "Starting..." splash on boot, then `--:--` if the RTC is
+  untrusted (OSF set or year < build year). A two-line warning banner
+  appears after 60 seconds. Prayer times are blocked from publishing while
+  untrusted. `DM_MAX_TEXT_LEN` bumped from 16 to 32 in display_manager.h
+  to accommodate the banner text.
 - **Known IDF limitation (IDFGH-18398):** on a timeout SNTP may retry the
   same server instead of advancing to the next index, so the three-slot
   fallback is **best-effort, not a guarantee**. Live in the code: the sync
@@ -283,8 +300,10 @@ Verify each against hardware or datasheet before fixing.
     walked past the end of `arg.text.text` into the union and the next
     command. Latent, not theoretical: no caller of
     `display_manager_submit_frame()` existed until PR 6. Fixed in PR 6:
-    the macro is 16 with guaranteed termination (`dm_cmd_draw_text()` caps
-    the copy at `DM_MAX_TEXT_LEN - 1` and always writes the NUL).
+    the macro was bumped to 16. **Bumped again to 32 in PR 5.5b** to
+    accommodate the time-invalid banner text. Termination is still
+    guaranteed (`dm_cmd_draw_text()` caps the copy at `DM_MAX_TEXT_LEN - 1`
+    and always writes the NUL).
 18. **`display_manager/README.md` was stale** -- it claimed a lock-free
     queue and "8 slots x 512 bytes"; the code has a submit mutex and
     `DM_FRAME_QUEUE_DEPTH` 3 slots of `sizeof(dm_frame_t)`. Corrected in

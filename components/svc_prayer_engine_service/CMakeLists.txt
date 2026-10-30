@@ -8,4 +8,5 @@ idf_component_register(
         svc_time
         svc_config
         svc_prayer_engine
+        svc_timetable
 )

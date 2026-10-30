@@ -152,6 +152,12 @@ Recent merged work (kept here so you do not re-litigate it):
 - PR 4.7: OTA over HTTP — `POST /api/ota` streams `.bin` to inactive
   slot; `X-OTA-Token` shared secret; `#error` gate if rollback off;
   `esp_ota_abort()` on any failure.
+- PR 5.5: `svc_timetable` — year-calculated JSON calendar at
+  `/storage/timetable.json`. Parse/generate streams to a 128KB heap buffer
+  to avoid OOM. User can upload custom mosque schedules.
+- PR 5.5b: RTC Trust UX — `rtc_untrusted` flag blocks publishing prayer
+  times if OSF is set or year < build year. UI displays `Starting...`,
+  `--:--`, and a 60s red warning banner. `DM_MAX_TEXT_LEN` bumped to 32.
 
 Prayer times domain model: `docs/prayer-times-model.md`. Read it before
 any change touching `svc_prayer_engine`, `svc_prayer_engine_service`,

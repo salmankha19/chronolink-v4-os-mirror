@@ -271,6 +271,47 @@ data in `svc_config.c`.
 
 ---
 
+## 5.5 Year-calculated timetable (PR 5.5)
+
+The device generates a full-year timetable to `/storage/timetable.json`
+once per year (or on any prayer-config change), and looks up each day
+from the file instead of calling the engine twice per recalculate. The
+primary motivation is **jamat**: the congregational time is a mosque
+decision with no universal formula, and a mosque's own published
+timetable must be honoured verbatim.
+
+**File format** (both firmware-generated and user-uploaded): final
+local-time seconds. No astronomical times, no offsets.
+
+**Firmware-generated file** fills every field (`jamat_included: true`).
+**User-uploaded file** may omit any field per day — missing fields are
+computed from config on **read**, never on upload. This means a config
+change after upload immediately affects the displayed times for missing
+fields; there is no silent staleness.
+
+**Regeneration** (firmware files only): file missing, unparseable, year
+mismatch, or `calculation` block ≠ current `svc_config_t` (canonical
+JSON compare). User files never auto-regenerate (handoff dec. 7).
+
+**Tripwire**: every recalculate where the file supplied today's values
+compares against a fresh engine call; a >60 s mismatch logs a warning and
+serves the fresh value for that field. Never fires in normal operation
+(deterministic inputs).
+
+**Year guard**: prayer times are never published when `current_year ∉
+[2020, 2100]`.
+
+**Jamat bracket validation**: file jamat < adhan → reject, fall back to
+computed. File jamat ≥ next prayer → accept with warn (mosque authority
+wins).
+
+**Config-change warning**: if a partial user file is present and the
+user saves config, the server returns 409 unless the client sends
+`X-Confirm-Timetable-Override`; the web UI shows a `confirm()` before
+that POST.
+
+---
+
 ## 6. Tomorrow's jamat
 
 `svc_prayer_engine_times_t.jamat_tomorrow_sec[]` publishes tomorrow's

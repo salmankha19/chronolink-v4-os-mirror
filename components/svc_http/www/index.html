@@ -336,6 +336,29 @@
     </div>
   </div>
 
+  <!-- Prayer Timetable -->
+  <div class="card" style="border: 2px solid #8e44ad;">
+    <h2 style="color:#8e44ad;">Prayer Timetable</h2>
+    <p style="font-size:0.9em; color:#666;">
+      The device generates a full-year timetable automatically. You can
+      upload your mosque's own timetable JSON to override. Missing fields
+      in an uploaded file are filled from config on read.
+    </p>
+    <p style="font-size:0.85em; color:#999;" id="tt_meta">&mdash;</p>
+    <label>Timetable File (.json)</label>
+    <input type="file" id="tt_file" accept=".json,application/json"
+           style="width:100%;padding:10px;margin-top:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
+    <button style="background:#8e44ad;" onclick="uploadTimetable()">Upload</button>
+    <div class="row">
+      <div>
+        <button style="background:#8e44ad;" onclick="regenerateTimetable()">Regenerate (Firmware)</button>
+      </div>
+      <div>
+        <button style="background:#c0392b;" onclick="deleteTimetable()">Delete File</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Factory Reset -->
   <div class="card" style="border: 2px solid #c0392b;">
     <h2 style="color:#c0392b;">Factory Reset</h2>
@@ -436,6 +459,18 @@
       const val = (id) => document.getElementById(id).value;
       const num = (id) => parseInt(document.getElementById(id).value, 10) || 0;
 
+      // If a partial user timetable is present, warn before changing config.
+      const headers = { 'Content-Type': 'application/json' };
+      if (timetableMeta.source === 2 && timetableMeta.partial) {
+        if (!confirm("You have an uploaded timetable with missing fields.\n\n" +
+                     "Changing configuration will affect the times shown for fields " +
+                     "not in your timetable (currently filled from config).\n\n" +
+                     "Continue?")) {
+          return;
+        }
+        headers['X-Confirm-Timetable-Override'] = 'true';
+      }
+
       const data = {
         location_name: val('loc_name'),
         latitude: parseFloat(val('lat')),
@@ -502,7 +537,7 @@
 
       fetch('/api/config', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
         body: JSON.stringify(data)
       }).then(r => {
         if (r.ok) {
@@ -512,6 +547,62 @@
         } else {
           showToast("Error saving config — check device log");
         }
+      });
+    }
+
+    let timetableMeta = { source: 0, partial: false };
+
+    function loadTimetableMeta() {
+      return fetch('/api/timetable')
+        .then(r => r.json())
+        .then(m => {
+          timetableMeta = m;
+          const src = m.source === 1 ? 'firmware' : (m.source === 2 ? 'user' : 'none');
+          document.getElementById('tt_meta').innerText =
+            `present=${m.present} source=${src} year=${m.year} days=${m.day_count}` +
+            (m.partial ? ' (partial)' : '') +
+            (m.regenerating ? ' (regenerating…)' : '');
+        });
+    }
+
+    function uploadTimetable() {
+      const f = document.getElementById('tt_file');
+      if (!f.files.length) { showToast("Choose a .json file"); return; }
+      const file = f.files[0];
+      if (!file.name.toLowerCase().endsWith('.json')) {
+        showToast("File must end in .json"); return;
+      }
+      if (!confirm(`Upload ${file.name} (${file.size} bytes)?`)) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        fetch('/api/timetable', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: reader.result
+        }).then(r => {
+          if (r.ok) {
+            showToast("Timetable uploaded");
+            loadTimetableMeta();
+            setTimeout(loadPrayers, 500);
+          } else showToast("Upload failed");
+        });
+      };
+      reader.readAsText(file);
+    }
+
+    function regenerateTimetable() {
+      if (!confirm("Regenerate the firmware timetable for the current year? This overwrites any user-uploaded file.")) return;
+      fetch('/api/timetable/regenerate', {method:'POST'}).then(r => {
+        if (r.ok) { showToast("Regeneration started"); loadTimetableMeta(); }
+        else showToast("Regeneration failed");
+      });
+    }
+
+    function deleteTimetable() {
+      if (!confirm("Delete the timetable file? Next boot will compute on-the-fly.")) return;
+      fetch('/api/timetable', {method:'DELETE'}).then(r => {
+        if (r.ok) { showToast("Deleted"); loadTimetableMeta(); }
+        else showToast("Delete failed");
       });
     }
 
@@ -567,9 +658,18 @@
       if (!confirm('Apply preset "' + name + '"?\n\nThis overwrites method, madhab, jamat configuration, and season dates. Location and display preferences are preserved.')) {
         return;
       }
+      const headers = { 'Content-Type': 'application/json' };
+      if (timetableMeta.source === 2 && timetableMeta.partial) {
+        if (!confirm("You have an uploaded timetable with missing fields.\n\n" +
+                     "Applying a preset will affect the times shown for those fields.\n\n" +
+                     "Continue?")) {
+          return;
+        }
+        headers['X-Confirm-Timetable-Override'] = 'true';
+      }
       fetch('/api/config/preset', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
         body: JSON.stringify({preset: preset})
       }).then(r => {
         if (r.ok) {
@@ -662,6 +762,7 @@
     // Load data on start
     loadConfig();
     loadPrayers();
+    loadTimetableMeta();
   </script>
 </body>
 </html>

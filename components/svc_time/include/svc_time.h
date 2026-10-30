@@ -62,6 +62,7 @@ typedef struct {
     rtc_time_t       local;
     svc_time_state_t state;
     bool             valid;
+    bool             rtc_untrusted;  /* true if OSF is set or year < build year */
 } svc_time_snapshot_t;
 
 /*

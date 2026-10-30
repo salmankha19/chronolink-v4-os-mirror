@@ -11,7 +11,7 @@ dependency, not by promise of a date.
 
 ---
 
-## Current state (2026-10-14)
+## Current state (2026-10-30)
 
 | Area | State |
 |---|---|
@@ -19,16 +19,18 @@ dependency, not by promise of a date.
 | Network | WiFi station connects and gets an IP; on the guest network NTP is reachable and a sync completes. |
 | Event bus | `event_dispatch_task` drains the kernel queue; `event_bus_subscribe()` fans out per type (8 subscriber slots). |
 | `svc_time` | First event-bus subscriber. NTP syncs, the DS3231M write path soft-fails on a bare devkit, POSIX TZ (default UK `GMT0BST,M3.5.0/1,M10.5.0`), 1 Hz tick on the snapshot, publishes `EVENT_TIME_UPDATE`. |
-| `ui_producer` | 250 ms poll task on core 0; builds a 2-command `dm_frame_t` (draw_text_scaled for time, draw_text_scaled for AM/PM) only when the rendered local `H:MM AM/PM` changes, then submits it. First frame adds a one-time clear. |
+| `ui_producer` | 250 ms poll task on core 0; builds a single-string `dm_frame_t` (one `draw_text_scaled` for the clock, plus an optional 3-command red banner when RTC is untrusted) only when the rendered string changes. First frame adds a one-time clear. |
 | `display_manager` | Frame queue plus frame counter (`display_manager_frames_dispatched()`). Frames dispatch at 1 Hz on the devkit and the counter advances -- verified on hardware against the PR 6 boot log. |
 | Panel | None wired. The ST7796S HAL initialises, RDDID returns all-zero (non-fatal by design), frames write into the void: no crash, no log spam. |
 | CI | Two jobs (`PlatformIO build (single_mcu)`, then `ESP-IDF build (esp32s3)`). Artifacts upload only on tag pushes and manual dispatch (`retention-days: 7`), so ordinary push/PR runs leave no artifact storage behind. |
 
 Components that exist today: `boot_manager`, `core_os`, `event_bus`,
 `chronolink_hal`, `hil`, `chronolink_driver_sdk`, `state_manager`,
-`svc_network`, `svc_time`, `remote_bridge`, `display_manager`,
-`ui_producer`, `font_engine`, `font`, `audio_test`. Everything described
-from Phase 2 onward does not exist yet.
+`svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`,
+`svc_prayer_engine_service`, `svc_timetable`, `svc_http`,
+`remote_bridge`, `display_manager`, `ui_producer`, `font_engine`,
+`font`, `audio_test`. Phases 2 and 4 are substantially complete; Phase 3
+(adhan playback), Phase 5 (OTA pull-based) and Phase 6 (polish) remain.
 
 ---
 
@@ -47,6 +49,10 @@ Goal: pixels on a real ST7796S panel.
   Inter SemiBold TTF replacing the placeholder.
 - Deliverable: the wall clock shows `H:MM AM/PM` in a font readable from
   across the room.
+- **PR 5.5 (Timetable) & 5.5b (RTC Trust UX) are complete:** The firmware
+  now generates a full-year JSON timetable to `/storage`, supports uploading
+  a mosque's custom timetable, and features a 3-state display (`Starting...`,
+  `--:--` for untrusted time, and the clock) with a 60s warning banner.
 
 Prerequisite PRs: none. All plumbing exists.
 
@@ -61,7 +67,8 @@ location and method, and does something at each.
   (MWL / ISNA / Egyptian / Karachi / Umm al-Qura), Asr madhab (Standard /
   Hanafi).
 - `svc_scheduler` (new component): fires events at prayer times, sunrise
-  and sunset, and day rollover.
+  and sunset, and day rollover. *(Partially superseded by `svc_timetable`,
+  which now generates the full year schedule ahead of time.)*
 - `svc_config` (new component): NVS-backed settings -- location, method,
   madhab, iqamah offsets, adhan mode, display preferences. *(Landed as PR 12;
   the schema is in `components/svc_config/include/svc_config.h`.)*

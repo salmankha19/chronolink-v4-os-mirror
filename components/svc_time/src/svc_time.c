@@ -532,6 +532,7 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
         ESP_LOGW(TAG, "hil_rtc_set_time() failed (no RTC?) -- UTC kept in RAM only");
     }
     snapshot_store_locked(&utc, SVC_TIME_STATE_NTP_SYNCED);
+    s_snapshot.rtc_untrusted = false; /* NTP overrides RTC */
     local_copy = s_snapshot.local;
     memcpy(tz_copy, s_tz, sizeof(tz_copy));
     s_last_sync_us   = esp_timer_get_time();
@@ -610,9 +611,10 @@ static void backoff_timer_cb(void *arg)
    The RTC is preferred -- it holds UTC, survives a reset, and is re-read here
    once a second -- and the libc clock is the fallback, but only after NTP has
    stepped it this boot: time() counts from boot and means nothing before that.
-   UNSYNCED (no trustworthy time yet -- e.g. the DS3231M reported OSF at boot,
-   so the register holds whatever it held when power died) leaves the snapshot
-   alone instead of turning a meaningless value into a valid one.
+   UNSYNCED (no trustworthy time yet, meaning the RTC read failed outright)
+   leaves the snapshot alone instead of turning a meaningless value into a
+   valid one. An OSF-set RTC is *not* UNSYNCED: it is RTC_ONLY with
+   rtc_untrusted=true (see PR 5.5b), so the UI can still show "--:--".
    The caller holds no lock. Returns the source used, or NULL when nothing was
    written. Does not publish: EVENT_TIME_UPDATE means "a new UTC value was
    accepted", which a tick is not. */
@@ -909,10 +911,26 @@ static void cleanup_time_objects(void)
     }
 }
 
+/* Parse build year from __DATE__ (e.g., "Oct 29 2026"). Same format as
+   the runtime esp_app_desc_t.date field, with no include and no component
+   dependency. Falls back to 2026 if the string is malformed. */
+static int get_mfg_year(void)
+{
+    const char *date = __DATE__;  /* "Mmm dd yyyy", 11 chars, C99 §6.10.8 */
+
+    /* Find the last space and parse the year that follows it. */
+    const char *last_space = strrchr(date, ' ');
+    if (last_space && last_space[1]) {
+        int year = atoi(last_space + 1);
+        if (year > 2020 && year < 2100) return year;
+    }
+    return 2026;
+}
+
 /* Read whatever the RTC can give us. Called from svc_time_start() before any
    other task exists, so the snapshot is written directly (no lock yet).
-   A missing RTC or a set oscillator-stop flag leaves the service UNSYNCED:
-   whatever the register says then is meaningless (see hal_rtc.h). */
+   We read the RTC even if OSF is set, but mark it untrusted so the UI
+   displays "--:--" until a fresh NTP sync. */
 static void load_initial_time_from_rtc(void)
 {
     rtc_time_t rtc_now;
@@ -926,13 +944,24 @@ static void load_initial_time_from_rtc(void)
         ESP_LOGW(TAG, "hil_rtc_has_lost_power() failed -- treating the RTC as untrusted");
         lost_power = true;
     }
-    if (lost_power) {
-        ESP_LOGW(TAG, "RTC oscillator stopped (OSF) -- waiting for NTP");
-        return;
-    }
+
+    /* We read the RTC even if OSF is set, so the UI has *something* to show.
+       Trust is determined below. */
     if (!hil_rtc_get_time(&rtc_now)) {
         ESP_LOGW(TAG, "hil_rtc_get_time() failed -- waiting for NTP");
         return;
+    }
+
+    int mfg_year = get_mfg_year();
+    bool year_invalid = (rtc_now.year < mfg_year);
+
+    s_snapshot.rtc_untrusted = lost_power || year_invalid;
+
+    if (s_snapshot.rtc_untrusted) {
+        ESP_LOGW(TAG, "RTC is untrusted (OSF=%d, year=%u, mfg=%d) -- showing --:--",
+                 (int)lost_power, (unsigned)rtc_now.year, mfg_year);
+    } else {
+        ESP_LOGI(TAG, "RTC is trusted (year=%u)", (unsigned)rtc_now.year);
     }
 
     s_snapshot.utc = rtc_now;

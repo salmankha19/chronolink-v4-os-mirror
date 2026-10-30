@@ -33,6 +33,7 @@ typedef struct {
     int16_t  tz_offset_minutes;  /* cache key: recalculate when this changes;
                                     = local - UTC at noon of target date */
     uint8_t  season;             /* 0 = winter, 1 = summer (for diagnostics) */
+    uint8_t  source;             /* 0=on-the-fly, 1=firmware file, 2=user file */
 
     /* -----------------------------------------------------------------
      * Tier 1: ASTRONOMICAL local time. Engine output: astronomical
@@ -125,6 +126,9 @@ esp_err_t svc_prayer_engine_service_recalculate(void);
  * calculation failed (e.g., no location configured, polar night).
  */
 esp_err_t svc_prayer_engine_service_get_times(svc_prayer_engine_times_t *out);
+
+/* True while a timetable regeneration task is running. Cheap, lock-free. */
+bool svc_prayer_engine_service_is_regenerating(void);
 
 #ifdef __cplusplus
 }

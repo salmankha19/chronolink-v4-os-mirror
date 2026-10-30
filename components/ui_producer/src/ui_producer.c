@@ -20,10 +20,10 @@
  *     frame per second reaches the 3-slot queue and it cannot fill.
  *   - Clear the screen on the first frame only. A full-screen DM_CMD_CLEAR
  *     costs ~15-20 ms of DMA and lazily allocates the driver's 8 kB fill
- *     buffer, so it happens once. Each frame contains two DM_CMD_DRAW_TEXT_SCALED
- *     commands (time and meridiem). No per-frame erase: each scaled glyph
- *     blit paints its full rect including background. A single full-screen
- *     clear runs on the first frame only.
+ *     buffer, so it happens once. Each frame contains one DM_CMD_DRAW_TEXT_SCALED
+ *     command (the clock string), plus an optional red banner (fill + 2 text
+ *     commands) when the RTC is untrusted. No per-frame erase: each scaled
+ *     glyph blit paints its full rect including background.
  *
  * The submit runs in this task, never in an esp_timer callback or the kernel
  * dispatcher: display_manager_submit_frame() can block for ~10 ms worst case
@@ -34,6 +34,7 @@
 #include "display_manager.h"
 #include "svc_time.h"
 #include "svc_network.h"
+#include "svc_prayer_engine_service.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -58,7 +59,7 @@ static const char *TAG = "ui_producer";
 #define UI_COLOR_WHITE HAL_GFX_ColorFromRGB(0xFF, 0xFF, 0xFF)
 
 static TaskHandle_t s_producer_task = NULL;
-static char s_last_text[16] = {0};
+static char s_last_text[64] = {0};
 
 /* --------------------------------------------------------------------------
  * Producer task (core 0)
@@ -70,6 +71,19 @@ static void ui_producer_task(void *arg)
 
     bool first_frame = true;
     bool was_valid = false;
+    TickType_t boot_tick = xTaskGetTickCount();
+
+    /* Startup splash: immediate feedback before time is ready. */
+    {
+        dm_frame_t splash;
+        memset(&splash, 0, sizeof splash);
+        splash.flags = DM_FRAME_FLAG_NONE;
+        uint8_t n = 0;
+        dm_cmd_clear(&splash.cmds[n++], UI_COLOR_BLACK);
+        dm_cmd_draw_text_scaled(&splash.cmds[n++], 80, 200, 1, 24, "Starting...");
+        splash.cmd_count = n;
+        display_manager_submit_frame(&splash);
+    }
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(UI_POLL_PERIOD_MS));
@@ -123,15 +137,28 @@ static void ui_producer_task(void *arg)
             was_valid = true;
         }
 
-        /* local already carries the POSIX TZ / DST rule applied by svc_time. */
-        char buf[16];
-        int h12 = snap.local.hours % 12;
-        if (h12 == 0) h12 = 12;
-        const char *mer = (snap.local.hours < 12) ? "AM" : "PM";
-        snprintf(buf, sizeof buf, "%d:%02d%s",
-                 h12, (unsigned)snap.local.minutes, mer);
+        bool regen = svc_prayer_engine_service_is_regenerating();
+        bool untrusted = snap.rtc_untrusted;
+        bool show_banner = untrusted && ((xTaskGetTickCount() - boot_tick) > pdMS_TO_TICKS(60000));
 
-        if (strcmp(buf, s_last_text) == 0) {
+        char buf[48];
+        if (untrusted) {
+            snprintf(buf, sizeof buf, "--:--%s", regen ? " *upd" : "");
+        } else {
+            int h12 = snap.local.hours % 12;
+            if (h12 == 0) h12 = 12;
+            const char *mer = (snap.local.hours < 12) ? "AM" : "PM";
+            const char *sync = (snap.state != SVC_TIME_STATE_NTP_SYNCED) ? " *no sync" : "";
+            snprintf(buf, sizeof buf, "%d:%02d%s%s%s",
+                     h12, (unsigned)snap.local.minutes, mer,
+                     sync, regen ? " *upd" : "");
+        }
+
+        /* Unique hash including banner state forces redraws on transitions. */
+        char draw_key[64];
+        snprintf(draw_key, sizeof(draw_key), "%s|%d", buf, (int)show_banner);
+
+        if (strcmp(draw_key, s_last_text) == 0) {
             continue;
         }
 
@@ -149,10 +176,6 @@ static void ui_producer_task(void *arg)
         uint16_t target_h = (target_h_by_h < target_h_by_w)
                             ? target_h_by_h : target_h_by_w;
 
-        char time_str[8];
-        snprintf(time_str, sizeof time_str, "%d:%02d",
-                 h12, (unsigned)snap.local.minutes);
-
         dm_frame_t frame;
         memset(&frame, 0, sizeof frame);
         frame.flags = DM_FRAME_FLAG_NONE;
@@ -164,30 +187,36 @@ static void ui_producer_task(void *arg)
             first_frame = false;
         }
 
-        /* Width approximated from the placeholder font's native 8x8
-           aspect. A real measure pass lands with the TTF. */
-        int16_t glyph_w   = (int16_t)(target_h * 2 / 3);
-        int16_t time_w    = (int16_t)(strlen(time_str) * glyph_w);
-        int16_t badge_h   = (int16_t)(target_h / 3);
-        int16_t badge_w   = (int16_t)(badge_h * 2 / 3);
-        int16_t badge_gap = (int16_t)(target_h / 6);
-        int16_t total_w   = (int16_t)(time_w + badge_gap + badge_w);
-
-        int16_t x0 = (int16_t)((W - total_w) / 2);
+        /* Center the clock string based on its actual width. */
+        int16_t glyph_w = (int16_t)(target_h * 2 / 3);
+        int16_t time_w  = (int16_t)(strlen(buf) * glyph_w);
+        int16_t x0 = (int16_t)((W - time_w) / 2);
         int16_t y0 = (int16_t)((H - target_h) / 2);
 
+        if (show_banner) {
+            y0 -= (int16_t)(target_h / 3); /* shift time up to make room */
+        }
+
         dm_cmd_draw_text_scaled(&frame.cmds[n++], x0, y0,
-                                /* font_id */ 1, target_h, time_str);
-        dm_cmd_draw_text_scaled(&frame.cmds[n++],
-                                (int16_t)(x0 + time_w + badge_gap),
-                                (int16_t)(y0 + target_h - badge_h),
-                                /* font_id */ 1, badge_h, mer);
+                                /* font_id */ 1, target_h, buf);
+
+        if (show_banner) {
+            /* Two-line red banner at the bottom. */
+            int16_t banner_y = (int16_t)(H - 70);
+            dm_cmd_fill_rect(&frame.cmds[n++], 0, banner_y, (int16_t)W, 60,
+                             HAL_GFX_ColorFromRGB(0xC0, 0x39, 0x2B));
+            dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, (int16_t)(banner_y + 6),
+                                    /* font_id */ 1, 22, "Time invalid");
+            dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, (int16_t)(banner_y + 32),
+                                    /* font_id */ 1, 16, "Check internet");
+        }
+
         frame.cmd_count = n;
 
         if (!display_manager_submit_frame(&frame)) {
             ESP_LOGW(TAG, "frame submit failed");
         } else {
-            strncpy(s_last_text, buf, sizeof s_last_text - 1);
+            strncpy(s_last_text, draw_key, sizeof s_last_text - 1);
             s_last_text[sizeof(s_last_text) - 1] = '\0';
         }
     }
