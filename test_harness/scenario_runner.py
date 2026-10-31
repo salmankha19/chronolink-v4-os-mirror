@@ -251,6 +251,9 @@ class ScenarioRunner:
 
         status, reasons, error = "ERROR", [], None
         controller: Optional[DeviceController] = None
+        # True once set_ntp_host() has written this PC's address into NVS
+        # slot 0, so the finally block below knows it has to put it back.
+        ntp_host_set = False
 
         self._log(
             "scenario %s: start %s UTC, %gx, timeout %.0fs"
@@ -292,6 +295,11 @@ class ScenarioRunner:
                 controller.esp_ip = board_ip
                 self._wait_for_auto_sync(controller, raw_log)
 
+                # Set the gate BEFORE the call: set_ntp_host() can raise after
+                # the NVS write already landed (read timeout while the handler
+                # blocks on the follow-up sync), and that path must still be
+                # restored. Restoring an already-correct slot 0 is a no-op.
+                ntp_host_set = True
                 controller.set_ntp_host(ntp_host)
                 self._log("device NTP host set to %s" % ntp_host)
 
@@ -352,6 +360,25 @@ class ScenarioRunner:
             status, reasons, error = "ERROR", [], "%s: %s" % (type(exc).__name__, exc)
         finally:
             if controller is not None:
+                # Undo the NVS write set_ntp_host() made. The test hook
+                # persists whatever host it is given, so a board left alone
+                # keeps syncing from this PC on every later boot -- including
+                # boots of production firmware, which has no /debug/ntp to
+                # fix it. Skipped when set_ntp_host() never returned: nothing
+                # was written, and self._board_ip is not a reliable proxy
+                # because --esp-ip sets it even when DHCP never completed.
+                # Cleanup is masked-proof: status/reasons/error above are
+                # already frozen, and the try/except is belt-and-braces on
+                # top of restore_ntp_host()'s own never-raise contract.
+                if ntp_host_set:
+                    try:
+                        ok = controller.restore_ntp_host()
+                        self._log(
+                            "restored NVS slot 0 to time.google.com" if ok
+                            else "WARN: could not restore NVS slot 0"
+                        )
+                    except Exception as exc:      # noqa: BLE001
+                        self._log("restore exception (non-fatal): %s" % exc)
                 try:
                     controller.close()
                 except Exception as exc:   # noqa: BLE001
@@ -578,6 +605,31 @@ class ScenarioRunner:
         (directory / "expected.txt").write_text(expected_text + "\n", encoding="utf-8")
         (directory / "diff.txt").write_text(
             self._render_diff(result, expected_text), encoding="utf-8"
+        )
+        (directory / "result.txt").write_text(
+            self._render_result(result), encoding="utf-8"
+        )
+        return directory
+
+    def save_pass_log(self, result: RunResult) -> Path:
+        """Write run.log + result.txt for a PASS scenario.
+
+        Preserves regression evidence without FAIL-shaped postmortem files.
+        Layout (results/ is git-ignored):
+            results/<YYYYMMDD_HHMMSS>/<scenario_name>/run.log
+                                                    /result.txt
+
+        No expected.txt and no diff.txt: those compare the run against the
+        scenario's expectations, which only says something useful when the
+        run did not match them. Called from run_all.py --save-log; the
+        default PASS path still writes nothing, so results/ stays small.
+        """
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        directory = RESULTS_DIR / stamp / result.scenario_name
+        directory.mkdir(parents=True, exist_ok=True)
+
+        (directory / "run.log").write_text(
+            "\n".join(result.raw_log) + "\n", encoding="utf-8"
         )
         (directory / "result.txt").write_text(
             self._render_result(result), encoding="utf-8"

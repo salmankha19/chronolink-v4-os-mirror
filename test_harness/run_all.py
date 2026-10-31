@@ -10,6 +10,7 @@ CLI (locked by AM5):
     python run_all.py --port COM7 --quick             # quick=True only
     python run_all.py --port COM7 --only prayer       # name substring filter
     python run_all.py --port COM7 --verbose           # interleave expected/actual
+    python run_all.py --port COM7 --save-log          # keep run.log + result.txt on PASS
     python run_all.py --list
     python run_all.py --dump-expectations
     python run_all.py --check-catalog
@@ -283,6 +284,11 @@ def mode_run(args, scenarios: list) -> int:
             failed += 1
             directory = runner.write_results(result)
             print("  postmortem: %s" % directory)
+        elif args.save_log:
+            # PASS writes nothing by default; --save-log keeps the evidence
+            # without the FAIL-shaped expected.txt / diff.txt pair.
+            directory = runner.save_pass_log(result)
+            print("  saved log: %s" % directory)
 
     print("")
     print("%d/%d scenario(s) passed" % (len(selected) - failed, len(selected)))
@@ -319,6 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--list", dest="list_only", action="store_true",
         help="print scenarios without touching hardware",
+    )
+    parser.add_argument(
+        "--save-log", dest="save_log", action="store_true",
+        help="Preserve run.log and result.txt even on PASS "
+        "(default: PASS writes nothing)",
     )
     parser.add_argument(
         "--dump-expectations", action="store_true",

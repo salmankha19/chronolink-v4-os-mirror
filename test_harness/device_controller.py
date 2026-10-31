@@ -217,6 +217,68 @@ class DeviceController:
             )
             return
 
+    def restore_ntp_host(self, default_host: str = "time.google.com",
+                         timeout_s: float = 12.0) -> bool:
+        """Single-shot NVS slot 0 restore. No retry, no backoff.
+
+        Returns True on 200 OK OR 500 sync_failed (both imply NVS was
+        written; sync was just refused by the 60 s resync floor).
+        Returns False on any other error. Never raises.
+
+        timeout_s is 12 s because the endpoint's follow-up sync
+        (svc_time_sync_ntp_once) blocks up to 10 s, and the last sync is
+        normally >60 s old by the time a scenario ends -- so it does run.
+        A shorter timeout would fire on a restore that actually succeeded.
+
+        Called from ScenarioRunner.run()'s finally block, which is why it
+        must not retry and must not raise: set_ntp_host()'s 1 s / 2 s / 4 s
+        backoff would turn an already-restored board into 7 s of delay and a
+        false alarm. The 500-sync_failed case is the reason this cannot just
+        call set_ntp_host().
+
+        The test hook persists whatever host it is given, so a board left
+        alone keeps syncing from this PC on every later boot -- including
+        boots of production firmware, which has no /debug/ntp to undo it.
+        This is the undo.
+        """
+        if self.esp_ip is None:
+            return False
+
+        url = f"http://{self.esp_ip}/debug/ntp?host={default_host}"
+        try:
+            response = requests.get(url, timeout=timeout_s)
+        except Exception as exc:      # noqa: BLE001 -- never raise from cleanup
+            # Deliberately broader than RequestException: the contract is
+            # "returns a bool, raises nothing", and this call site is a
+            # single place where a surprise exception would be least
+            # welcome.
+            LOG.warning("restore NTP host failed: %s", exc)
+            return False
+
+        if response.status_code == 200:
+            LOG.info(
+                "NTP host restored to %s (device said: %s)",
+                default_host,
+                response.text[:100],
+            )
+            return True
+
+        if response.status_code == 500 and _reports_busy_sync(response.text):
+            # The host is already in NVS; only the follow-up sync was
+            # skipped because svc_time's automatic one still held the lock.
+            LOG.info(
+                "NTP host restored to %s (follow-up sync skipped)",
+                default_host,
+            )
+            return True
+
+        LOG.warning(
+            "restore NTP host failed: HTTP %d: %s",
+            response.status_code,
+            response.text[:200],
+        )
+        return False
+
     # -- serial console ----------------------------------------------------
 
     def read_lines(self, timeout_s: Optional[float] = None) -> Iterator[str]:

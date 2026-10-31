@@ -149,7 +149,10 @@ Pre-push check: `.\test_harness\pre_push_check.ps1` (~3 min, no hardware wait).
   device genuinely boots at `start_utc`. Boot 1's sync line is discarded; boot
   2's is fed to the assertion engine (late, so it cannot satisfy a `sync`
   expectation early), and the assertion clock starts from the epoch the mock
-  actually served, not from `start_utc`.
+  actually served, not from `start_utc`. Every exit path that got as far as
+  the `/debug/ntp` write then restores slot 0 to `time.google.com` via
+  `restore_ntp_host()` (single shot, 12 s timeout), so a test session no
+  longer leaves the board syncing from the PC.
 - **Reference scenario (`scenarios/01_single_prayer_fire.py`):** boots at
   11:49:30, asserts exactly one `Dhuhr adhan due` at 11:50:00 and zero Fajr
   fires. Verified on hardware 2026-10-31 (three consecutive PASSes, identical
