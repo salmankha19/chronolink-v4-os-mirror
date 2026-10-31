@@ -12,6 +12,8 @@
 #include "svc_time.h"
 #include "svc_prayer_engine.h"
 #include "svc_timetable.h"
+#include "adhan_calculator.h"   /* internal: engine call + adhan offsets */
+#include "jamat_calculator.h"   /* internal: season + jamat arithmetic */
 #include "event_bus.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -80,69 +82,10 @@ static void publish_times_updated(const svc_prayer_engine_times_t *t)
     event_bus_publish(&evt);
 }
 
-/* ---------------------------------------------------------------------
- * Seasonal jamat computation helpers (5.1a)
- * ------------------------------------------------------------------- */
-
-/* True if (m, d) is in [start, end) with year-wrap. */
-static bool date_in_range(uint8_t m, uint8_t d,
-                          uint8_t start_m, uint8_t start_d,
-                          uint8_t end_m, uint8_t end_d)
-{
-    uint16_t v = (uint16_t)m * 100u + d;
-    uint16_t s = (uint16_t)start_m * 100u + start_d;
-    uint16_t e = (uint16_t)end_m   * 100u + end_d;
-    if (s <= e) return v >= s && v < e;
-    return v >= s || v < e;
-}
-
-/* Summer if (m, d) is in [summer_start, winter_start). */
-static uint8_t current_season(const season_cfg_t *s, uint8_t m, uint8_t d)
-{
-    return date_in_range(m, d, s->summer_start_month, s->summer_start_day,
-                         s->winter_start_month, s->winter_start_day) ? 1u : 0u;
-}
-
-/* Round `sec` to the nearest multiple of `round_min * 60` seconds from
-   local midnight. round_min == 0 means "return sec unchanged". */
-static uint32_t round_to_min(uint32_t sec, uint8_t round_min)
-{
-    if (round_min == 0) return sec;
-    uint32_t step = (uint32_t)round_min * 60u;
-    uint32_t half = step / 2u;
-    return ((sec + half) / step) * step;
-}
-
-/* Compute one prayer's jamat from its anchor value and cfg. Returns
-   UINT32_MAX if the anchor is DISABLED or the target is invalid. */
-static uint32_t compute_jamat(uint32_t adhan_sec,
-                              uint32_t sunrise_sec,
-                              uint32_t midnight_sec,
-                              const jamat_season_cfg_t *cfg,
-                              uint8_t round_min)
-{
-    if (cfg->anchor == SVC_CONFIG_JAMAT_DISABLED) return UINT32_MAX;
-
-    uint32_t base;
-    uint32_t off_s = (uint32_t)cfg->offset_min * 60u;
-
-    switch (cfg->anchor) {
-    case SVC_CONFIG_JAMAT_ADHAN_PLUS:
-        base = adhan_sec + off_s;
-        break;
-    case SVC_CONFIG_JAMAT_SUNRISE_MINUS:
-        if (sunrise_sec == UINT32_MAX || sunrise_sec < off_s) return UINT32_MAX;
-        base = sunrise_sec - off_s;
-        break;
-    case SVC_CONFIG_JAMAT_MIDNIGHT_MINUS:
-        if (midnight_sec == UINT32_MAX || midnight_sec < off_s) return UINT32_MAX;
-        base = midnight_sec - off_s;
-        break;
-    default:
-        return UINT32_MAX;
-    }
-    return round_to_min(base, round_min);
-}
+/* Seasonal jamat arithmetic moved to jamat_calculator.c (5.8). The
+   timetable-trust merge below stays in the service: it consumes parsed
+   file values and the next-prayer bracket, neither of which is an input
+   to jamat_calculator_run(). */
 
 /* Advance (y, m, d) by one calendar day. Uses timegm/gmtime_r so
    month/year rollover and leap years are handled by the libc. Returns
@@ -195,6 +138,9 @@ static uint32_t merge_adhan(bool has_file, uint32_t file_val, uint32_t fresh_val
 }
 
 /* Validate a jamat against its adhan and the next prayer's time.
+   Stays in the service rather than jamat_calculator.c: it consumes the
+   parsed timetable values and the next-prayer bracket, neither of which
+   is an input to jamat_calculator_run().
    - file_val < adhan_val         : reject (fall back to computed)
    - file_val >= next_val != 0    : accept with warn (mosque authority)
    - else                         : accept silently */
@@ -368,18 +314,14 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     /* Offset at local noon of the target date (DST-safe). */
     int16_t tz_offset_min = tz_offset_minutes_at_noon(
         (int)snap.local.year, (int)snap.local.month, (int)snap.local.day);
-    double tz_off = (double)tz_offset_min / 60.0;
 
-    /* Cast config enums to prayer-engine enums (values 0..N match). */
-    svc_prayer_method_t method   = (svc_prayer_method_t)cfg.method;
-    svc_prayer_madhab_t madhab   = (svc_prayer_madhab_t)cfg.madhab;
-    svc_prayer_highlat_t highlat = (svc_prayer_highlat_t)cfg.high_lat_rule;
+    uint32_t date_today = (uint32_t)snap.local.year  * 10000U
+                        + (uint32_t)snap.local.month * 100U
+                        + (uint32_t)snap.local.day;
 
-    svc_prayer_times_t raw;
-    err = svc_prayer_engine_calculate(
-        (int)snap.local.year, (int)snap.local.month, (int)snap.local.day,
-        cfg.latitude, cfg.longitude, tz_off,
-        method, madhab, highlat, cfg.custom_fajr_angle, cfg.custom_isha_angle, &raw);
+    /* Adhan tier: engine call + adhan offsets (adhan_calculator.c). */
+    adhan_result_t adhan_today;
+    err = adhan_calculator_run(&cfg, date_today, tz_offset_min, &adhan_today);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "calculate failed: %s", esp_err_to_name(err));
         return err;
@@ -388,30 +330,25 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     /* Build result. Fresh values serve as fallback; timetable overrides
        per field when present. */
     svc_prayer_engine_times_t result = {0};
-    result.date_yyyymmdd = (uint32_t)snap.local.year  * 10000U
-                         + (uint32_t)snap.local.month * 100U
-                         + (uint32_t)snap.local.day;
+    result.date_yyyymmdd = date_today;
     result.tz_offset_minutes = tz_offset_min;
 
     svc_timetable_day_t tt_today = {0}, tt_tomorrow = {0};
     svc_timetable_get_today(&tt_today);
     svc_timetable_get_tomorrow(&tt_tomorrow);
 
-    /* Fresh adhan values (for fallback and for the tripwire). */
-    uint32_t fresh_adhan[5] = {
-        raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60U,
-        raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60U,
-        raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60U,
-        raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60U,
-        raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60U,
-    };
+    /* Fresh adhan values (for fallback and for the tripwire). Copied out of
+       adhan_today.adhan_sec[] under its original name so the TT_TRIPWIRE
+       macro below stays byte-for-byte unchanged. */
+    uint32_t fresh_adhan[5];
+    memcpy(fresh_adhan, adhan_today.adhan_sec, sizeof(fresh_adhan));
 
     /* Astronomical tier (always fresh). */
-    result.astronomical_fajr_sec    = raw.fajr_sec;
-    result.astronomical_dhuhr_sec   = raw.dhuhr_sec;
-    result.astronomical_asr_sec     = raw.asr_sec;
-    result.astronomical_maghrib_sec = raw.maghrib_sec;
-    result.astronomical_isha_sec    = raw.isha_sec;
+    result.astronomical_fajr_sec    = adhan_today.raw.fajr_sec;
+    result.astronomical_dhuhr_sec   = adhan_today.raw.dhuhr_sec;
+    result.astronomical_asr_sec     = adhan_today.raw.asr_sec;
+    result.astronomical_maghrib_sec = adhan_today.raw.maghrib_sec;
+    result.astronomical_isha_sec    = adhan_today.raw.isha_sec;
 
     /* Merge adhan tier. */
     result.fajr_sec    = merge_adhan(tt_today.has_fajr,    tt_today.fajr,    fresh_adhan[0]);
@@ -421,19 +358,20 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     result.isha_sec    = merge_adhan(tt_today.has_isha,    tt_today.isha,    fresh_adhan[4]);
 
     /* Auxiliary. */
-    uint32_t sunrise_used  = merge_adhan(tt_today.has_sunrise,     tt_today.sunrise,     raw.sunrise_sec);
-    uint32_t midnight_used = merge_adhan(tt_today.has_midnight,    tt_today.midnight,    raw.midnight_sec);
+    uint32_t sunrise_used  = merge_adhan(tt_today.has_sunrise,     tt_today.sunrise,     adhan_today.raw.sunrise_sec);
+    uint32_t midnight_used = merge_adhan(tt_today.has_midnight,    tt_today.midnight,    adhan_today.raw.midnight_sec);
     result.sunrise_sec    = sunrise_used;
-    result.sunset_sec     = raw.sunset_sec;
-    result.asr_yellow_sec = merge_adhan(tt_today.has_asr_yellow,   tt_today.asr_yellow,  raw.asr_yellow_sec);
+    result.sunset_sec     = adhan_today.raw.sunset_sec;
+    result.asr_yellow_sec = merge_adhan(tt_today.has_asr_yellow,   tt_today.asr_yellow,  adhan_today.raw.asr_yellow_sec);
     result.midnight_sec   = midnight_used;
 
     uint32_t zawal_off = (uint32_t)cfg.zawal_buffer_min * 60U;
-    uint32_t fresh_zawal = (raw.dhuhr_sec > zawal_off) ? (raw.dhuhr_sec - zawal_off) : 0U;
+    uint32_t fresh_zawal = (adhan_today.raw.dhuhr_sec > zawal_off)
+                         ? (adhan_today.raw.dhuhr_sec - zawal_off) : 0U;
     result.zawal_start_sec = merge_adhan(tt_today.has_zawal_start, tt_today.zawal_start, fresh_zawal);
 
-    result.sehri_end_sec = merge_adhan(tt_today.has_sehri_end, tt_today.sehri_end, raw.fajr_sec);
-    result.iftar_sec     = merge_adhan(tt_today.has_iftar,     tt_today.iftar,     raw.sunset_sec);
+    result.sehri_end_sec = merge_adhan(tt_today.has_sehri_end, tt_today.sehri_end, adhan_today.raw.fajr_sec);
+    result.iftar_sec     = merge_adhan(tt_today.has_iftar,     tt_today.iftar,     adhan_today.raw.sunset_sec);
 
     /* Source tag. */
     result.source = (uint8_t)svc_timetable_get_source();
@@ -461,10 +399,7 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
 
     /* Tier 3: jamat (today), seasonal. Winter/summer decision uses the
        target date. */
-    uint8_t season = current_season(&cfg.season,
-                                    (uint8_t)snap.local.month,
-                                    (uint8_t)snap.local.day);
-    result.season = season;
+    result.season = jamat_calculator_season_for_date(&cfg, date_today);
 
     uint32_t adhan_secs[SVC_CONFIG_PRAYER_COUNT] = {
         result.fajr_sec, result.dhuhr_sec, result.asr_sec,
@@ -483,19 +418,22 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         adhan_secs[4],
         midnight_used,
     };
+    /* jamat anchors on the EFFECTIVE tier: the post-merge, post-tripwire
+       adhan values above plus the merged sunrise/midnight. Hand them to
+       the calculator through adhan_today, which nothing else reads once
+       the tripwire has run. */
+    memcpy(adhan_today.adhan_sec, adhan_secs, sizeof(adhan_secs));
+    adhan_today.raw.sunrise_sec  = sunrise_used;
+    adhan_today.raw.midnight_sec = midnight_used;
+
+    uint32_t computed_jamat[SVC_CONFIG_PRAYER_COUNT];
+    jamat_calculator_run(&cfg, date_today, &adhan_today, computed_jamat);
+
     for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
-        const jamat_season_cfg_t *jc = (season == 0)
-            ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
-        uint32_t computed = compute_jamat(
-            adhan_secs[p],
-            sunrise_used,           /* merged sunrise */
-            midnight_used,          /* merged midnight */
-            jc,
-            cfg.jamat[p].round_min);
         result.jamat_sec[p] = merge_jamat(
             tt_today.has_jamat[p],
             tt_today.jamat[p],
-            computed,
+            computed_jamat[p],
             adhan_secs[p],
             next_sec[p],
             s_names[p]);
@@ -511,41 +449,40 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
                              (uint8_t)snap.local.month,
                              (uint8_t)snap.local.day,
                              &tm_y, &tm_m, &tm_d);
+        /* Tomorrow's own noon offset feeds the engine only -- it must NOT
+           overwrite result.tz_offset_minutes, which is today's. */
         int16_t tm_tz_off_min = tz_offset_minutes_at_noon(tm_y, tm_m, tm_d);
-        double  tm_tz_off     = (double)tm_tz_off_min / 60.0;
 
-        svc_prayer_times_t tm_raw = {0};
-        esp_err_t tm_err = svc_prayer_engine_calculate(
-            (int)tm_y, (int)tm_m, (int)tm_d,
-            cfg.latitude, cfg.longitude, tm_tz_off,
-            method, madhab, highlat, cfg.custom_fajr_angle, cfg.custom_isha_angle, &tm_raw);
+        uint32_t date_tomorrow = (uint32_t)tm_y * 10000U
+                               + (uint32_t)tm_m * 100U
+                               + (uint32_t)tm_d;
+
+        adhan_result_t adhan_tomorrow;
+        esp_err_t tm_err = adhan_calculator_run(&cfg, date_tomorrow,
+                                                tm_tz_off_min, &adhan_tomorrow);
         if (tm_err == ESP_OK) {
-            uint8_t tm_season = current_season(&cfg.season, tm_m, tm_d);
-            uint32_t tm_adhan[SVC_CONFIG_PRAYER_COUNT] = {
-                tm_raw.fajr_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_FAJR]    * 60u,
-                tm_raw.dhuhr_sec   + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_DHUHR]   * 60u,
-                tm_raw.asr_sec     + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ASR]     * 60u,
-                tm_raw.maghrib_sec + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_MAGHRIB] * 60u,
-                tm_raw.isha_sec    + (uint32_t)cfg.adhan_offset_min[SVC_CONFIG_PRAYER_ISHA]    * 60u,
-            };
-            uint32_t tm_sunrise_used  = merge_adhan(tt_tomorrow.has_sunrise,  tt_tomorrow.sunrise,  tm_raw.sunrise_sec);
-            uint32_t tm_midnight_used = merge_adhan(tt_tomorrow.has_midnight, tt_tomorrow.midnight, tm_raw.midnight_sec);
+            const uint32_t *tm_adhan = adhan_tomorrow.adhan_sec;
+            uint32_t tm_sunrise_used  = merge_adhan(tt_tomorrow.has_sunrise,  tt_tomorrow.sunrise,  adhan_tomorrow.raw.sunrise_sec);
+            uint32_t tm_midnight_used = merge_adhan(tt_tomorrow.has_midnight, tt_tomorrow.midnight, adhan_tomorrow.raw.midnight_sec);
             uint32_t tm_next[SVC_CONFIG_PRAYER_COUNT] = {
                 tm_sunrise_used, tm_adhan[2], tm_adhan[3], tm_adhan[4], tm_midnight_used,
             };
+
+            /* Effective sunrise/midnight travel in through the same struct
+               jamat_calculator_run() consumes. tm_adhan[] already holds the
+               fresh tier; the tomorrow timetable contributes jamat only. */
+            adhan_tomorrow.raw.sunrise_sec  = tm_sunrise_used;
+            adhan_tomorrow.raw.midnight_sec = tm_midnight_used;
+
+            uint32_t tm_computed_jamat[SVC_CONFIG_PRAYER_COUNT];
+            jamat_calculator_run(&cfg, date_tomorrow, &adhan_tomorrow,
+                                 tm_computed_jamat);
+
             for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
-                const jamat_season_cfg_t *jc = (tm_season == 0)
-                    ? &cfg.jamat[p].winter : &cfg.jamat[p].summer;
-                uint32_t computed = compute_jamat(
-                    tm_adhan[p],
-                    tm_sunrise_used,
-                    tm_midnight_used,
-                    jc,
-                    cfg.jamat[p].round_min);
                 result.jamat_tomorrow_sec[p] = merge_jamat(
                     tt_tomorrow.has_jamat[p],
                     tt_tomorrow.jamat[p],
-                    computed,
+                    tm_computed_jamat[p],
                     tm_adhan[p],
                     tm_next[p],
                     s_names[p]);

@@ -379,7 +379,7 @@ skip the recalculation unless forced.
 | Layer | Owns | Does **not** own |
 |---|---|---|
 | `PrayerTimes.cpp` (engine) | Astronomical math. Returns local civil time for one date. | User offsets, adhan offsets, jamat, rounding, seasons |
-| `svc_prayer_engine_service` | Applies adhan offsets, computes jamat (seasonal, with rounding), publishes snapshot including tomorrow | Astronomical math, config persistence |
+| `svc_prayer_engine_service` | Orchestrates one recalculate: timetable merge, tripwire, adhan offsets and seasonal jamat (delegated to `adhan_calculator` / `jamat_calculator`), publishes snapshot including tomorrow | Astronomical math, config persistence |
 | `svc_config` | Stores config, applies presets, persists NVS, validates ranges | Calculation, jamat computation |
 | `svc_http` | Serializes snapshot to nested JSON | Any arithmetic |
 | Web UI | Formats seconds for display, shows change hints | Any arithmetic (no `+ offset`, no rounding) |
@@ -387,17 +387,94 @@ skip the recalculation unless forced.
 The UI reads **finished values** and applies no math. This is the
 consumer contract.
 
-### 8.1 Planned refactor (PR 5.1a.1)
+### 8.1 Completed refactor (2026-10-31)
 
-After 5.1a lands, `svc_prayer_engine_service.c` is split into two internal
-modules without API change:
+`svc_prayer_engine_service.c` is now the service plus two internal
+modules. `src/` is a `PRIV_INCLUDE_DIRS` path, so neither header is part
+of the published API; `svc_prayer_engine_service.h` and the snapshot
+struct are unchanged.
 
-- `adhan_calculator.{c,h}` — wraps engine + adhan_offset application
-- `jamat_calculator.{c,h}` — pure arithmetic, no engine call
+**`src/adhan_calculator.{c,h}`** (commit `e0d0571`) — the
+`svc_prayer_engine_calculate()` call for one date plus the per-prayer
+`adhan_offset_min[]` application.
 
-The published snapshot struct is unchanged. Future changes (Moonsighting
-method, multi-session jamat, Jumu'ah overrides) touch one module each
-rather than the monolithic `recalculate()`.
+```c
+esp_err_t adhan_calculator_run(const svc_config_t *cfg,
+                               uint32_t date_yyyymmdd,
+                               int16_t tz_offset_minutes,
+                               adhan_result_t *out);
+```
+
+`adhan_result_t` exposes two tiers: `raw`, the untouched
+`svc_prayer_times_t` (fajr, sunrise, dhuhr, asr_yellow, sunset, zawal,
+asr, maghrib, isha, midnight), and `adhan_sec[5]`, the offset-applied
+values. The result is **pre-merge and pre-tripwire**: the parent merges
+the timetable and validates.
+
+**`src/jamat_calculator.{c,h}`** (commit `98c5fc0`) — pure arithmetic:
+season selection, anchor selection, offset, rounding. No engine call, no
+timetable read, no logging, no state.
+
+```c
+uint8_t jamat_calculator_season_for_date(const svc_config_t *cfg,
+                                         uint32_t date_yyyymmdd);
+
+void jamat_calculator_run(const svc_config_t *cfg,
+                          uint32_t date_yyyymmdd,
+                          const adhan_result_t *adhan,
+                          uint32_t jamat_sec_out[5]);
+```
+
+`date_in_range()`, `round_to_min()` and `compute_jamat()` moved in as
+statics, copied literally rather than rewritten. `current_season()` became
+`jamat_calculator_season_for_date()`, keyed on the date instead of
+`(month, day)`.
+
+**Effective-tier contract.**
+
+`jamat_calculator_run()` takes no timetable argument, and it must not:
+jamat anchors are defined against the **effective** adhan tier — after the
+timetable merge and after the tripwire — which is exactly what the inline
+`compute_jamat()` consumed before the split. The service fills `adhan`
+first:
+
+- `adhan->adhan_sec[0..4]` ← `result.fajr_sec` … `result.isha_sec`
+- `adhan->raw.sunrise_sec` ← merged sunrise
+- `adhan->raw.midnight_sec` ← merged midnight
+
+Handing over raw engine output instead would silently change Fajr and Isha
+jamat whenever an uploaded mosque timetable overrides sunrise or midnight,
+and no harness scenario gates jamat, so nothing would catch it.
+
+**What stayed in the service.**
+
+- `merge_adhan()` — reads parsed timetable fields; not an input to either
+  calculator.
+- `merge_jamat()` — reads a parsed timetable jamat, the adhan value and
+  the next-prayer bracket, and logs the accept/reject decision. Moving it
+  would add three parameters plus a timetable dependency to a module that
+  is otherwise pure arithmetic.
+- `TT_TRIPWIRE` — a block-scoped macro over the merged result; it must run
+  between the merge and the jamat tier.
+
+**Preservation evidence.**
+
+Jamat has no harness assertion, so the split was verified three ways:
+
+1. Hardware boots either side of the change log identical values:
+   `j_fajr=21900 j_dhuhr=46800 j_asr=51900 j_maghrib=60240
+   j_isha=66000`, `jamat change tomorrow: Fajr 06:05 -> 06:10` and
+   `Maghrib 16:44 -> 16:42`.
+2. `pre_push_check.ps1` PASS; Dhuhr fired exactly once (77.1 s).
+3. A host differential harness replayed the pre-split inline algorithm
+   against `jamat_calculator_run()`: 305,489 comparisons — exhaustive
+   anchor × anchor × offset × rounding over season edges, leap day and
+   year ends, plus randomised configs including year-wrapping seasons,
+   invalid anchors and `UINT32_MAX` sentinels — zero mismatches.
+
+Future changes (Moonsighting method, multi-session jamat, Jumu'ah
+overrides) touch one module each rather than the monolithic
+`recalculate()`.
 
 ---
 
@@ -536,7 +613,7 @@ reference this document rather than re-deriving the model.
 | PR | Scope | Status |
 |---|---|---|
 | **5.1a** | Backend: seasonal jamat, three-tier snapshot, today+tomorrow, `/api/config/preset` | Implemented in PR 5.1a |
-| **5.1a.1** | `refactor:` extract `adhan_calculator` + `jamat_calculator` | After 5.1a merges |
+| **5.1a.1** | `refactor:` extract `adhan_calculator` + `jamat_calculator` | Implemented 2026-10-31 (`e0d0571`, `98c5fc0`) — see §8.1 |
 | **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | Implemented in this PR |
 | **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | Implemented in this PR |
 | **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | Implemented in this PR |
