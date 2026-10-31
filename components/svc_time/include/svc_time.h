@@ -109,6 +109,23 @@ esp_err_t svc_time_get_snapshot(svc_time_snapshot_t *out);
 esp_err_t svc_time_get_local(rtc_time_t *out);
 esp_err_t svc_time_get_utc(rtc_time_t *out);
 
+/*
+ * Current time as seconds since the Unix epoch (UTC).
+ *
+ * The epoch is the same instant in every timezone, so no POSIX TZ / DST rule
+ * is involved: this is the value to compare against prayer-time epochs.
+ * Derived from the UTC half of the snapshot with timegm() -- never from the
+ * local (DST-adjusted) broken-down time, whose 01:00-02:00 hour is ambiguous
+ * on a fall-back day.
+ *
+ * Returns ESP_OK and fills *out; ESP_ERR_INVALID_ARG if out is NULL;
+ * ESP_ERR_INVALID_STATE before svc_time_start() or while the snapshot holds
+ * no valid time (in which case *out is left untouched); ESP_ERR_TIMEOUT if
+ * the service lock is unavailable; ESP_FAIL if the broken-down UTC value
+ * cannot be converted.
+ */
+esp_err_t svc_time_get_epoch(time_t *out);
+
 /* UTC epoch seconds of the last successful NTP sync (which also writes the
    RTC). Returns ESP_OK when a sync has happened since the last factory
    reset, ESP_ERR_NOT_FOUND if it never has, ESP_ERR_INVALID_STATE if the
