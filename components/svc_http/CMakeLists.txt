@@ -9,6 +9,7 @@ idf_component_register(
         svc_network
         svc_prayer_engine_service
         svc_timetable
+        svc_time
         nvs_flash
         app_update
         log

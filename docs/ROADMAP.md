@@ -188,6 +188,7 @@ Not scheduled; listed for completeness.
   `src_dir = main`); removing the directory itself needs a separate
   change because `src/CMakeLists.txt` still globs it.
 - CI hardening: bump `actions/*` to v5, pin `ubuntu-24.04`.
+- ✅ Test harness v1 (mock NTP + scenario runner + reference scenario, 2026-10-31)
 
 ---
 

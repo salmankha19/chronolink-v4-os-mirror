@@ -8,6 +8,7 @@
 sdkconfig
 sdkconfig.old
 sdkconfig.single_mcu
+sdkconfig.single_mcu_test
 sdkconfig.split_mcu_main
 sdkconfig.display_mcu
 sdkconfig.esp32s3
@@ -58,6 +59,11 @@ __pycache__/
 # ---------- Local logs ----------
 bootlog.txt
 chronolink_selected_dump.txt
+
+# ---------- Test harness ----------
+# Per-run postmortems (run.log / expected.txt / diff.txt / result.txt) are
+# local evidence, not source. Keep them out of the tree.
+test_harness/results/
 
 # ---------- Local commit-message temp files ----------
 commit-msg.txt

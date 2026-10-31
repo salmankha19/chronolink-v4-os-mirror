@@ -123,6 +123,38 @@ not.** Where another doc mentions a gap, this file has the detail.
   TTF and built-in placeholder modes; the placeholder can be
   regenerated with `--builtin`.
 
+### Test Harness (v1)
+
+`test_harness/` provides time-injection testing for the prayer pipeline.
+See `test_harness/README.md` for usage. Catalog of scenarios in
+`test_harness/TEST_CATALOG.md` (live document, enforced by
+`run_all.py --check-catalog`).
+
+Pre-push check: `.\test_harness\pre_push_check.ps1` (~3 min, no hardware wait).
+
+- **Mock NTP server (`mock_ntp_server.py`):** serves a fake clock over UDP:123.
+  The fake clock is anchored at the device's **first request**, so the board
+  always boots at the scenario's `start_utc` regardless of boot-time jitter
+  (at 600x a 2.5 s boot spread moved the landing point by 26 fake minutes).
+  Accelerating the mock does **not** speed the device up -- the device's own
+  clock runs at 1x -- so prayer-fire scenarios run at `speed = 1.0` and their
+  deadlines are real seconds.
+- **Scenario runner (`scenario_runner.py`):** boot banner + board IP from the
+  serial log, then two boots: the first gives DHCP and the `/debug/ntp` write
+  of slot 0, the second is the one that counts -- `svc_time` refuses a manual
+  sync within 60 s of the previous one (`sync skipped (manual)`), so a device
+  whose slot 0 still points at `time.google.com` (clean flash, factory reset)
+  would keep *real* time and never reach the scenario's start. Slot 0 is
+  persisted, so the second boot's automatic sync lands on the mock and the
+  device genuinely boots at `start_utc`. Boot 1's sync line is discarded; boot
+  2's is fed to the assertion engine (late, so it cannot satisfy a `sync`
+  expectation early), and the assertion clock starts from the epoch the mock
+  actually served, not from `start_utc`.
+- **Reference scenario (`scenarios/01_single_prayer_fire.py`):** boots at
+  11:49:30, asserts exactly one `Dhuhr adhan due` at 11:50:00 and zero Fajr
+  fires. Verified on hardware 2026-10-31 (three consecutive PASSes, identical
+  landing point and fire epoch, ~70 s wall clock).
+
 ---
 
 ## `svc_time` (implemented in PR 5b-2)

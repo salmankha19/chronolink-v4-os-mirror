@@ -6,6 +6,7 @@
 #include "svc_network.h"
 #include "svc_prayer_engine_service.h"
 #include "svc_timetable.h"
+#include "svc_time.h"   /* /debug/ntp test hook only; include is unconditional */
 #include "esp_system.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
@@ -775,13 +776,123 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#if defined(CONFIG_CHRONOLINK_TEST_HOOKS) || defined(CHRONOLINK_TEST_HOOKS)
+/* ------------------------------------------------------------------ */
+/* Test hooks -- compiled only in [env:single_mcu_test]               */
+/* ------------------------------------------------------------------ */
+
+/* svc_time's own limit is SVC_TIME_NTP_HOST_MAX (64) but that macro is
+ * private to svc_time.c; anything at or above 64 is rejected by
+ * svc_time_set_ntp_server() with ESP_ERR_INVALID_ARG, reported as a 500. */
+#define DEBUG_NTP_HOST_MAX   64
+#define DEBUG_NTP_QUERY_MAX  96
+
+/* GET /debug/ntp?host=<ip-or-hostname>
+ *
+ * Test-harness hook (test_harness/): point NTP slot 0 at the PC running the
+ * mock NTP server and force one sync, so a scenario can drag the device to an
+ * arbitrary date in seconds. The production env does not define
+ * -DCHRONOLINK_TEST_HOOKS=1, so neither this handler nor the "/debug/ntp"
+ * string exist in that image (verify with `strings ... | findstr debug/ntp`).
+ *
+ * Unauthenticated on purpose: the harness runs on a closed LAN. Never ship.
+ *
+ * AM7: svc_time_set_ntp_server() persists slot 0 to NVS. svc_time offers no
+ * transient setter, so the write is accepted; restore with
+ * `pio run -e single_mcu -t erase` or by pointing slot 0 back at a pool host
+ * through this same endpoint.
+ *
+ * AM8 / AM10: svc_time_sync_ntp_once() blocks in this task for up to
+ * SVC_TIME_SYNC_WAIT_MS (10 s). Clients must allow a timeout above that;
+ * device_controller.py uses 15 s.
+ */
+static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
+{
+    char query[DEBUG_NTP_QUERY_MAX];
+    char host[DEBUG_NTP_HOST_MAX];
+    char body[192];
+    time_t epoch = 0;
+    esp_err_t err;
+
+    err = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "debug/ntp: no query string: %s", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"missing_query\"}");
+        return ESP_OK;
+    }
+
+    err = httpd_query_key_value(query, "host", host, sizeof(host));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "debug/ntp: no host parameter: %s", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"missing_host\"}");
+        return ESP_OK;
+    }
+
+    /* httpd_query_key_value() does not URL-decode. The harness sends a plain
+     * host or dotted-quad address, so a '%' means the caller assumed
+     * decoding -- reject it instead of handing svc_time a mangled host. */
+    if (host[0] == '\0' || strchr(host, '%') != NULL) {
+        ESP_LOGW(TAG, "debug/ntp: rejected host '%.*s'", (int)sizeof(host), host);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"bad_host\"}");
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG, "debug/ntp: TEST HOOK -- NTP slot 0 -> '%s'", host);
+
+    err = svc_time_set_ntp_server(0, host);
+    if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
+        /* RAM slot 0 is live but the value will not survive a reboot. */
+        ESP_LOGE(TAG, "debug/ntp: NVS unavailable, '%s' not persisted", host);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"nvs_unavailable\"}");
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "debug/ntp: svc_time_set_ntp_server failed: %s",
+                 esp_err_to_name(err));
+        snprintf(body, sizeof(body),
+                 "{\"status\":\"error\",\"reason\":\"set_ntp_server_failed\",\"detail\":\"%s\"}",
+                 esp_err_to_name(err));
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    }
+
+    err = svc_time_sync_ntp_once();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "debug/ntp: svc_time_sync_ntp_once failed: %s",
+                 esp_err_to_name(err));
+        snprintf(body, sizeof(body),
+                 "{\"status\":\"error\",\"reason\":\"sync_failed\",\"detail\":\"%s\"}",
+                 esp_err_to_name(err));
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    }
+
+    (void)svc_time_get_epoch(&epoch);
+    ESP_LOGI(TAG, "debug/ntp: synced from '%s', epoch %lld", host, (long long)epoch);
+    snprintf(body, sizeof(body),
+             "{\"status\":\"ok\",\"host\":\"%s\",\"epoch\":%lld}",
+             host, (long long)epoch);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
+#endif /* CONFIG_CHRONOLINK_TEST_HOOKS || CHRONOLINK_TEST_HOOKS */
+
 esp_err_t svc_http_start(void)
 {
     if (s_server) return ESP_OK;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 14;
+    /* 13 production routes + the /debug/ntp test hook (test env only)
+     * + headroom. */
+    config.max_uri_handlers = 16;
     /* OTA handler calls esp_ota_* which needs more stack than a JSON
      * handler. 8192 is conservative; default 4096 has no margin for a
      * streaming upload with abort paths. */
@@ -807,6 +918,9 @@ esp_err_t svc_http_start(void)
         { .uri = "/api/timetable",            .method = HTTP_DELETE, .handler = delete_timetable_handler      },
         { .uri = "/api/timetable/regenerate", .method = HTTP_POST,   .handler = post_timetable_regen_handler  },
         { .uri = "/api/prayers",       .method = HTTP_GET,  .handler = get_prayers_handler        },
+#if defined(CONFIG_CHRONOLINK_TEST_HOOKS) || defined(CHRONOLINK_TEST_HOOKS)
+        { .uri = "/debug/ntp",   .method = HTTP_GET,  .handler = get_debug_ntp_handler },
+#endif
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {
         esp_err_t r = httpd_register_uri_handler(s_server, &handlers[i]);
