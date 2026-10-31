@@ -70,6 +70,29 @@ not.** Where another doc mentions a gap, this file has the detail.
   next prayer. Atomic write via `.tmp` + rename. Config-change warning:
   server returns 409 for partial user file unless client confirms.
 - **`svc_prayer_engine_service` (PR 15, extended PR 5.1a):** runtime service that reads `svc_config` (location, method, madhab, high-latitude rule, adhan offsets, zawal buffer) and `svc_time` (local date), calls `svc_prayer_engine_calculate()`, applies per-prayer adhan offsets (`adhan_offset_min[]`), computes zawal start (`dhuhr - zawal_buffer_min`), and publishes `EVENT_PRAYER_TIMES_UPDATED`. **PR 5.1a additions:** publishes a three-tier snapshot — `astronomical_*` (astronomical calculation + timezone, no user offsets), `*_sec` (adhan = astronomical + `adhan_offset_min[]`), `jamat_sec[]` (seasonal jamat, with per-prayer rounding) — plus auxiliary times (`sunrise_sec`, `sunset_sec`, `midnight_sec`, `zawal_start_sec`, `asr_yellow_sec`), Ramadan endpoints (`sehri_end_sec`, `iftar_sec`), and `jamat_tomorrow_sec[]` for the "tomorrow changes" notification. Consumers read finished values; no offset math in the UI. Public API: `svc_prayer_engine_service_start()`, `_recalculate()`, `_get_times()`. The event is a signal only (payload truncated to 32 bytes); consumers must call `_get_times()` for the full snapshot. Recalculation is triggered by `EVENT_TIME_UPDATE` (successful NTP sync) and by `EVENT_TIME_DATE_CHANGED` (local date or UTC offset change). (PR 17) Rolls over at midnight and at DST transitions: `svc_time` publishes `EVENT_TIME_DATE_CHANGED` when the local calendar date or the effective UTC offset changes; the service subscribes, recalculates, and self-heals within 60 s if the event is dropped. Timezone offset is taken at **noon of the target date** (not at call time), so a DST-transition day's prayer times all use the same offset. Design intent for the whole prayer-times model is in [prayer-times-model.md](prayer-times-model.md).
+- **`svc_scheduler` (PR 5.6):** prayer time scheduler. A 1 Hz task on core 0
+  (`scheduler`, `tskIDLE_PRIORITY + 2`, 4 KB stack) reads
+  `svc_time_get_epoch()` + `svc_prayer_engine_service_get_times()` and
+  publishes `EVENT_PRAYER_TIME_REACHED` (id 97; payload `prayer_time_event_t`
+  in `components/event_bus/include/time_events.h`) exactly once per prayer
+  per day, adhan tier only (`PRAYER_KIND_JAMAT` reserved). Subscribes to
+  `EVENT_TIME_DATE_CHANGED` (6) and `EVENT_PRAYER_TIMES_UPDATED` (96); both
+  re-fetch the times, clear `last_fired_epoch[]`, and pre-mark the prayers
+  that already passed without publishing. `svc_scheduler_init()` does the
+  same pre-marking at boot, so a 13:00 boot does not replay the 10:00 and
+  12:00 adhans. Decision logic is pure C (`scheduler_logic.c`: no ESP-IDF, no
+  FreeRTOS, no heap) and host-tested in
+  `prayer_host_tests/test_scheduler.cpp` -- part of `make test`: happy path,
+  DST fall-back / repeated local hour, mid-day startup, config reset, and the
+  `UINT32_MAX` / `valid == false` sentinels. **Invariant: epoch comparison
+  only -- no `(hour, minute)` equality anywhere**, so a repeated local hour or
+  an NTP step can neither double-fire nor skip a prayer. Out of scope in v1:
+  jamat firing, DS3231 INT wake (ROADMAP Phase 6), audio (Phase 3).
+  **Known limitation:** `tz_offset_minutes` is the offset at noon of the
+  target date, so on a spring-forward / fall-back day a prayer before the
+  transition can fire up to 1 h early / late (ROADMAP Phase 7). Fixing it
+  needs a per-prayer offset in `svc_prayer_engine_times_t`; it is not a
+  `svc_scheduler` bug and must not be worked around there.
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).
@@ -227,7 +250,7 @@ contract.
 | `audio_play_mp3` | always returns `false` |
 | ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
 | `src/app/*`, `src/svc/*` | empty placeholders; **not built** (`platformio.ini` sets `src_dir = main`) |
-| Scheduler, theme registry, web config | do not exist |
+| Theme registry, web config | do not exist (the prayer scheduler landed in PR 5.6 -- see above) |
 | SD card | pin defined, no driver |
 | Boot manifest, `hw_profile.json`, signature checks | not implemented |
 | OTA update service | only partition logging |
