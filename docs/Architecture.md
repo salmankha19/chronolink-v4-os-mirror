@@ -18,7 +18,7 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_timetable`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
 | 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/`, future `src/app/*` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
@@ -67,6 +67,8 @@ flowchart TB
         CFG[svc_config]
         SM[state_manager]
         TT[svc_timetable]
+        PES[svc_prayer_engine_service]
+        SCH[svc_scheduler]
         RB[remote_bridge]
     end
     subgraph KERN["Kernel (4)"]
@@ -92,6 +94,12 @@ flowchart TB
     TIME --> HILC
     TT --> CFG
     TT --> TIME
+    PES --> CFG
+    PES --> TIME
+    PES --> EB
+    SCH --> PES
+    SCH --> TIME
+    SCH --> EB
     TIME --> EB
     HILC --> HALC
     HILC --> FE
@@ -128,6 +136,15 @@ flowchart TB
 - `svc_prayer_engine_service_start()` calculates the initial times. If
   the timetable is stale or missing, it spawns a background `regen_task`
   (8 KB stack) to regenerate the 365-day file.
+- `svc_scheduler_init()` / `svc_scheduler_start()` run last (after
+  `svc_http_start()`). `init()` pre-marks the prayers that already passed
+  today, so a mid-day boot does not replay them; `start()` creates the
+  1 Hz poll task on core 0 and subscribes it to
+  `EVENT_TIME_DATE_CHANGED` and `EVENT_PRAYER_TIMES_UPDATED`. Each second
+  it compares `svc_time_get_epoch()` with today's adhan epochs and
+  publishes `EVENT_PRAYER_TIME_REACHED` once per prayer per day. Matching
+  is by epoch only, never by `(hour, minute)`, so DST fall-back and NTP
+  steps cannot double-fire. Details in `STATUS.md` (`svc_scheduler`).
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.

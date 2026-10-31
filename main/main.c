@@ -13,7 +13,8 @@
  *   7. svc_prayer_engine_service_start() — Prayer times + EVENT_PRAYER_TIMES_UPDATED
  *   8. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
  *   9. svc_http_start()     — HTTP server (REST + web UI + OTA)
- *  10. audio_test_init()    — Initialize audio (if enabled)
+ *  10. svc_scheduler_init/start() — 1 Hz prayer poll, EVENT_PRAYER_TIME_REACHED
+ *  11. audio_test_init()    — Initialize audio (if enabled)
  *
  * Copyright (c) 2026 ChronoLink Project
  */
@@ -28,6 +29,7 @@
 #include "svc_config.h"
 #include "svc_prayer_engine_service.h"
 #include "svc_timetable.h"
+#include "svc_scheduler.h"
 #include "svc_http.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
@@ -106,6 +108,20 @@ void app_main(void)
     esp_err_t http_err = svc_http_start();
     if (http_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_http_start failed: %s", esp_err_to_name(http_err));
+    }
+
+    /* Prayer scheduler (PR 5.6). Runs after the prayer service so the first
+       get_times() has a chance to succeed; it is non-fatal either way --
+       until location and a trusted time exist the state stays empty and the
+       1 Hz poll fills it in later. init() marks the prayers that already
+       passed today, so a mid-day boot does not replay them. */
+    esp_err_t sched_err = svc_scheduler_init();
+    if (sched_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_scheduler_init failed: %s", esp_err_to_name(sched_err));
+    }
+    sched_err = svc_scheduler_start();
+    if (sched_err != ESP_OK) {
+        ESP_LOGW(TAG, "svc_scheduler_start failed: %s", esp_err_to_name(sched_err));
     }
 
     ESP_LOGI(TAG, "ChronoLink initialized successfully");

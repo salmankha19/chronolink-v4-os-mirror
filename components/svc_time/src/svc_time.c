@@ -1169,6 +1169,38 @@ esp_err_t svc_time_get_utc(rtc_time_t *out)
     return get_time_field(out, true);
 }
 
+esp_err_t svc_time_get_epoch(time_t *out)
+{
+    rtc_time_t utc = {0};
+    time_t epoch = 0;
+    bool valid;
+
+    if (!out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!state_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    valid = s_snapshot.valid;
+    if (valid) {
+        utc = s_snapshot.utc;
+    }
+    state_unlock();
+
+    if (!valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    /* The RTC holds UTC, so the conversion needs no zone rule at all. */
+    if (!utc_to_epoch(&utc, &epoch)) {
+        return ESP_FAIL;
+    }
+    *out = epoch;
+    return ESP_OK;
+}
+
 bool svc_time_is_trustworthy(void)
 {
     bool trustworthy = false;

@@ -43,6 +43,10 @@ typedef enum {
     /* Prayer engine events (svc_prayer_engine_service). 96..111 is the
        prayer / audio scheduling band. */
     EVENT_PRAYER_TIMES_UPDATED = 96,
+    /* Published by svc_scheduler when a prayer time is reached exactly once
+       per prayer per day (epoch guard, see scheduler_logic.c). Payload:
+       prayer_time_event_t in time_events.h. */
+    EVENT_PRAYER_TIME_REACHED  = 97,
 } event_type_t;
 
 typedef struct {

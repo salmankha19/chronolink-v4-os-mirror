@@ -38,6 +38,10 @@ Flash (0) → PDL (1) → HAL (2) → HIL (3) → Kernel (4) → Services (5) �
   If a build-time option is needed, use a real Kconfig entry.
 - Every `hal_status_t` / `bool` return must be checked.
 - Stubs must return an error (`HAL_ERR_DEV` or `false`), never success.
+- Prayer-time matching is **epoch comparison only**. Never compare
+  `(hour, minute)`: a repeated local hour (DST fall-back) makes it
+  double-fire, and an NTP step makes it skip. See
+  `components/svc_scheduler/src/scheduler_logic.c`.
 - Use valid ESP-IDF 6 component names in `REQUIRES` (`log`, not `esp_log`).
 - Do not add new Kconfig entries for a pin that already has one. See
   "Pin sources" below.
@@ -158,6 +162,12 @@ Recent merged work (kept here so you do not re-litigate it):
 - PR 5.5b: RTC Trust UX — `rtc_untrusted` flag blocks publishing prayer
   times if OSF is set or year < build year. UI displays `Starting...`,
   `--:--`, and a 60s red warning banner. `DM_MAX_TEXT_LEN` bumped to 32.
+- PR 5.6: `svc_scheduler` — 1 Hz epoch poll publishes
+  `EVENT_PRAYER_TIME_REACHED` (id 97) once per prayer per day, adhan tier
+  only. Pure decision logic (`scheduler_logic.c`) with host tests
+  (`prayer_host_tests/test_scheduler.cpp`). `svc_time_get_epoch()` added.
+  Known limitation: noon-offset approximation on DST-transition days
+  (ROADMAP Phase 7).
 
 Prayer times domain model: `docs/prayer-times-model.md`. Read it before
 any change touching `svc_prayer_engine`, `svc_prayer_engine_service`,

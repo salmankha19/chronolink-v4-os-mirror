@@ -27,10 +27,12 @@ dependency, not by promise of a date.
 Components that exist today: `boot_manager`, `core_os`, `event_bus`,
 `chronolink_hal`, `hil`, `chronolink_driver_sdk`, `state_manager`,
 `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`,
-`svc_prayer_engine_service`, `svc_timetable`, `svc_http`,
-`remote_bridge`, `display_manager`, `ui_producer`, `font_engine`,
-`font`, `audio_test`. Phases 2 and 4 are substantially complete; Phase 3
-(adhan playback), Phase 5 (OTA pull-based) and Phase 6 (polish) remain.
+`svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`,
+`svc_http`, `remote_bridge`, `display_manager`, `ui_producer`,
+`font_engine`, `font`, `audio_test`. Phase 2 (prayer engine + scheduler)
+and Phase 4 are complete; Phase 3 (adhan playback), Phase 5 (OTA
+pull-based) and Phase 8 (polish) remain, with Phase 6 (DS3231 INT wake)
+and Phase 7 (per-prayer DST offset) listed as follow-ups.
 
 ---
 
@@ -69,6 +71,12 @@ location and method, and does something at each.
 - `svc_scheduler` (new component): fires events at prayer times, sunrise
   and sunset, and day rollover. *(Partially superseded by `svc_timetable`,
   which now generates the full year schedule ahead of time.)*
+  **Done in PR 5.6** for the prayer times: a 1 Hz epoch poll publishes
+  `EVENT_PRAYER_TIME_REACHED` once per prayer per day (adhan tier only --
+  `PRAYER_KIND_JAMAT` is reserved). Sunrise / sunset / day rollover stay
+  with `svc_time` + `svc_prayer_engine_service`. The decision logic is
+  pure C (`scheduler_logic.c`) and unit-tested on the host in
+  `prayer_host_tests/test_scheduler.cpp`.
 - `svc_config` (new component): NVS-backed settings -- location, method,
   madhab, iqamah offsets, adhan mode, display preferences. *(Landed as PR 12;
   the schema is in `components/svc_config/include/svc_config.h`.)*
@@ -129,7 +137,38 @@ Goal: firmware updates over the network.
 
 ---
 
-## Phase 6 — Polish
+## Phase 6 — RTC alarm wake (follow-up)
+
+Goal: stop waking the CPU every second just to compare a clock.
+
+- Drive `svc_scheduler` from the DS3231 INT / SQW output (alarm 1 + alarm 2)
+  instead of the 1 Hz poll, waking the SoC only for the next prayer instant.
+  No correctness change is needed for the switch-over: matching is by epoch
+  and `last_fired_epoch[]` only moves forward, so a late or missed wake
+  fires the prayer on the next tick instead of skipping it.
+- Prerequisite: `hal_rtc.h` exposes no alarm API today. Adding one is a HAL
+  (and then HIL) change before `svc_scheduler` can use it.
+
+---
+
+## Phase 7 — Per-prayer DST offset (follow-up)
+
+Goal: remove the known one-hour error on DST-transition days.
+
+- `svc_scheduler` converts (local date, local seconds,
+  `tz_offset_minutes`) to UTC with one offset -- the offset at **noon** of
+  the target date, as published by `svc_prayer_engine_service`. On a
+  spring-forward / fall-back day a prayer that falls *before* the
+  transition therefore fires up to 1 h late / early. It can never
+  double-fire (epoch comparison, never `(hour, minute)`).
+- The fix belongs in `svc_prayer_engine_times_t`: carry a per-prayer offset,
+  or the UTC instant of each prayer, so consumers do not have to
+  reconstruct the transition themselves. `docs/prayer-times-model.md` is the
+  domain source of truth and must be updated before the change.
+
+---
+
+## Phase 8 — Polish
 
 Not scheduled; listed for completeness.
 
@@ -142,6 +181,12 @@ Not scheduled; listed for completeness.
   layer above).
 - HIL graphics adapter, so the application band stops calling `hal_gfx`
   directly (Constitution §11).
+- Deferred `src/` cleanup: `src/svc/svc_scheduler.c` (a 7-line
+  placeholder that no build ever referenced) was deleted in the
+  scheduler PR (5.6). The rest of `src/app/*` and `src/svc/*` are empty
+  placeholders that are not built (`platformio.ini` sets
+  `src_dir = main`); removing the directory itself needs a separate
+  change because `src/CMakeLists.txt` still globs it.
 - CI hardening: bump `actions/*` to v5, pin `ubuntu-24.04`.
 
 ---
