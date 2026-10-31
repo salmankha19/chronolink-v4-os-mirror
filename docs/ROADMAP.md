@@ -142,6 +142,12 @@ Not scheduled; listed for completeness.
   layer above).
 - HIL graphics adapter, so the application band stops calling `hal_gfx`
   directly (Constitution §11).
+- Deferred `src/` cleanup: `src/svc/svc_scheduler.c` (a 7-line
+  placeholder that no build ever referenced) was deleted in the
+  scheduler PR (5.6). The rest of `src/app/*` and `src/svc/*` are empty
+  placeholders that are not built (`platformio.ini` sets
+  `src_dir = main`); removing the directory itself needs a separate
+  change because `src/CMakeLists.txt` still globs it.
 - CI hardening: bump `actions/*` to v5, pin `ubuntu-24.04`.
 
 ---
