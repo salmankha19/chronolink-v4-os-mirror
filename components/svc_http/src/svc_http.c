@@ -8,6 +8,7 @@
 #include "svc_timetable.h"
 #include "svc_time.h"   /* /debug/ntp test hook only; include is unconditional */
 #include "esp_system.h"
+#include "esp_random.h"
 #include "nvs.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -30,6 +31,13 @@
 
 #define OTA_CHUNK_SIZE 4096
 
+/* Streaming read timeouts. Each `httpd_req_recv` blocks for the server's
+   configured recv timeout (default 5 s) before returning
+   HTTPD_SOCK_ERR_TIMEOUT. Fail after N consecutive timeouts. Chosen so a
+   transient 5 s stall is tolerated but a dead client is not. */
+#define UPLOAD_MAX_CONSECUTIVE_TIMEOUTS  2   /* ~10 s at 5 s per recv */
+#define OTA_MAX_CONSECUTIVE_TIMEOUTS     6   /* ~30 s at 5 s per recv */
+
 extern const unsigned char index_html[];
 extern const size_t index_html_len;
 #include <string.h>
@@ -39,6 +47,124 @@ extern const size_t index_html_len;
 
 static const char *TAG = "svc_http";
 static httpd_handle_t s_server = NULL;
+
+/* -------------------------------------------------------------------------
+ * CSRF defence for state-changing endpoints.
+ *
+ * A browser page on the same WiFi can issue cross-origin POSTs to the
+ * device: the same-origin policy does not block <form> submissions or
+ * simple fetch() calls without a custom header. Requiring a custom header
+ * forces a CORS preflight for any cross-origin request; the device never
+ * approves a preflight, so the browser drops the request before it reaches
+ * us. Requests that carry the header must also prove knowledge of the
+ * device token, which is stored in NVS, printed once to serial at first
+ * boot, and pasted into the web UI by the installer.
+ *
+ * The token protects against CSRF, not against an attacker with physical
+ * access to the device or serial console. That threat model is out of
+ * scope.
+ * ------------------------------------------------------------------------- */
+
+#define NVS_NAMESPACE_SVC_HTTP  "svc_http"
+#define NVS_KEY_API_TOKEN       "api_token"
+#define API_TOKEN_HEX_LEN       64
+#define AUTH_HEADER             "X-Chronolink-Auth"
+#define AUTH_SCHEME             "Bearer "
+
+static char s_api_token[API_TOKEN_HEX_LEN + 1];
+
+static esp_err_t load_or_generate_api_token(void)
+{
+    nvs_handle_t h = 0;
+    esp_err_t err = nvs_open(NVS_NAMESPACE_SVC_HTTP, NVS_READWRITE, &h);
+    bool nvs_open_failed = (err != ESP_OK);
+    if (nvs_open_failed) {
+        ESP_LOGE(TAG, "nvs_open('%s') failed: %s -- generating ephemeral token",
+                 NVS_NAMESPACE_SVC_HTTP, esp_err_to_name(err));
+    } else {
+        size_t len = sizeof(s_api_token);
+        esp_err_t rd_err = nvs_get_str(h, NVS_KEY_API_TOKEN, s_api_token, &len);
+        if (rd_err == ESP_OK && len == API_TOKEN_HEX_LEN + 1) {
+            nvs_close(h);
+            ESP_LOGI(TAG, "API token loaded from NVS");
+            return ESP_OK;
+        }
+    }
+
+    uint8_t raw[32];
+    esp_fill_random(raw, sizeof(raw));
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(raw); i++) {
+        s_api_token[2 * i]     = hex[raw[i] >> 4];
+        s_api_token[2 * i + 1] = hex[raw[i] & 0x0F];
+    }
+    s_api_token[API_TOKEN_HEX_LEN] = '\0';
+
+    bool persisted = false;
+    if (!nvs_open_failed) {
+        esp_err_t w_err = nvs_set_str(h, NVS_KEY_API_TOKEN, s_api_token);
+        if (w_err == ESP_OK) w_err = nvs_commit(h);
+        nvs_close(h);
+        if (w_err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to persist API token: %s",
+                     esp_err_to_name(w_err));
+        } else {
+            persisted = true;
+        }
+    }
+
+    ESP_LOGW(TAG, "=====================================================");
+    ESP_LOGW(TAG, " Generated API token (store this, it is shown once):");
+    ESP_LOGW(TAG, "   %s", s_api_token);
+    ESP_LOGW(TAG, " Paste it into the Setup Authentication field.");
+    if (!persisted) {
+        ESP_LOGW(TAG, " *** TOKEN IS EPHEMERAL -- will change on reboot ***");
+        ESP_LOGW(TAG, " *** NVS unavailable: config changes cannot be saved  ***");
+    }
+    ESP_LOGW(TAG, "=====================================================");
+    return ESP_OK;
+}
+
+/* Constant-time compare. Avoids early exit on the first differing byte. */
+static bool ct_str_eq(const char *a, const char *b, size_t len)
+{
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < len; i++) {
+        diff |= (uint8_t)a[i] ^ (uint8_t)b[i];
+    }
+    return diff == 0;
+}
+
+/* Returns true on success. On failure sends a 403 JSON response and returns
+   false; the caller must `return ESP_FAIL;` immediately. */
+static bool require_auth(httpd_req_t *req)
+{
+    char hdr[128];
+    if (httpd_req_get_hdr_value_str(req, AUTH_HEADER, hdr, sizeof(hdr)) != ESP_OK) {
+        ESP_LOGW(TAG, "%s: missing %s header", req->uri, AUTH_HEADER);
+        goto deny;
+    }
+
+    const size_t scheme_len = sizeof(AUTH_SCHEME) - 1;
+    if (strlen(hdr) != scheme_len + API_TOKEN_HEX_LEN ||
+        strncmp(hdr, AUTH_SCHEME, scheme_len) != 0) {
+        ESP_LOGW(TAG, "%s: malformed %s header", req->uri, AUTH_HEADER);
+        goto deny;
+    }
+
+    if (!ct_str_eq(hdr + scheme_len, s_api_token, API_TOKEN_HEX_LEN)) {
+        ESP_LOGW(TAG, "%s: wrong token", req->uri);
+        goto deny;
+    }
+
+    return true;
+
+deny:
+    httpd_resp_set_status(req, "403 Forbidden");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"error\":\"forbidden\"}");
+    return false;
+}
 
 /* One-shot boot request written by POST /api/factory-reset and read by
  * boot_manager_init() on the next boot. MUST stay in sync with
@@ -86,6 +212,28 @@ static char *read_body(httpd_req_t *req, size_t max_len, int *out_len)
     buf[total_len] = '\0';
     if (out_len) *out_len = total_len;
     return buf;
+}
+
+/* Returns true and writes *out when `item` is a JSON number whose value is
+   integral (no fractional part) and within [min, max]. Returns false for
+   non-number items, non-integral values (1.5), NaN, or out-of-range values.
+   The caller distinguishes "field absent" from "field invalid" by checking
+   the item pointer itself before calling this.
+
+   Why: casting `item->valueint` (or `(uint8_t)item->valueint`) before any
+   range check lets `{"high_lat_rule": 257}` silently become 1 via uint8_t
+   truncation, and lets `{"jamat": [{"round_min": 258}]}` pass a "must be in
+   {0,2,5,10,15,20,30}" check. Same for `zawal_buffer_min` and jamat
+   offsets: 65546 wraps to 10, 65536+N wraps to N. This helper is the single
+   place that validates integral + range before any int cast. */
+static bool json_get_uint_range(const cJSON *item, double min, double max, double *out)
+{
+    if (!cJSON_IsNumber(item)) return false;
+    double v = item->valuedouble;
+    if (!(v >= min && v <= max)) return false;   /* NaN-safe */
+    if (v != (double)(int)v) return false;       /* reject 1.5, 1.9, ... */
+    *out = v;
+    return true;
 }
 
 /* GET / (Serve HTML) */
@@ -153,6 +301,8 @@ static esp_err_t get_config_handler(httpd_req_t *req)
 /* POST /api/config */
 static esp_err_t post_config_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     /* If a partial user timetable is present, require explicit confirm. */
     svc_timetable_metadata_t _meta = {0};
     if (svc_timetable_get_metadata(&_meta) == ESP_OK
@@ -190,6 +340,22 @@ static esp_err_t post_config_handler(httpd_req_t *req)
         } \
     } while (0)
 
+    /* Fetch a field, validate integral + range, apply. Absent field is a
+       no-op. Present-but-invalid sets first_err and logs, matching APPLY. */
+    #define APPLY_NUM(field, min, max, apply_expr) do { \
+        cJSON *_it = cJSON_GetObjectItem(root, field); \
+        if (_it) { \
+            double v; \
+            if (json_get_uint_range(_it, (min), (max), &v)) { \
+                APPLY(apply_expr); \
+            } else { \
+                ESP_LOGW(TAG, "rejected %s: not integral in [%g,%g]", \
+                         field, (double)(min), (double)(max)); \
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG; \
+            } \
+        } \
+    } while (0)
+
     /* Strings */
     cJSON *loc_name = cJSON_GetObjectItem(root, "location_name");
     if (cJSON_IsString(loc_name)) {
@@ -203,41 +369,40 @@ static esp_err_t post_config_handler(httpd_req_t *req)
         APPLY(svc_config_set_location(lat->valuedouble, lon->valuedouble));
     }
 
-    /* Enums */
-    cJSON *method = cJSON_GetObjectItem(root, "method");
-    if (cJSON_IsNumber(method)) {
-        APPLY(svc_config_set_method((svc_config_method_t)method->valueint));
-    }
-    cJSON *madhab = cJSON_GetObjectItem(root, "madhab");
-    if (cJSON_IsNumber(madhab)) {
-        APPLY(svc_config_set_madhab((svc_config_madhab_t)madhab->valueint));
-    }
-    cJSON *c_fajr = cJSON_GetObjectItem(root, "custom_fajr_angle");
-    cJSON *c_isha = cJSON_GetObjectItem(root, "custom_isha_angle");
-    if (cJSON_IsNumber(c_fajr) && cJSON_IsNumber(c_isha)) {
-        APPLY(svc_config_set_custom_angles(c_fajr->valuedouble, c_isha->valuedouble));
+    /* Enums. Integral-and-range before any enum cast, so 1.5 and 999 are
+       rejected instead of silently becoming 1 and 7. */
+    APPLY_NUM("method", 0, (double)(SVC_CONFIG_METHOD_COUNT - 1),
+              svc_config_set_method((svc_config_method_t)v));
+    APPLY_NUM("madhab", 0, (double)(SVC_CONFIG_MADHAB_COUNT - 1),
+              svc_config_set_madhab((svc_config_madhab_t)v));
+    APPLY_NUM("adhan_mode", 0, (double)(SVC_CONFIG_ADHAN_MODE_COUNT - 1),
+              svc_config_set_adhan_mode((svc_config_adhan_mode_t)v));
+
+    /* Custom angles are doubles in [0, 30]; no int cast, so the shared
+       helper does not apply. Both must be present and in range together. */
+    {
+        cJSON *c_fajr = cJSON_GetObjectItem(root, "custom_fajr_angle");
+        cJSON *c_isha = cJSON_GetObjectItem(root, "custom_isha_angle");
+        if (cJSON_IsNumber(c_fajr) && cJSON_IsNumber(c_isha)) {
+            double fj = c_fajr->valuedouble;
+            double is = c_isha->valuedouble;
+            if (fj >= 0.0 && fj <= 30.0 && is >= 0.0 && is <= 30.0) {
+                APPLY(svc_config_set_custom_angles(fj, is));
+            } else {
+                ESP_LOGW(TAG, "rejected custom angles: out of [0,30]");
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+            }
+        }
     }
 
-    cJSON *hl = cJSON_GetObjectItem(root, "high_lat_rule");
-    if (cJSON_IsNumber(hl)) {
-        APPLY(svc_config_set_high_lat_rule((uint8_t)hl->valueint));
-    }
-    cJSON *zawal = cJSON_GetObjectItem(root, "zawal_buffer_min");
-    if (cJSON_IsNumber(zawal)) {
-        APPLY(svc_config_set_zawal_buffer((uint16_t)zawal->valueint));
-    }
-    cJSON *adhan_mode = cJSON_GetObjectItem(root, "adhan_mode");
-    if (cJSON_IsNumber(adhan_mode)) {
-        APPLY(svc_config_set_adhan_mode((svc_config_adhan_mode_t)adhan_mode->valueint));
-    }
-    cJSON *adhan_vol = cJSON_GetObjectItem(root, "adhan_volume");
-    if (cJSON_IsNumber(adhan_vol)) {
-        APPLY(svc_config_set_adhan_volume((uint8_t)adhan_vol->valueint));
-    }
-    cJSON *brightness = cJSON_GetObjectItem(root, "brightness_mode");
-    if (cJSON_IsNumber(brightness)) {
-        APPLY(svc_config_set_brightness_mode((uint8_t)brightness->valueint));
-    }
+    APPLY_NUM("high_lat_rule", 0, 4,
+              svc_config_set_high_lat_rule((uint8_t)v));
+    APPLY_NUM("zawal_buffer_min", 0, 30,
+              svc_config_set_zawal_buffer((uint16_t)v));
+    APPLY_NUM("adhan_volume", 0, 100,
+              svc_config_set_adhan_volume((uint8_t)v));
+    APPLY_NUM("brightness_mode", 0, 2,
+              svc_config_set_brightness_mode((uint8_t)v));
 
     /* Bools */
     cJSON *auto_bright = cJSON_GetObjectItem(root, "auto_brightness");
@@ -249,22 +414,37 @@ static esp_err_t post_config_handler(httpd_req_t *req)
         APPLY(svc_config_set_night_lamp(cJSON_IsTrue(night_lamp)));
     }
 
-    /* Arrays — each element must be checked before use */
+    /* Arrays — each element is integral-and-range checked before the cast,
+       so a wrap like 65536+N -> N is rejected. The setter's own range
+       check (0..1440 iqamah, 0..60 adhan) still runs; the helper rejects
+       anything the uint16_t cast would have silently mangled. */
     cJSON *iqamah = cJSON_GetObjectItem(root, "iqamah_offsets");
     if (cJSON_IsArray(iqamah)) {
-        for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT && i < cJSON_GetArraySize(iqamah); i++) {
+        int n = cJSON_GetArraySize(iqamah);
+        for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT && i < n; i++) {
             cJSON *item = cJSON_GetArrayItem(iqamah, i);
-            if (cJSON_IsNumber(item)) {
-                APPLY(svc_config_set_iqamah_offset((svc_config_prayer_t)i, (uint16_t)item->valueint));
+            if (!item) continue;
+            double v;
+            if (json_get_uint_range(item, 0, 1440, &v)) {
+                APPLY(svc_config_set_iqamah_offset((svc_config_prayer_t)i, (uint16_t)v));
+            } else {
+                ESP_LOGW(TAG, "rejected iqamah_offsets[%d]: not integral in [0,1440]", i);
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
             }
         }
     }
     cJSON *adhan_off = cJSON_GetObjectItem(root, "adhan_offsets");
     if (cJSON_IsArray(adhan_off)) {
-        for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT && i < cJSON_GetArraySize(adhan_off); i++) {
+        int n = cJSON_GetArraySize(adhan_off);
+        for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT && i < n; i++) {
             cJSON *item = cJSON_GetArrayItem(adhan_off, i);
-            if (cJSON_IsNumber(item)) {
-                APPLY(svc_config_set_adhan_offset((svc_config_prayer_t)i, (uint16_t)item->valueint));
+            if (!item) continue;
+            double v;
+            if (json_get_uint_range(item, 0, 60, &v)) {
+                APPLY(svc_config_set_adhan_offset((svc_config_prayer_t)i, (uint16_t)v));
+            } else {
+                ESP_LOGW(TAG, "rejected adhan_offsets[%d]: not integral in [0,60]", i);
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
             }
         }
     }
@@ -287,22 +467,44 @@ static esp_err_t post_config_handler(httpd_req_t *req)
             cJSON *s_offset = cJSON_GetObjectItem(j, "summer_offset");
             cJSON *round_m  = cJSON_GetObjectItem(j, "round_min");
 
-            if (cJSON_IsNumber(w_anchor) && cJSON_IsNumber(w_offset)) {
+            double av, ov;
+            if (w_anchor && w_offset
+                && json_get_uint_range(w_anchor, 0,
+                                       (double)(SVC_CONFIG_JAMAT_ANCHOR_COUNT - 1), &av)
+                && json_get_uint_range(w_offset, 0, 1440, &ov)) {
                 APPLY(svc_config_set_jamat_season(
                     (svc_config_prayer_t)i, 0,
-                    (svc_config_jamat_anchor_t)w_anchor->valueint,
-                    (uint16_t)w_offset->valueint));
+                    (svc_config_jamat_anchor_t)(int)av,
+                    (uint16_t)ov));
+            } else if (w_anchor || w_offset) {
+                ESP_LOGW(TAG, "rejected jamat[%d].winter_*: not integral or out of range", i);
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
             }
-            if (cJSON_IsNumber(s_anchor) && cJSON_IsNumber(s_offset)) {
+
+            if (s_anchor && s_offset
+                && json_get_uint_range(s_anchor, 0,
+                                       (double)(SVC_CONFIG_JAMAT_ANCHOR_COUNT - 1), &av)
+                && json_get_uint_range(s_offset, 0, 1440, &ov)) {
                 APPLY(svc_config_set_jamat_season(
                     (svc_config_prayer_t)i, 1,
-                    (svc_config_jamat_anchor_t)s_anchor->valueint,
-                    (uint16_t)s_offset->valueint));
+                    (svc_config_jamat_anchor_t)(int)av,
+                    (uint16_t)ov));
+            } else if (s_anchor || s_offset) {
+                ESP_LOGW(TAG, "rejected jamat[%d].summer_*: not integral or out of range", i);
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
             }
-            if (cJSON_IsNumber(round_m)) {
-                APPLY(svc_config_set_jamat_round(
-                    (svc_config_prayer_t)i,
-                    (uint8_t)round_m->valueint));
+
+            if (round_m) {
+                double rv;
+                if (json_get_uint_range(round_m, 0, 30, &rv)) {
+                    /* The setter rejects values not in {0,2,5,10,15,20,30};
+                       it is the authoritative validity check for round_min. */
+                    APPLY(svc_config_set_jamat_round(
+                        (svc_config_prayer_t)i, (uint8_t)rv));
+                } else {
+                    ESP_LOGW(TAG, "rejected jamat[%d].round_min: not integral in [0,30]", i);
+                    if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+                }
             }
         }
     }
@@ -314,15 +516,23 @@ static esp_err_t post_config_handler(httpd_req_t *req)
         cJSON *sd = cJSON_GetObjectItem(season_obj, "summer_start_day");
         cJSON *wm = cJSON_GetObjectItem(season_obj, "winter_start_month");
         cJSON *wd = cJSON_GetObjectItem(season_obj, "winter_start_day");
-        if (cJSON_IsNumber(sm) && cJSON_IsNumber(sd) &&
-            cJSON_IsNumber(wm) && cJSON_IsNumber(wd)) {
+        double smv, sdv, wmv, wdv;
+        if (sm && sd && wm && wd
+            && json_get_uint_range(sm, 1, 12, &smv)
+            && json_get_uint_range(sd, 1, 31, &sdv)
+            && json_get_uint_range(wm, 1, 12, &wmv)
+            && json_get_uint_range(wd, 1, 31, &wdv)) {
             APPLY(svc_config_set_season(
-                (uint8_t)sm->valueint, (uint8_t)sd->valueint,
-                (uint8_t)wm->valueint, (uint8_t)wd->valueint));
+                (uint8_t)smv, (uint8_t)sdv,
+                (uint8_t)wmv, (uint8_t)wdv));
+        } else if (sm || sd || wm || wd) {
+            ESP_LOGW(TAG, "rejected season: not integral or out of [1,12]/[1,31]");
+            if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
         }
     }
 
     cJSON_Delete(root);
+    #undef APPLY_NUM
     #undef APPLY
 
     if (first_err == ESP_OK) {
@@ -338,6 +548,8 @@ static esp_err_t post_config_handler(httpd_req_t *req)
 /* POST /api/wifi */
 static esp_err_t post_wifi_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     char *buf = read_body(req, 256, NULL);
     if (!buf) return ESP_FAIL;
 
@@ -367,6 +579,8 @@ static esp_err_t post_wifi_handler(httpd_req_t *req)
 /* POST /api/reboot */
 static esp_err_t post_reboot_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     ESP_LOGW(TAG, "Reboot requested via API");
     vTaskDelay(pdMS_TO_TICKS(500)); // Give time for HTTP response to send
@@ -381,12 +595,16 @@ static esp_err_t post_reboot_handler(httpd_req_t *req)
  * next boot, where all the provisioning code lives. That keeps the reset
  * logic in one place and avoids svc_http duplicating HAL/filesystem work.
  *
- * SECURITY NOTE: like /api/reboot, this endpoint has no authentication.
- * In AP mode the network is open and the device is reachable by anyone
- * on the setup SSID. That is consistent with /api/wifi and /api/config
- * today; a token-based auth scheme is a future PR, not this one. */
+ * SECURITY: like /api/reboot and every other state-changing endpoint,
+ * this handler calls require_auth() first, so a request needs
+ * X-Chronolink-Auth: Bearer <device token>. That closes the CSRF path
+ * from a browser page on the same WiFi. The AP setup network itself
+ * remains open, so first-boot provisioning still works; the installer
+ * pastes the token from the serial console once. */
 static esp_err_t post_factory_reset_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NAMESPACE_BOOT_REQUEST, NVS_READWRITE, &h);
     if (err != ESP_OK) {
@@ -422,11 +640,18 @@ static esp_err_t post_factory_reset_handler(httpd_req_t *req)
  * any failure calls esp_ota_abort() and leaves the running image
  * untouched.
  *
- * Security: requires the X-OTA-Token header to match OTA_SHARED_TOKEN
- * (compile-time). This removes the drive-by-flashing risk from the open
- * AP setup network. The token is visible to anyone who can read the
- * firmware binary -- acceptable for a home device; a stronger scheme
- * (per-device NVS token) is a future PR.
+ * Security: two checks, in order.
+ *
+ *   1. require_auth() demands X-Chronolink-Auth: Bearer <device token>.
+ *      The device token lives in NVS, is printed once at first boot, and
+ *      is NOT visible in the firmware binary. This closes the CSRF path
+ *      from any browser on the same WiFi.
+ *   2. X-OTA-Token must match the compile-time OTA_SHARED_TOKEN. That
+ *      shared secret is visible in the binary, so it is defence in depth
+ *      behind the device token, not the primary gate.
+ *
+ * Step 0 additionally refuses OTA entirely while OTA_SHARED_TOKEN is
+ * still the shipped default ("change-me-before-flashing").
  *
  * Rollback safety: relies on PR 4.6. If the new image crashes before
  * boot_manager_init() reaches esp_ota_mark_app_valid_cancel_rollback(),
@@ -434,6 +659,21 @@ static esp_err_t post_factory_reset_handler(httpd_req_t *req)
  * build-time #error in this file guarantees that. */
 static esp_err_t post_ota_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
+    /* 0. Refuse OTA entirely while the shared token is still the shipped
+       default. The compile-time default is in the public source tree, so it
+       offers no protection; enabling OTA on a default token would let any
+       LAN client flash arbitrary firmware. The installer must set a real
+       token via -DOTA_SHARED_TOKEN=... at build time. */
+    if (strcmp(OTA_SHARED_TOKEN, "change-me-before-flashing") == 0) {
+        httpd_resp_set_status(req, "403 Forbidden");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"error\":\"ota_disabled\"}");
+        ESP_LOGW(TAG, "OTA rejected: shared token still set to default");
+        return ESP_FAIL;
+    }
+
     /* 1. Token check (constant-time-ish strcmp; fine for this threat model) */
     char token_buf[64];
     if (httpd_req_get_hdr_value_str(req, "X-OTA-Token", token_buf, sizeof(token_buf)) != ESP_OK
@@ -482,15 +722,28 @@ static esp_err_t post_ota_handler(httpd_req_t *req)
     int total_written = 0;
     err = ESP_OK;
 
+    int consecutive_timeouts = 0;
     while (remaining > 0) {
         int to_recv = (remaining < OTA_CHUNK_SIZE) ? remaining : OTA_CHUNK_SIZE;
         int received = httpd_req_recv(req, buf, to_recv);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-            /* Not fatal: the client is slow, try again. */
+            if (++consecutive_timeouts >= OTA_MAX_CONSECUTIVE_TIMEOUTS) {
+                ESP_LOGW(TAG, "OTA aborted: client stalled for %d consecutive recvs",
+                         consecutive_timeouts);
+                err = ESP_ERR_TIMEOUT;
+                break;
+            }
             continue;
         }
+        consecutive_timeouts = 0;
         if (received < 0) {
             ESP_LOGE(TAG, "httpd_req_recv failed: %d", received);
+            err = ESP_FAIL;
+            break;
+        }
+        if (received == 0) {
+            ESP_LOGE(TAG, "OTA: peer closed early at %d/%d bytes",
+                     total_written, (int)req->content_len);
             err = ESP_FAIL;
             break;
         }
@@ -511,7 +764,13 @@ static esp_err_t post_ota_handler(httpd_req_t *req)
 
     if (err != ESP_OK || remaining != 0) {
         esp_ota_abort(handle);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
+        if (err == ESP_ERR_TIMEOUT) {
+            httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT,
+                                "OTA upload timed out");
+        } else {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                "Upload failed");
+        }
         return ESP_FAIL;
     }
 
@@ -638,6 +897,8 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
  * Applies the preset then triggers an immediate recalculation. */
 static esp_err_t post_preset_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     svc_timetable_metadata_t _meta = {0};
     if (svc_timetable_get_metadata(&_meta) == ESP_OK
         && _meta.file_present
@@ -703,6 +964,8 @@ static esp_err_t get_timetable_handler(httpd_req_t *req)
 /* POST /api/timetable/regenerate */
 static esp_err_t post_timetable_regen_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     esp_err_t err = svc_timetable_generate_full_year();
     if (err == ESP_OK) {
         svc_prayer_engine_service_recalculate();
@@ -717,6 +980,8 @@ static esp_err_t post_timetable_regen_handler(httpd_req_t *req)
 /* DELETE /api/timetable */
 static esp_err_t delete_timetable_handler(httpd_req_t *req)
 {
+    if (!require_auth(req)) return ESP_FAIL;
+
     esp_err_t err = svc_timetable_delete();
     if (err == ESP_OK) {
         svc_prayer_engine_service_recalculate();
@@ -730,7 +995,9 @@ static esp_err_t delete_timetable_handler(httpd_req_t *req)
 /* POST /api/timetable -- upload user file */
 static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
 {
-    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
+    if (!require_auth(req)) return ESP_FAIL;
+
+    if (req->content_len <= 0 || req->content_len > 128 * 1024) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing or too-large body");
         return ESP_FAIL;
     }
@@ -749,17 +1016,47 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
     }
 
     int remaining = req->content_len;
+    int consecutive_timeouts = 0;
+    bool upload_failed = false;
     while (remaining > 0) {
         int to_recv = remaining < 4096 ? remaining : 4096;
         int received = httpd_req_recv(req, buf, to_recv);
-        if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (++consecutive_timeouts >= UPLOAD_MAX_CONSECUTIVE_TIMEOUTS) {
+                ESP_LOGW(TAG, "upload aborted: client stalled for %d consecutive recvs",
+                         consecutive_timeouts);
+                free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+                httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Upload timed out");
+                return ESP_FAIL;
+            }
+            continue;
+        }
+        consecutive_timeouts = 0;
         if (received < 0) {
             free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
             return ESP_FAIL;
         }
-        fwrite(buf, 1, received, f);
+        if (received == 0) {
+            /* Peer closed early. content_len said more was coming. */
+            upload_failed = true;
+            break;
+        }
+        size_t written = fwrite(buf, 1, (size_t)received, f);
+        if (written != (size_t)received) {
+            ESP_LOGE(TAG, "upload: fwrite short (%u of %d) -- disk full?",
+                     (unsigned)written, received);
+            free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+            return ESP_FAIL;
+        }
         remaining -= received;
+    }
+
+    if (upload_failed) {
+        free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Upload short");
+        return ESP_FAIL;
     }
     free(buf);
     fflush(f); fsync(fileno(f)); fclose(f);
@@ -888,6 +1185,13 @@ esp_err_t svc_http_start(void)
 {
     if (s_server) return ESP_OK;
 
+    esp_err_t tok_err = load_or_generate_api_token();
+    if (tok_err != ESP_OK) {
+        ESP_LOGE(TAG, "refusing to start HTTP without an API token (%s)",
+                 esp_err_to_name(tok_err));
+        return tok_err;
+    }
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     /* 13 production routes + the /debug/ntp test hook (test env only)
@@ -902,6 +1206,11 @@ esp_err_t svc_http_start(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));
         return err;
+    }
+
+    if (strcmp(OTA_SHARED_TOKEN, "change-me-before-flashing") == 0) {
+        ESP_LOGW(TAG, "OTA disabled: OTA_SHARED_TOKEN is the default. "
+                      "Set -DOTA_SHARED_TOKEN=... at build time to enable.");
     }
 
     const httpd_uri_t handlers[] = {

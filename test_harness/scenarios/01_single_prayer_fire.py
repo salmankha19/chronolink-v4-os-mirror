@@ -17,7 +17,7 @@ from scenario_runner import Scenario
 
 class SinglePrayerFire(Scenario):
     name = "01_single_prayer_fire"
-    start_utc = "2026-10-31 11:49:30"
+    start_utc = "2026-10-31 11:44:30"
     speed = 1.0
     quick = True
     total_timeout_s = 90.0

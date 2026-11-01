@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-10-30 at commit `HEAD` (PR: year timetable, RTC trust UX). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-01 at commit `HEAD` (PR: svc_http security batch, PR 3). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -36,6 +36,19 @@ not.** Where another doc mentions a gap, this file has the detail.
   `#error` if `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set. On any
   failure calls `esp_ota_abort()` and leaves the running image
   untouched.
+- **svc_http security batch (PR 3):** every numeric config field is
+  validated (integral + range) before any int cast, closing the
+  `{"high_lat_rule": 257}` → 1 truncation bypass on `uint8_t` and
+  `uint16_t` fields. All state-changing endpoints (`POST /api/config`,
+  `/api/config/preset`, `/api/wifi`, `/api/reboot`, `/api/factory-reset`,
+  `/api/timetable`, `/api/timetable/regenerate`, `DELETE /api/timetable`,
+  and `POST /api/ota`) require `X-Chronolink-Auth: Bearer <64-hex>` where
+  the token is generated on first boot, stored in NVS namespace
+  `svc_http` key `api_token`, and printed once to serial. OTA refuses to
+  run while `OTA_SHARED_TOKEN` is still the shipped default.
+  Upload/OTA streaming now fails after a bounded number of consecutive
+  socket timeouts (upload ~10 s, OTA ~30 s) instead of looping forever;
+  upload also checks `fwrite` and rejects short writes.
 - **PDL:** pin map, capability flags, pin validation and
   pre-configuration.
 - **HAL:** GPIO, I2C (mutex-guarded), shared SPI (mutex-guarded),

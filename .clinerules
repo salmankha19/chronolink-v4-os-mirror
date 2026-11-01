@@ -168,6 +168,12 @@ Recent merged work (kept here so you do not re-litigate it):
   (`prayer_host_tests/test_scheduler.cpp`). `svc_time_get_epoch()` added.
   Known limitation: noon-offset approximation on DST-transition days
   (ROADMAP Phase 7).
+- PR 3 (svc_http security batch): JSON numeric fields validated before
+  any int cast; CSRF defence via `X-Chronolink-Auth: Bearer <NVS token>`
+  on all state-changing endpoints; OTA refuses while the shared token is
+  default; upload/OTA streaming bounded on stalled clients; upload checks
+  `fwrite`. Config cast fix closes the `uint8_t`/`uint16_t` truncation
+  bypass (257→1, 65546→10).
 
 Prayer times domain model: `docs/prayer-times-model.md`. Read it before
 any change touching `svc_prayer_engine`, `svc_prayer_engine_service`,

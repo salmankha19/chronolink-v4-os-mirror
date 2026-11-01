@@ -39,6 +39,20 @@
     <button class="btn-wifi" onclick="saveWifi()">Save WiFi & Reboot</button>
   </div>
 
+  <!-- Setup Authentication -->
+  <div class="card" style="border: 2px solid #16a085;">
+    <h2 style="color:#16a085;">Setup Authentication</h2>
+    <p style="font-size:0.9em; color:#666;">
+      The device prints a one-time API token to its serial console on first
+      boot. Paste it here. It is stored in this browser only and sent with
+      every configuration request. Without it, POST endpoints reply 403.
+    </p>
+    <label>API Token</label>
+    <input type="password" id="api_token" placeholder="64-character hex token from serial console">
+    <button style="background:#16a085;" onclick="saveToken()">Save Token</button>
+    <p id="token_status" style="font-size:0.85em; color:#888; margin-top:8px;">&mdash;</p>
+  </div>
+
   <!-- Configuration -->
   <div class="card">
     <h2>Location & Calculation</h2>
@@ -389,6 +403,54 @@
   <div id="toast">Settings Saved</div>
 
   <script>
+    const TOKEN_KEY = 'chronolink_api_token';
+
+    function getToken() {
+      return localStorage.getItem(TOKEN_KEY) || '';
+    }
+
+    function authHeaders() {
+      const h = { 'Content-Type': 'application/json' };
+      const t = getToken();
+      if (t) h['X-Chronolink-Auth'] = 'Bearer ' + t;
+      return h;
+    }
+
+    function saveToken() {
+      const t = document.getElementById('api_token').value.trim();
+      if (!/^[0-9a-f]{64}$/.test(t)) {
+        showToast('Token must be 64 lowercase hex characters');
+        return;
+      }
+      localStorage.setItem(TOKEN_KEY, t);
+      showToast('Token saved');
+      updateTokenStatus();
+    }
+
+    function updateTokenStatus() {
+      const el = document.getElementById('token_status');
+      if (!el) return;
+      const t = getToken();
+      if (!t) {
+        el.innerText = 'No token saved yet. Configuration requests will be rejected.';
+        el.style.color = '#c0392b';
+      } else {
+        el.innerText = 'Token saved (' + t.slice(0, 8) + '…). Configuration requests will include it.';
+        el.style.color = '#16a085';
+      }
+    }
+
+    /* Show a clear toast on 403 so the user knows to paste the token. */
+    function handleResponse(r, okMsg) {
+      if (r.ok) { showToast(okMsg); return true; }
+      if (r.status === 403) {
+        showToast('Forbidden — check the API token in Setup Authentication');
+        return false;
+      }
+      showToast('Error: HTTP ' + r.status);
+      return false;
+    }
+
     function showToast(msg) {
       var x = document.getElementById("toast");
       x.innerText = msg;
@@ -460,7 +522,7 @@
       const num = (id) => parseInt(document.getElementById(id).value, 10) || 0;
 
       // If a partial user timetable is present, warn before changing config.
-      const headers = { 'Content-Type': 'application/json' };
+      const headers = authHeaders();
       if (timetableMeta.source === 2 && timetableMeta.partial) {
         if (!confirm("You have an uploaded timetable with missing fields.\n\n" +
                      "Changing configuration will affect the times shown for fields " +
@@ -540,12 +602,8 @@
         headers: headers,
         body: JSON.stringify(data)
       }).then(r => {
-        if (r.ok) {
-          showToast("Configuration Saved!");
-          // Refresh prayer times card to reflect new offsets
+        if (handleResponse(r, "Configuration Saved!")) {
           setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
-        } else {
-          showToast("Error saving config — check device log");
         }
       });
     }
@@ -577,14 +635,13 @@
       reader.onload = () => {
         fetch('/api/timetable', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders(),
           body: reader.result
         }).then(r => {
-          if (r.ok) {
-            showToast("Timetable uploaded");
+          if (handleResponse(r, "Timetable uploaded")) {
             loadTimetableMeta();
             setTimeout(loadPrayers, 500);
-          } else showToast("Upload failed");
+          }
         });
       };
       reader.readAsText(file);
@@ -592,17 +649,15 @@
 
     function regenerateTimetable() {
       if (!confirm("Regenerate the firmware timetable for the current year? This overwrites any user-uploaded file.")) return;
-      fetch('/api/timetable/regenerate', {method:'POST'}).then(r => {
-        if (r.ok) { showToast("Regeneration started"); loadTimetableMeta(); }
-        else showToast("Regeneration failed");
+      fetch('/api/timetable/regenerate', {method:'POST', headers: authHeaders()}).then(r => {
+        if (handleResponse(r, "Regeneration started")) loadTimetableMeta();
       });
     }
 
     function deleteTimetable() {
       if (!confirm("Delete the timetable file? Next boot will compute on-the-fly.")) return;
-      fetch('/api/timetable', {method:'DELETE'}).then(r => {
-        if (r.ok) { showToast("Deleted"); loadTimetableMeta(); }
-        else showToast("Delete failed");
+      fetch('/api/timetable', {method:'DELETE', headers: authHeaders()}).then(r => {
+        if (handleResponse(r, "Deleted")) loadTimetableMeta();
       });
     }
 
@@ -624,6 +679,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/octet-stream',
+          'X-Chronolink-Auth': 'Bearer ' + getToken(),
           'X-OTA-Token': token
         },
         body: file
@@ -643,9 +699,15 @@
         return;
       }
       showToast("Erasing and rebooting...");
-      fetch('/api/factory-reset', {method: 'POST'})
+      fetch('/api/factory-reset', {method: 'POST', headers: authHeaders()})
         .then(r => {
-          if (!r.ok) showToast("Factory reset failed");
+          if (!r.ok) {
+            if (r.status === 403) {
+              showToast('Forbidden — check the API token in Setup Authentication');
+            } else {
+              showToast("Factory reset failed");
+            }
+          }
           // On success, the device reboots; this page will drop
         })
         .catch(() => { /* expected: connection dies when device reboots */ });
@@ -658,7 +720,7 @@
       if (!confirm('Apply preset "' + name + '"?\n\nThis overwrites method, madhab, jamat configuration, and season dates. Location and display preferences are preserved.')) {
         return;
       }
-      const headers = { 'Content-Type': 'application/json' };
+      const headers = authHeaders();
       if (timetableMeta.source === 2 && timetableMeta.partial) {
         if (!confirm("You have an uploaded timetable with missing fields.\n\n" +
                      "Applying a preset will affect the times shown for those fields.\n\n" +
@@ -672,14 +734,11 @@
         headers: headers,
         body: JSON.stringify({preset: preset})
       }).then(r => {
-        if (r.ok) {
-          showToast('Preset applied — reloading form…');
+        if (handleResponse(r, 'Preset applied — reloading form…')) {
           setTimeout(() => {
             loadConfig();
             if (typeof loadPrayers === 'function') loadPrayers();
           }, 500);
-        } else {
-          showToast('Error applying preset');
         }
       });
     }
@@ -692,13 +751,11 @@
       showToast("Saving WiFi and rebooting...");
       fetch('/api/wifi', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders(),
         body: JSON.stringify({ssid: ssid, password: pass})
       }).then(r => {
-        if (r.ok) {
-          fetch('/api/reboot', {method: 'POST'});
-        } else {
-          showToast("Error saving WiFi");
+        if (handleResponse(r, "WiFi saved; rebooting…")) {
+          fetch('/api/reboot', {method: 'POST', headers: authHeaders()});
         }
       });
     }
@@ -760,6 +817,7 @@
     }
 
     // Load data on start
+    updateTokenStatus();
     loadConfig();
     loadPrayers();
     loadTimetableMeta();
