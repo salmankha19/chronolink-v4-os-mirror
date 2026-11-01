@@ -23,6 +23,11 @@ struct Method {
 
     // True for Moonsighting Committee method (applies seasonal adjustments)
     bool is_moonsighting;
+
+    // Fixed per-method safety adjustments, in minutes, added to the final
+    // Dhuhr / Maghrib time (adhan-js methodAdjustments). Default 0.
+    int dhuhr_adjust_min = 0;
+    int maghrib_adjust_min = 0;
 };
 
 // --- Built-in Methods ---
@@ -94,7 +99,9 @@ constexpr Method MOONSIGHTING = {
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
     .asr_shadow_factor = 1.0,
-    .is_moonsighting = true
+    .is_moonsighting = true,
+    .dhuhr_adjust_min = 5,     // Moonsighting Committee: Dhuhr +5 min
+    .maghrib_adjust_min = 3    // Moonsighting Committee: Maghrib +3 min
 };
 
 } // namespace prayertimes

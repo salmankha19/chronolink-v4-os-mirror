@@ -299,6 +299,12 @@ PrayerTimes PrayerTimesCalculator::calculate(
             effective_rule = HighLatitudeRule::MIDDLE_NIGHT;
     }
 
+    // Moonsighting Committee has its own seasonal high-latitude handling
+    // (below). It REPLACES the generic rule; stacking the one-seventh clamp
+    // under it made Fajr up to ~1 h later than the Committee / adhan-js at
+    // 48-55 N (the UK).
+    if (method.is_moonsighting) effective_rule = HighLatitudeRule::NONE;
+
     double night = 24.0 - (sunset - sunrise);
     double fajr_portion = 0, isha_portion = 0;
 
@@ -332,6 +338,15 @@ PrayerTimes PrayerTimesCalculator::calculate(
     // regions where the sun never reaches the angle), the safe bound is used
     // directly.
     if (method.is_moonsighting) {
+        // adhan-js special case at latitude >= 55: start from one-seventh
+        // of the night (the seasonal bound below can still move it).
+        // (adhan-js tests the signed latitude; |lat| is used here so the
+        // southern hemisphere behaves symmetrically.)
+        if (fabs(coords.latitude) >= 55.0) {
+            fajr = sunrise - night / 7.0;
+            if (method.isha_interval == 0) isha = sunset + night / 7.0;
+        }
+
         int dyy = days_since_solstice(date.year, date.month, date.day, coords.latitude);
         double adj_fajr_min = season_adj_fajr(coords.latitude, dyy);
         double adj_isha_min = season_adj_isha(coords.latitude, dyy);
@@ -372,17 +387,18 @@ PrayerTimes PrayerTimesCalculator::calculate(
 
     result.fajr = fix_hour(fajr + offset);
     result.sunrise = fix_hour(sunrise + offset);
-    result.dhuhr = fix_hour(mid + offset);
-    result.zawal = result.dhuhr;
+    result.dhuhr = fix_hour(mid + offset + method.dhuhr_adjust_min / 60.0);
+    result.zawal = fix_hour(mid + offset);   // true solar transit (no adjustment)
     result.asr = fix_hour(asr + offset);
     result.asr_yellowing = fix_hour(asr_yellowing + offset);
-    result.maghrib = fix_hour(maghrib + offset);
+    const double maghrib_clock = fix_hour(maghrib + offset);
+    result.maghrib = maghrib_clock + method.maghrib_adjust_min / 60.0;
     result.sunset = fix_hour(sunset + offset);
     // Night events are expressed relative to the (wrapped) Maghrib / sunset,
     // not wrapped themselves: they may exceed 24h (post-midnight), and the
     // Maghrib->Isha interval stays correct even if Maghrib wraps past 24h
     // (civil time far ahead of solar time).
-    result.isha     = result.maghrib + (isha - maghrib);
+    result.isha     = maghrib_clock + (isha - maghrib);   // Isha is NOT shifted by the Maghrib adjustment
     result.midnight = result.sunset  + (midnight - sunset);
 
     if (isnan(result.fajr) || isnan(result.sunrise) || isnan(result.dhuhr) ||
