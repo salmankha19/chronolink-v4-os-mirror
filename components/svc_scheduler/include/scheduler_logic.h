@@ -27,6 +27,12 @@ extern "C" {
 
 #define SCHEDULER_PRAYER_COUNT 5
 
+/* scheduler_premark_past() leaves the most recent seconds un-marked. The 1 Hz
+   poll can be up to a second behind a prayer instant; a premark that landed in
+   that gap (EVENT_PRAYER_TIMES_UPDATED processed in the same loop iteration)
+   would silently swallow the adhan. Anything older than this is "past". */
+#define SCHEDULER_PREMARK_GRACE_S 2
+
 /* Today's adhan times, in the shape svc_scheduler.c adapts from
    svc_prayer_engine_times_t (adhan tier only). */
 typedef struct {
@@ -64,7 +70,7 @@ int scheduler_evaluate(int64_t now_utc_epoch,
                        uint8_t fired_ids_out[5]);
 
 /*
- * Pre-mark all prayers with epoch <= now_utc_epoch as already fired, without
+ * Pre-mark all prayers with epoch <= now_utc_epoch - SCHEDULER_PREMARK_GRACE_S as already fired, without
  * reporting anything (no event is published). Call it at init and after
  * re-fetching times on EVENT_TIME_DATE_CHANGED / EVENT_PRAYER_TIMES_UPDATED,
  * so a boot or a config change in the middle of the day does not replay the

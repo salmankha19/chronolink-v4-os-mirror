@@ -242,6 +242,29 @@ static void test_unscheduled_and_invalid(void)
     CHECK(1, "premark tolerates NULL");
 }
 
+static void test_premark_grace(void)
+{
+    scheduler_day_t today = make_day(0, true, 36000, 43200, 54000, 64800, 72000);
+    scheduler_state_t st;
+    uint8_t fired[5];
+
+    /* A recalculation event processed in the very second Fajr is due must not
+       swallow it: the tick that follows in the same loop iteration fires it. */
+    memset(&st, 0, sizeof st);
+    scheduler_premark_past(at(10, 0), &today, &st);
+    CHECK(st.last_fired_epoch[0] == 0, "prayer due this second is not pre-marked");
+    int n = scheduler_evaluate(at(10, 0), &today, &st, fired);
+    CHECK(n == 1 && fired[0] == 0, "prayer due this second still fires after a premark");
+
+    /* 1 s late is still inside the grace window; 3 s late is 'past'. */
+    memset(&st, 0, sizeof st);
+    scheduler_premark_past(at(10, 0) + 1, &today, &st);
+    CHECK(st.last_fired_epoch[0] == 0, "1 s old prayer is inside the grace window");
+    memset(&st, 0, sizeof st);
+    scheduler_premark_past(at(10, 0) + 3, &today, &st);
+    CHECK(st.last_fired_epoch[0] == at(10, 0), "3 s old prayer is pre-marked");
+}
+
 int main(void)
 {
     printf("=== scheduler logic (epoch guard) ===\n");
@@ -251,8 +274,7 @@ int main(void)
     test_startup_mid_day();
     test_config_reset();
     test_unscheduled_and_invalid();
+    test_premark_grace();
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }
-
-

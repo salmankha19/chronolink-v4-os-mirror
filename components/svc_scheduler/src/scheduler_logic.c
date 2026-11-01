@@ -130,8 +130,8 @@ void scheduler_premark_past(int64_t now_utc_epoch,
         epoch = scheduler_prayer_epoch(today->date_yyyymmdd,
                                        today->tz_offset_minutes,
                                        today->sec[p]);
-        if (epoch == 0 || epoch > now_utc_epoch) {
-            continue;
+        if (epoch == 0 || epoch > now_utc_epoch - SCHEDULER_PREMARK_GRACE_S) {
+            continue;   /* future, or inside the grace window: let evaluate() fire it */
         }
 
         state->last_fired_epoch[p] = epoch;

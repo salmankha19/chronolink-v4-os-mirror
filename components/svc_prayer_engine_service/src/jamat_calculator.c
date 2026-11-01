@@ -10,8 +10,8 @@
  * service can ask for result.season without duplicating the date maths.
  */
 #include "jamat_calculator.h"
-
 #include <stdbool.h>
+#include <stddef.h>       /* ← NEW — for NULL */
 #include <stdint.h>
 
 /* True if (m, d) is in [start, end) with year-wrap. */
