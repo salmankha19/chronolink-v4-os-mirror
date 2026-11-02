@@ -1002,17 +1002,29 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    FILE *f = fopen(SVC_TIMETABLE_PATH_TMP, "w");
+    /* Serialise against the background regenerator and the manual regenerate
+       endpoint. Without this, an upload that lands mid-regen can be silently
+       overwritten when the regenerator finally renames its own temp file
+       into place. Timed out -> 503, caller can retry. */
+    if (svc_timetable_acquire_writer() != ESP_OK) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "Timetable busy; retry");
+        return ESP_FAIL;
+    }
+
+    esp_err_t result = ESP_FAIL;
+
+    FILE *f = fopen(SVC_TIMETABLE_UPLOAD_TMP, "w");
     if (!f) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot open file");
-        return ESP_FAIL;
+        goto done;
     }
 
     char *buf = malloc(4096);
     if (!buf) {
-        fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+        fclose(f); remove(SVC_TIMETABLE_UPLOAD_TMP);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
-        return ESP_FAIL;
+        goto done;
     }
 
     int remaining = req->content_len;
@@ -1025,17 +1037,17 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
             if (++consecutive_timeouts >= UPLOAD_MAX_CONSECUTIVE_TIMEOUTS) {
                 ESP_LOGW(TAG, "upload aborted: client stalled for %d consecutive recvs",
                          consecutive_timeouts);
-                free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+                free(buf); fclose(f); remove(SVC_TIMETABLE_UPLOAD_TMP);
                 httpd_resp_send_err(req, HTTPD_408_REQ_TIMEOUT, "Upload timed out");
-                return ESP_FAIL;
+                goto done;
             }
             continue;
         }
         consecutive_timeouts = 0;
         if (received < 0) {
-            free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+            free(buf); fclose(f); remove(SVC_TIMETABLE_UPLOAD_TMP);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv failed");
-            return ESP_FAIL;
+            goto done;
         }
         if (received == 0) {
             /* Peer closed early. content_len said more was coming. */
@@ -1046,31 +1058,51 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
         if (written != (size_t)received) {
             ESP_LOGE(TAG, "upload: fwrite short (%u of %d) -- disk full?",
                      (unsigned)written, received);
-            free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+            free(buf); fclose(f); remove(SVC_TIMETABLE_UPLOAD_TMP);
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
-            return ESP_FAIL;
+            goto done;
         }
         remaining -= received;
     }
 
     if (upload_failed) {
-        free(buf); fclose(f); remove(SVC_TIMETABLE_PATH_TMP);
+        free(buf); fclose(f); remove(SVC_TIMETABLE_UPLOAD_TMP);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Upload short");
-        return ESP_FAIL;
+        goto done;
     }
     free(buf);
     fflush(f); fsync(fileno(f)); fclose(f);
 
-    if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
-        remove(SVC_TIMETABLE_PATH_TMP);
+    /* Validate the candidate file BEFORE replacing the live one. The
+       validator parses the tmp file into private temporaries, so a bad file
+       cannot corrupt the running state. A rejected upload leaves
+       SVC_TIMETABLE_PATH untouched. */
+    esp_err_t v_err = svc_timetable_validate(SVC_TIMETABLE_UPLOAD_TMP);
+    if (v_err != ESP_OK) {
+        remove(SVC_TIMETABLE_UPLOAD_TMP);
+        const char *msg =
+            (v_err == ESP_ERR_INVALID_VERSION)   ? "Unsupported schema_version"
+          : (v_err == ESP_ERR_INVALID_RESPONSE)  ? "Malformed timetable JSON"
+          : (v_err == ESP_ERR_INVALID_ARG)       ? "Bad upload path"
+          :                                        "Timetable validation failed";
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, msg);
+        goto done;
+    }
+
+    if (rename(SVC_TIMETABLE_UPLOAD_TMP, SVC_TIMETABLE_PATH) != 0) {
+        remove(SVC_TIMETABLE_UPLOAD_TMP);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Rename failed");
-        return ESP_FAIL;
+        goto done;
     }
 
     svc_timetable_reload();
     svc_prayer_engine_service_recalculate();
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
-    return ESP_OK;
+    result = ESP_OK;
+
+done:
+    svc_timetable_release_writer();
+    return result;
 }
 
 #if defined(CONFIG_CHRONOLINK_TEST_HOOKS) || defined(CHRONOLINK_TEST_HOOKS)
