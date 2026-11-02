@@ -20,6 +20,9 @@
 #include <sys/time.h>
 #include <errno.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_system.h"
@@ -30,12 +33,76 @@
 
 static const char *TAG = "svc_timetable";
 
-static bool                    s_initialized = false;
+/* Two mutexes, ordered strictly writer -> state:
+ *   s_writer_lock -- serialises the three file-replacing writers
+ *                    (HTTP upload, svc_timetable_generate_full_year called
+ *                    from the manual regenerate endpoint, and the background
+ *                    regenerator spawned by svc_prayer_engine_service; plus
+ *                    svc_timetable_delete). Held for the whole
+ *                    write -> fsync -> rename -> reload sequence so two
+ *                    writers cannot race the same destination.
+ *   s_state_lock  -- guards the in-RAM state below. Held for the memcpy that
+ *                    installs a freshly parsed file and for every accessor.
+ *
+ * Lock ordering: s_writer_lock (outer) -> s_state_lock (inner). Taking
+ * s_state_lock while already holding s_writer_lock is fine; taking
+ * s_writer_lock while already holding s_state_lock is forbidden and would
+ * deadlock. */
+static SemaphoreHandle_t       s_writer_lock  = NULL;
+static SemaphoreHandle_t       s_state_lock   = NULL;
+
+static bool                    s_initialized  = false;
+
+/* Guarded by s_state_lock. */
 static svc_timetable_metadata_t s_meta;
 static svc_timetable_day_t     s_today;
 static svc_timetable_day_t     s_tomorrow;
 static int                     s_today_ymd    = 0;
 static int                     s_tomorrow_ymd = 0;
+
+/* A parsed-but-not-yet-installed timetable. parse_file_at() fills one of
+ * these; apply_state_locked() copies it into the globals above while
+ * s_state_lock is held. Nothing in the parse path writes the globals, so a
+ * validation parse (svc_timetable_validate) can run with no lock and no
+ * risk of half-updating what an accessor would read. */
+typedef struct {
+    svc_timetable_metadata_t meta;
+    svc_timetable_day_t      today;
+    svc_timetable_day_t      tomorrow;
+    int                      today_ymd;
+    int                      tomorrow_ymd;
+} timetable_state_t;
+
+static bool take_state_lock(void)
+{
+    return s_state_lock &&
+           xSemaphoreTake(s_state_lock, pdMS_TO_TICKS(1000)) == pdTRUE;
+}
+
+static void give_state_lock(void)
+{
+    if (s_state_lock) xSemaphoreGive(s_state_lock);
+}
+
+static bool take_writer_lock(void)
+{
+    return s_writer_lock &&
+           xSemaphoreTake(s_writer_lock, pdMS_TO_TICKS(1000)) == pdTRUE;
+}
+
+static void give_writer_lock(void)
+{
+    if (s_writer_lock) xSemaphoreGive(s_writer_lock);
+}
+
+static void apply_state_locked(const timetable_state_t *in)
+{
+    s_meta         = in->meta;
+    s_today        = in->today;
+    s_tomorrow     = in->tomorrow;
+    s_today_ymd    = in->today_ymd;
+    s_tomorrow_ymd = in->tomorrow_ymd;
+}
 
 static void mmdd_from_ymd(int y, int m, int d, char out[6])
 {
@@ -106,26 +173,43 @@ static void extract_day_entry(const cJSON *obj, svc_timetable_day_t *out)
    walks the `days` array, parsing only the entries matching today's and
    tomorrow's MM-DD. Peak heap: ~128 KB for the file buffer + ~1 KB per
    parsed entry. */
-static esp_err_t parse_file(void)
+static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
 {
-    FILE *f = fopen(SVC_TIMETABLE_PATH, "r");
+    FILE *f = fopen(path, "r");
     if (!f) return ESP_ERR_NOT_FOUND;
 
-    /* Read into a fixed 128KB buffer to avoid FATFS fseek/ftell bugs.
-       (A full year JSON with 14 keys + jamat is ~83KB). */
-    char *buf = malloc(131072);
+    /* Read into an exact-size buffer. The old fixed 128 KB allocation
+       is vulnerable to fragmentation: after the regen loop's cJSON
+       churn the heap's largest contiguous block can drop below 128 KB
+       even with 176 KB total free. Stat the file, reject anything
+       above the same 128 KB ceiling the HTTP handler enforces, then
+       malloc exactly what is needed. */
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return ESP_FAIL;
+    }
+    long sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (sz > 131072L) {
+        ESP_LOGW(TAG, "parse: %s is %ld B > 128 KB ceiling", path, sz);
+        fclose(f);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    rewind(f);
+
+    char *buf = malloc((size_t)sz + 1u);
     if (!buf) { fclose(f); return ESP_ERR_NO_MEM; }
-    size_t rd = fread(buf, 1, 131071, f);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     if (rd == 0) { free(buf); return ESP_FAIL; }
     buf[rd] = '\0';
 
-    memset(&s_meta, 0, sizeof(s_meta));
-    memset(&s_today, 0, sizeof(s_today));
-    memset(&s_tomorrow, 0, sizeof(s_tomorrow));
-    s_today_ymd = 0;
-    s_tomorrow_ymd = 0;
-    s_meta.file_present = true;
+    memset(out, 0, sizeof(*out));
+    out->meta.source = SVC_TIMETABLE_SOURCE_NONE;
+    out->meta.file_present = true;
 
     /* --- Parse header (small, use cJSON on just the header object) --- */
     /* The header is the top-level object *except* the "days" array. We
@@ -163,31 +247,31 @@ static esp_err_t parse_file(void)
 
     const cJSON *src = cJSON_GetObjectItemCaseSensitive(root, "source");
     if (cJSON_IsString(src) && strcmp(src->valuestring, "firmware") == 0) {
-        s_meta.source = SVC_TIMETABLE_SOURCE_FIRMWARE;
+        out->meta.source = SVC_TIMETABLE_SOURCE_FIRMWARE;
     } else {
-        s_meta.source = SVC_TIMETABLE_SOURCE_USER;
+        out->meta.source = SVC_TIMETABLE_SOURCE_USER;
     }
 
     const cJSON *yr = cJSON_GetObjectItemCaseSensitive(root, "year");
     if (cJSON_IsNumber(yr)) {
-        s_meta.year = yr->valueint;
+        out->meta.year = yr->valueint;
     } else {
-        s_meta.year = SVC_TIMETABLE_YEAR_PERMANENT;
+        out->meta.year = SVC_TIMETABLE_YEAR_PERMANENT;
     }
 
     const cJSON *gen = cJSON_GetObjectItemCaseSensitive(root, "generated_at");
     if (cJSON_IsString(gen)) {
-        strncpy(s_meta.generated_at, gen->valuestring, sizeof(s_meta.generated_at)-1);
+        strncpy(out->meta.generated_at, gen->valuestring, sizeof(out->meta.generated_at)-1);
     }
 
     const cJSON *ji = cJSON_GetObjectItemCaseSensitive(root, "jamat_included");
-    s_meta.jamat_included = cJSON_IsTrue(ji);
+    out->meta.jamat_included = cJSON_IsTrue(ji);
 
     const cJSON *calc = cJSON_GetObjectItemCaseSensitive(root, "calculation");
     if (cJSON_IsObject(calc)) {
         char *s = cJSON_PrintUnformatted(calc);
         if (s) {
-            strncpy(s_meta.calculation_json, s, sizeof(s_meta.calculation_json)-1);
+            strncpy(out->meta.calculation_json, s, sizeof(out->meta.calculation_json)-1);
             cJSON_free(s);
         }
     }
@@ -200,13 +284,13 @@ static esp_err_t parse_file(void)
         return ESP_OK;   /* metadata populated, no today/tomorrow */
     }
     int y = snap.local.year, m = snap.local.month, d = snap.local.day;
-    s_today_ymd = y * 10000 + m * 100 + d;
+    out->today_ymd = y * 10000 + m * 100 + d;
     char today_mmdd[6];
     mmdd_from_ymd(y, m, d, today_mmdd);
 
     int ty = y, tm = m, td = d;
     ymd_advance_one_day(&ty, &tm, &td);
-    s_tomorrow_ymd = ty * 10000 + tm * 100 + td;
+    out->tomorrow_ymd = ty * 10000 + tm * 100 + td;
     char tomorrow_mmdd[6];
     mmdd_from_ymd(ty, tm, td, tomorrow_mmdd);
 
@@ -269,22 +353,22 @@ static esp_err_t parse_file(void)
         if (!j_entry) continue;
 
         if (is_today) {
-            extract_day_entry(j_entry, &s_today);
+            extract_day_entry(j_entry, &out->today);
             today_found = true;
         } else {
-            extract_day_entry(j_entry, &s_tomorrow);
+            extract_day_entry(j_entry, &out->tomorrow);
             tomorrow_found = true;
         }
         cJSON_Delete(j_entry);
     }
 
-    s_meta.day_count = day_count;
-    s_meta.partial = any_incomplete || (!today_found) || (!tomorrow_found);
+    out->meta.day_count = day_count;
+    out->meta.partial = any_incomplete || (!today_found) || (!tomorrow_found);
 
     free(buf);
     ESP_LOGD(TAG, "parsed: days=%u today=%d tomorrow=%d partial=%d",
              (unsigned)day_count, (int)today_found, (int)tomorrow_found,
-             (int)s_meta.partial);
+             (int)out->meta.partial);
     return ESP_OK;
 }
 
@@ -322,24 +406,61 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
     snprintf(out+n, 1024-n, "]}");
 }
 
+/* Read SVC_TIMETABLE_PATH into a private temporary and install it under
+   s_state_lock. Called from svc_timetable_init(), svc_timetable_reload(),
+   svc_timetable_set_current_date() and (after the writer lock is held)
+   svc_timetable_generate_full_year(). No writer lock is taken here: the
+   caller is responsible for holding it if a rename needs to be serialised
+   against this read. */
+static esp_err_t reload_locked_io(void)
+{
+    timetable_state_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.meta.source = SVC_TIMETABLE_SOURCE_NONE;
+
+    esp_err_t err = parse_file_at(SVC_TIMETABLE_PATH, &tmp);
+    if (err != ESP_OK) {
+        /* Keep the current in-RAM state. A transient failure (heap
+           pressure, FATFS busy) must not blank the API's metadata; the
+           file is still on disk and a later reload will pick it up. */
+        ESP_LOGW(TAG, "reload failed: %s -- keeping current state",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "timetable loaded: source=%s year=%ld days=%u jamat=%d partial=%d "
+                  "heap=%u",
+             tmp.meta.source == SVC_TIMETABLE_SOURCE_FIRMWARE ? "firmware" : "user",
+             (long)tmp.meta.year, (unsigned)tmp.meta.day_count,
+             (int)tmp.meta.jamat_included, (int)tmp.meta.partial,
+             (unsigned)esp_get_free_heap_size());
+
+    if (!take_state_lock()) return ESP_ERR_TIMEOUT;
+    apply_state_locked(&tmp);
+    give_state_lock();
+    return ESP_OK;
+}
+
 esp_err_t svc_timetable_init(void)
 {
-    memset(&s_meta, 0, sizeof(s_meta));
-    memset(&s_today, 0, sizeof(s_today));
-    memset(&s_tomorrow, 0, sizeof(s_tomorrow));
-    s_meta.source = SVC_TIMETABLE_SOURCE_NONE;
-
-    esp_err_t err = parse_file();
-    if (err != ESP_OK) {
-        ESP_LOGI(TAG, "no usable timetable: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "timetable loaded: source=%s year=%ld days=%u jamat=%d partial=%d "
-                      "heap=%u",
-                 s_meta.source == SVC_TIMETABLE_SOURCE_FIRMWARE ? "firmware" : "user",
-                 (long)s_meta.year, (unsigned)s_meta.day_count,
-                 (int)s_meta.jamat_included, (int)s_meta.partial,
-                 (unsigned)esp_get_free_heap_size());
+    /* Create mutexes once. A second init() (from reload, or a caller
+       mistake) reuses them and just re-parses the file. */
+    if (!s_state_lock) {
+        s_state_lock = xSemaphoreCreateMutex();
+        if (!s_state_lock) {
+            ESP_LOGE(TAG, "failed to create state mutex");
+            return ESP_ERR_NO_MEM;
+        }
     }
+    if (!s_writer_lock) {
+        s_writer_lock = xSemaphoreCreateMutex();
+        if (!s_writer_lock) {
+            ESP_LOGE(TAG, "failed to create writer mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    esp_err_t err = reload_locked_io();
     s_initialized = true;
     return err;
 }
@@ -347,14 +468,16 @@ esp_err_t svc_timetable_init(void)
 esp_err_t svc_timetable_reload(void)
 {
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
-    return svc_timetable_init();
+    return reload_locked_io();
 }
 
 esp_err_t svc_timetable_get_metadata(svc_timetable_metadata_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (!take_state_lock()) return ESP_ERR_TIMEOUT;
     *out = s_meta;
+    give_state_lock();
     return ESP_OK;
 }
 
@@ -362,7 +485,9 @@ esp_err_t svc_timetable_get_today(svc_timetable_day_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (!take_state_lock()) return ESP_ERR_TIMEOUT;
     *out = s_today;
+    give_state_lock();
     return ESP_OK;
 }
 
@@ -370,7 +495,9 @@ esp_err_t svc_timetable_get_tomorrow(svc_timetable_day_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (!take_state_lock()) return ESP_ERR_TIMEOUT;
     *out = s_tomorrow;
+    give_state_lock();
     return ESP_OK;
 }
 
@@ -378,24 +505,46 @@ esp_err_t svc_timetable_set_current_date(int year, int month, int day)
 {
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
     int ymd = year * 10000 + month * 100 + day;
-    if (ymd == s_today_ymd) return ESP_OK;
-    return parse_file();
+
+    if (!take_state_lock()) return ESP_ERR_TIMEOUT;
+    int current_ymd = s_today_ymd;
+    give_state_lock();
+
+    if (ymd == current_ymd) return ESP_OK;
+    return reload_locked_io();
 }
 
 bool svc_timetable_needs_regen_from_config(void)
 {
-    if (!s_initialized || !s_meta.file_present) return true;
-    if (s_meta.source != SVC_TIMETABLE_SOURCE_FIRMWARE) return false;
+    if (!s_initialized) return true;
+
+    /* Snapshot the fields this function compares against, under the state
+       lock, so the rest of the body (config get, JSON serialisation) runs
+       without holding it. */
+    bool file_present;
+    svc_timetable_source_t source;
+    int32_t year;
+    char calc_json[1024];
+
+    if (!take_state_lock()) return true;   /* fail-safe: prefer to regenerate */
+    file_present = s_meta.file_present;
+    source       = s_meta.source;
+    year         = s_meta.year;
+    memcpy(calc_json, s_meta.calculation_json, sizeof(calc_json));
+    give_state_lock();
+
+    if (!file_present) return true;
+    if (source != SVC_TIMETABLE_SOURCE_FIRMWARE) return false;
 
     /* Year rollover: last year's file must never serve this year's dates.
        (mm-dd keys would still match, so a stale year is a silent wrong-time
        bug -- regenerate instead.) */
     svc_time_snapshot_t snap;
     if (svc_time_get_snapshot(&snap) == ESP_OK && snap.valid
-        && s_meta.year != SVC_TIMETABLE_YEAR_PERMANENT
-        && (int32_t)snap.local.year != s_meta.year) {
+        && year != SVC_TIMETABLE_YEAR_PERMANENT
+        && (int32_t)snap.local.year != year) {
         ESP_LOGI(TAG, "timetable year %ld != current %d -- regenerating",
-                 (long)s_meta.year, (int)snap.local.year);
+                 (long)year, (int)snap.local.year);
         return true;
     }
 
@@ -407,7 +556,21 @@ bool svc_timetable_needs_regen_from_config(void)
     if (!current) return false;
 
     serialize_calc(&cfg, tz, current);
-    bool needs = (strcmp(current, s_meta.calculation_json) != 0);
+
+    /* cJSON round-trips "%.3f" floats differently than serialize_calc
+       writes them: 18.000 (printf) vs 18 (cJSON). A strcmp therefore
+       never matches, needs_regen always returns true, and every
+       POST /api/config triggers a spurious regen. Compare parsed trees
+       instead: cJSON_Compare handles the numeric normalisation and is
+       tolerant of key ordering. */
+    bool needs = true;
+    cJSON *a = cJSON_Parse(current);
+    cJSON *b = cJSON_Parse(calc_json);
+    if (a && b) {
+        needs = !cJSON_Compare(a, b, true);
+    }
+    if (a) cJSON_Delete(a);
+    if (b) cJSON_Delete(b);
     free(current);
     return needs;
 }
@@ -522,7 +685,7 @@ static cJSON *build_day_entry(const svc_config_t *cfg,
     return o;
 }
 
-esp_err_t svc_timetable_generate_full_year(void)
+static esp_err_t generate_full_year_locked(void)
 {
     svc_config_t cfg;
     esp_err_t err = svc_config_get(&cfg);
@@ -617,13 +780,25 @@ esp_err_t svc_timetable_generate_full_year(void)
     fsync(fileno(f));
     fclose(f);
 
+    /* FATFS rename() does not overwrite an existing destination, so the
+       common case is: first rename fails, remove destination, second
+       rename succeeds. Guard against the failure case where the second
+       rename also fails: without a backup, the last good file is
+       already gone and present:false is the result until next boot. */
     if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
-        ESP_LOGW(TAG, "rename failed, removing destination and retrying");
-        remove(SVC_TIMETABLE_PATH);
+        static const char *BAK = "/storage/timetable.bak";
+        remove(BAK);
+        bool have_backup = (rename(SVC_TIMETABLE_PATH, BAK) == 0);
         if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
-            ESP_LOGE(TAG, "rename failed again!");
+            ESP_LOGE(TAG, "rename failed twice; restoring previous file");
+            if (have_backup) {
+                (void)rename(BAK, SVC_TIMETABLE_PATH);
+            }
             remove(SVC_TIMETABLE_PATH_TMP);
             return ESP_FAIL;
+        }
+        if (have_backup) {
+            remove(BAK);
         }
     }
 
@@ -633,10 +808,26 @@ esp_err_t svc_timetable_generate_full_year(void)
     return svc_timetable_reload();
 }
 
+esp_err_t svc_timetable_generate_full_year(void)
+{
+    if (!take_writer_lock()) return ESP_ERR_TIMEOUT;
+    esp_err_t err = generate_full_year_locked();
+    give_writer_lock();
+    return err;
+}
+
 esp_err_t svc_timetable_delete(void)
 {
+    if (!take_writer_lock()) return ESP_ERR_TIMEOUT;
+
     if (remove(SVC_TIMETABLE_PATH) != 0 && errno != ENOENT) {
+        give_writer_lock();
         return ESP_FAIL;
+    }
+
+    if (!take_state_lock()) {
+        give_writer_lock();
+        return ESP_ERR_TIMEOUT;
     }
     memset(&s_meta, 0, sizeof(s_meta));
     memset(&s_today, 0, sizeof(s_today));
@@ -644,10 +835,47 @@ esp_err_t svc_timetable_delete(void)
     s_today_ymd    = 0;
     s_tomorrow_ymd = 0;
     s_meta.source = SVC_TIMETABLE_SOURCE_NONE;
+    give_state_lock();
+
+    give_writer_lock();
     return ESP_OK;
 }
 
 svc_timetable_source_t svc_timetable_get_source(void)
 {
-    return s_meta.file_present ? s_meta.source : SVC_TIMETABLE_SOURCE_NONE;
+    if (!s_initialized) return SVC_TIMETABLE_SOURCE_NONE;
+    if (!take_state_lock()) return SVC_TIMETABLE_SOURCE_NONE;
+    svc_timetable_source_t src = s_meta.file_present ? s_meta.source
+                                                     : SVC_TIMETABLE_SOURCE_NONE;
+    give_state_lock();
+    return src;
+}
+
+esp_err_t svc_timetable_acquire_writer(void)
+{
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
+    if (!take_writer_lock()) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+
+void svc_timetable_release_writer(void)
+{
+    give_writer_lock();
+}
+
+esp_err_t svc_timetable_validate(const char *path)
+{
+    if (!path) return ESP_ERR_INVALID_ARG;
+
+    timetable_state_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+
+    esp_err_t err = parse_file_at(path, &tmp);
+    if (err != ESP_OK) return err;
+
+    if (tmp.meta.day_count == 0) {
+        ESP_LOGW(TAG, "validation: %s contains zero days", path);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ESP_OK;
 }

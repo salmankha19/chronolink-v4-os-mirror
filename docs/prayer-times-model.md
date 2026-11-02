@@ -310,6 +310,24 @@ user saves config, the server returns 409 unless the client sends
 `X-Confirm-Timetable-Override`; the web UI shows a `confirm()` before
 that POST.
 
+**Concurrency (PR 4).** All state reads and writes go through a mutex
+internal to `svc_timetable`; the public accessors are safe to call from
+any task without cooperation from the caller. The three file-replacing
+writers — HTTP upload, `POST /api/timetable/regenerate`, and the
+background regenerator spawned by `svc_prayer_engine_service` — serialise
+on a second writer mutex and use separate temp files
+(`/storage/timetable_upload.tmp` for user uploads,
+`/storage/timetable_regen.tmp` for firmware regeneration), so an in-flight
+upload cannot be overwritten by a concurrently running regenerator (or
+vice versa).
+
+Uploads are validated (`svc_timetable_validate`: JSON parses,
+`schema_version` is supported, at least one day is present) before the
+atomic rename to `/storage/timetable.json`. A rejected upload removes its
+temp file and returns 400; the live timetable continues serving unchanged.
+Validation runs against a private temporary, so a bad file cannot corrupt
+the in-RAM state.
+
 ---
 
 ## 6. Tomorrow's jamat
