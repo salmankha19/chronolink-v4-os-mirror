@@ -178,11 +178,31 @@ static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
     FILE *f = fopen(path, "r");
     if (!f) return ESP_ERR_NOT_FOUND;
 
-    /* Read into a fixed 128KB buffer to avoid FATFS fseek/ftell bugs.
-       (A full year JSON with 14 keys + jamat is ~83KB). */
-    char *buf = malloc(131072);
+    /* Read into an exact-size buffer. The old fixed 128 KB allocation
+       is vulnerable to fragmentation: after the regen loop's cJSON
+       churn the heap's largest contiguous block can drop below 128 KB
+       even with 176 KB total free. Stat the file, reject anything
+       above the same 128 KB ceiling the HTTP handler enforces, then
+       malloc exactly what is needed. */
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return ESP_FAIL;
+    }
+    long sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (sz > 131072L) {
+        ESP_LOGW(TAG, "parse: %s is %ld B > 128 KB ceiling", path, sz);
+        fclose(f);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    rewind(f);
+
+    char *buf = malloc((size_t)sz + 1u);
     if (!buf) { fclose(f); return ESP_ERR_NO_MEM; }
-    size_t rd = fread(buf, 1, 131071, f);
+    size_t rd = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     if (rd == 0) { free(buf); return ESP_FAIL; }
     buf[rd] = '\0';
@@ -400,23 +420,25 @@ static esp_err_t reload_locked_io(void)
 
     esp_err_t err = parse_file_at(SVC_TIMETABLE_PATH, &tmp);
     if (err != ESP_OK) {
-        ESP_LOGI(TAG, "no usable timetable: %s", esp_err_to_name(err));
-        /* tmp.meta.source already NONE from the memset above; install an
-           empty state so a stale one from a previous successful load cannot
-           keep serving. */
-    } else {
-        ESP_LOGI(TAG, "timetable loaded: source=%s year=%ld days=%u jamat=%d partial=%d "
-                      "heap=%u",
-                 tmp.meta.source == SVC_TIMETABLE_SOURCE_FIRMWARE ? "firmware" : "user",
-                 (long)tmp.meta.year, (unsigned)tmp.meta.day_count,
-                 (int)tmp.meta.jamat_included, (int)tmp.meta.partial,
-                 (unsigned)esp_get_free_heap_size());
+        /* Keep the current in-RAM state. A transient failure (heap
+           pressure, FATFS busy) must not blank the API's metadata; the
+           file is still on disk and a later reload will pick it up. */
+        ESP_LOGW(TAG, "reload failed: %s -- keeping current state",
+                 esp_err_to_name(err));
+        return err;
     }
+
+    ESP_LOGI(TAG, "timetable loaded: source=%s year=%ld days=%u jamat=%d partial=%d "
+                  "heap=%u",
+             tmp.meta.source == SVC_TIMETABLE_SOURCE_FIRMWARE ? "firmware" : "user",
+             (long)tmp.meta.year, (unsigned)tmp.meta.day_count,
+             (int)tmp.meta.jamat_included, (int)tmp.meta.partial,
+             (unsigned)esp_get_free_heap_size());
 
     if (!take_state_lock()) return ESP_ERR_TIMEOUT;
     apply_state_locked(&tmp);
     give_state_lock();
-    return err;
+    return ESP_OK;
 }
 
 esp_err_t svc_timetable_init(void)
@@ -534,7 +556,21 @@ bool svc_timetable_needs_regen_from_config(void)
     if (!current) return false;
 
     serialize_calc(&cfg, tz, current);
-    bool needs = (strcmp(current, calc_json) != 0);
+
+    /* cJSON round-trips "%.3f" floats differently than serialize_calc
+       writes them: 18.000 (printf) vs 18 (cJSON). A strcmp therefore
+       never matches, needs_regen always returns true, and every
+       POST /api/config triggers a spurious regen. Compare parsed trees
+       instead: cJSON_Compare handles the numeric normalisation and is
+       tolerant of key ordering. */
+    bool needs = true;
+    cJSON *a = cJSON_Parse(current);
+    cJSON *b = cJSON_Parse(calc_json);
+    if (a && b) {
+        needs = !cJSON_Compare(a, b, true);
+    }
+    if (a) cJSON_Delete(a);
+    if (b) cJSON_Delete(b);
     free(current);
     return needs;
 }
@@ -744,13 +780,25 @@ static esp_err_t generate_full_year_locked(void)
     fsync(fileno(f));
     fclose(f);
 
+    /* FATFS rename() does not overwrite an existing destination, so the
+       common case is: first rename fails, remove destination, second
+       rename succeeds. Guard against the failure case where the second
+       rename also fails: without a backup, the last good file is
+       already gone and present:false is the result until next boot. */
     if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
-        ESP_LOGW(TAG, "rename failed, removing destination and retrying");
-        remove(SVC_TIMETABLE_PATH);
+        static const char *BAK = "/storage/timetable.bak";
+        remove(BAK);
+        bool have_backup = (rename(SVC_TIMETABLE_PATH, BAK) == 0);
         if (rename(SVC_TIMETABLE_PATH_TMP, SVC_TIMETABLE_PATH) != 0) {
-            ESP_LOGE(TAG, "rename failed again!");
+            ESP_LOGE(TAG, "rename failed twice; restoring previous file");
+            if (have_backup) {
+                (void)rename(BAK, SVC_TIMETABLE_PATH);
+            }
             remove(SVC_TIMETABLE_PATH_TMP);
             return ESP_FAIL;
+        }
+        if (have_backup) {
+            remove(BAK);
         }
     }
 

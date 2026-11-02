@@ -1090,9 +1090,20 @@ static esp_err_t post_timetable_upload_handler(httpd_req_t *req)
     }
 
     if (rename(SVC_TIMETABLE_UPLOAD_TMP, SVC_TIMETABLE_PATH) != 0) {
-        remove(SVC_TIMETABLE_UPLOAD_TMP);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Rename failed");
-        goto done;
+        static const char *BAK = "/storage/timetable.bak";
+        remove(BAK);
+        bool have_backup = (rename(SVC_TIMETABLE_PATH, BAK) == 0);
+        if (rename(SVC_TIMETABLE_UPLOAD_TMP, SVC_TIMETABLE_PATH) != 0) {
+            if (have_backup) {
+                (void)rename(BAK, SVC_TIMETABLE_PATH);
+            }
+            remove(SVC_TIMETABLE_UPLOAD_TMP);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Rename failed");
+            goto done;
+        }
+        if (have_backup) {
+            remove(BAK);
+        }
     }
 
     svc_timetable_reload();
