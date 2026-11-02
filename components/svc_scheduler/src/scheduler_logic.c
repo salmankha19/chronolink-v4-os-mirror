@@ -98,6 +98,14 @@ int scheduler_evaluate(int64_t now_utc_epoch,
         if (epoch == 0 || epoch > now_utc_epoch) {
             continue;   /* not scheduled / still in the future */
         }
+
+        /* Skip prayers more than SCHEDULER_MAX_LATENESS_S in the past --
+           treat as missed rather than firing a burst. */
+        if (now_utc_epoch - epoch > SCHEDULER_MAX_LATENESS_S) {
+            state->last_fired_epoch[p] = epoch;   /* mark fired to avoid retry */
+            continue;
+        }
+
         if (state->last_fired_epoch[p] >= epoch) {
             continue;   /* already fired for this instant */
         }

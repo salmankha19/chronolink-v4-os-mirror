@@ -79,12 +79,13 @@ static void test_happy_path(void)
 
     memset(&st, 0, sizeof st);
 
-    /* A single late tick (busy device) catches up: five fires, in order. */
+    /* A single late tick (busy device) fires only what is still inside the
+       lateness window: isha at 20:00 is 60 s old, while the four earlier
+       prayers are older than SCHEDULER_MAX_LATENESS_S and are treated as
+       missed (see test_lateness_limit). */
     int n = scheduler_evaluate(at(20, 1), &today, &st, fired);
-    CHECK(n == 5, "catch-up tick at 20:01 fires exactly 5 prayers");
-    for (int i = 0; i < n && i < 5; i++) {
-        CHECK(fired[i] == (uint8_t)i, "catch-up fires in prayer order");
-    }
+    CHECK(n == 1 && fired[0] == 4,
+          "catch-up tick at 20:01 fires only the 20:00 prayer");
     CHECK(st.last_fired_epoch[0] == at(10, 0) &&
           st.last_fired_epoch[4] == at(20, 0),
           "state stores the prayer epochs, not the tick epoch");
@@ -176,8 +177,10 @@ static void test_config_reset(void)
     uint8_t fired[5];
 
     memset(&st, 0, sizeof st);
-    int n = scheduler_evaluate(at(13, 0), &old_day, &st, fired);
-    CHECK(n == 2, "fajr + dhuhr fire before the config change");
+    CHECK(scheduler_evaluate(at(10, 0), &old_day, &st, fired) == 1 &&
+          fired[0] == 0, "fajr fires at 10:00");
+    int n = scheduler_evaluate(at(12, 0), &old_day, &st, fired);
+    CHECK(n == 1 && fired[0] == 1, "fajr + dhuhr fire before the config change");
     CHECK(st.last_fired_epoch[0] == at(10, 0) &&
           st.last_fired_epoch[1] == at(12, 0),
           "pre-change epochs recorded");
@@ -217,8 +220,18 @@ static void test_unscheduled_and_invalid(void)
     scheduler_state_t st;
     uint8_t fired[5];
 
+    /* Minute sweep rather than one late tick: the lateness cap would treat a
+       single 23:00 tick's 10:00 / 12:00 / 18:00 prayers as missed. */
     memset(&st, 0, sizeof st);
-    int n = scheduler_evaluate(at(23, 0), &today, &st, fired);
+    int n = 0;
+    for (int64_t now = at(9, 59); now <= at(21, 0); now += 60) {
+        uint8_t ids[5];
+        int k = scheduler_evaluate(now, &today, &st, ids);
+        for (int j = 0; j < k && n < 5; j++) {
+            fired[n] = ids[j];
+            n++;
+        }
+    }
     CHECK(n == 3, "unscheduled prayers are skipped");
     CHECK(fired[0] == 0 && fired[1] == 1 && fired[2] == 3,
           "only scheduled prayers fire, in order");
@@ -265,6 +278,26 @@ static void test_premark_grace(void)
     CHECK(st.last_fired_epoch[0] == at(10, 0), "3 s old prayer is pre-marked");
 }
 
+static void test_lateness_limit(void)
+{
+    scheduler_day_t today = make_day(0, true, 36000, 43200, 54000, 64800, 72000);
+    scheduler_state_t st;
+    uint8_t fired[5];
+
+    /* Tick 3 minutes late: only the earliest prayer (10:00) is >2 min old,
+       so it is skipped; nothing fires. */
+    memset(&st, 0, sizeof st);
+    CHECK(scheduler_evaluate(at(10, 3), &today, &st, fired) == 0,
+          "3-min-late tick skips the missed prayer, fires nothing else");
+    CHECK(st.last_fired_epoch[0] == at(10, 0),
+          "missed prayer is marked fired, not retried");
+
+    /* Tick 30s late: fires normally. */
+    memset(&st, 0, sizeof st);
+    int n = scheduler_evaluate(at(10, 0) + 30, &today, &st, fired);
+    CHECK(n == 1 && fired[0] == 0, "30s late still fires");
+}
+
 int main(void)
 {
     printf("=== scheduler logic (epoch guard) ===\n");
@@ -275,6 +308,7 @@ int main(void)
     test_config_reset();
     test_unscheduled_and_invalid();
     test_premark_grace();
+    test_lateness_limit();
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }

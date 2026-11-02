@@ -16,6 +16,16 @@
  * Prayer index order matches svc_config_prayer_t:
  *   0 = Fajr, 1 = Dhuhr, 2 = Asr, 3 = Maghrib, 4 = Isha
  */
+
+/*
+ * LIMITATION: Isha after local midnight is not supported at date rollover.
+ * If a calculation produces Isha past local 24:00, the scheduler drops it
+ * at the next day's rollover. This affects far-north locations with
+ * Umm al-Qura or Moonsighting rules in summer. A full fix requires the
+ * adapter (svc_scheduler.c) to publish tomorrow's Isha into today's
+ * scheduler_day_t -- deferred to a dedicated session because it changes
+ * the contract between svc_prayer_engine_service and svc_scheduler.
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -32,6 +42,14 @@ extern "C" {
    that gap (EVENT_PRAYER_TIMES_UPDATED processed in the same loop iteration)
    would silently swallow the adhan. Anything older than this is "past". */
 #define SCHEDULER_PREMARK_GRACE_S 2
+
+/* A single late tick fires every overdue prayer (catch-up semantics). This
+   threshold caps how late "overdue" can be: a prayer more than this many
+   seconds in the past is treated as missed, not fired, to prevent a burst
+   of five back-to-back adhans after a long stall (e.g., >2 min of downtime).
+   A forward clock step larger than this (an NTP correction) skips the
+   prayers inside the skipped interval for the same reason. */
+#define SCHEDULER_MAX_LATENESS_S 120
 
 /* Today's adhan times, in the shape svc_scheduler.c adapts from
    svc_prayer_engine_times_t (adhan tier only). */
@@ -61,7 +79,10 @@ typedef struct {
  * with the same `now` returns 0 (idempotent).
  *
  * A prayer is skipped when it is not scheduled (sec == 0 or UINT32_MAX),
- * when today->valid is false, when its epoch is still in the future, or when
+ * when today->valid is false, when its epoch is still in the future, when
+ * it is more than SCHEDULER_MAX_LATENESS_S seconds in the past (treated as
+ * missed: marked fired without being reported, so a long stall cannot
+ * produce a burst of catch-up adhans), or when
  * state->last_fired_epoch[p] is already >= its epoch.
  */
 int scheduler_evaluate(int64_t now_utc_epoch,

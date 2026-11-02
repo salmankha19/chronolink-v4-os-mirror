@@ -77,6 +77,21 @@ anchors/offsets then operate on minute-aligned values, so every published
   safety net; that clamp value is not a multiple of 60 either, though it
   is unreachable in normal operation.
 
+**Limitation — Isha after local midnight (documented, deferred):**
+`isha_sec` is *allowed* to exceed 86400 (local 24:00) — the 172799 clamp
+exists precisely to keep such a value representable. The scheduler does
+not follow it across a date roll: `svc_scheduler` holds one
+`scheduler_day_t` (today's adhan seconds) and, on
+`EVENT_TIME_DATE_CHANGED`, re-fetches the new day's times and clears
+`last_fired_epoch[]`. An Isha computed past local 24:00 therefore belongs
+to the outgoing day and is dropped at midnight instead of firing. This
+affects far-north locations with Umm al-Qura or Moonsighting Committee
+rules in summer. A full fix requires `svc_scheduler.c` to publish
+tomorrow's Isha into today's `scheduler_day_t`, which changes the
+contract between `svc_prayer_engine_service` and `svc_scheduler`; it is
+deferred to a dedicated session. The same note is recorded at the top of
+`components/svc_scheduler/include/scheduler_logic.h`.
+
 The sub-minute astronomical accuracy described in `STATUS.md` is
 unchanged; only the published resolution is whole minutes.
 
