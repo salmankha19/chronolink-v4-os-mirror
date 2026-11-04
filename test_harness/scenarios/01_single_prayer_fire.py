@@ -17,7 +17,7 @@ from scenario_runner import Scenario
 
 class SinglePrayerFire(Scenario):
     name = "01_single_prayer_fire"
-    start_utc = "2026-10-31 11:44:30"
+    start_utc = "2026-10-31 11:49:30"
     speed = 1.0
     quick = True
     total_timeout_s = 90.0
@@ -38,7 +38,8 @@ I (...) svc_scheduler: Dhuhr adhan due (epoch ..., now ...)
 <no Fajr fire, no duplicate Dhuhr fire>"""
 
     expects = [
-        ("sync",        r"NTP sync ok",                     30.0, 1, 3),
+        ("sync",        r"NTP sync ok \(network\): UTC 2026-10-31 11:49:\d{2}",
+                        30.0, 1, 3),
         ("dhuhr_fire",  r"svc_scheduler: Dhuhr adhan due",  60.0, 1, 1),
         ("fajr_nofire", r"svc_scheduler: Fajr adhan due",   None,  0, 0),
     ]

@@ -102,16 +102,29 @@ not.** Where another doc mentions a gap, this file has the detail.
   12:00 adhans. Decision logic is pure C (`scheduler_logic.c`: no ESP-IDF, no
   FreeRTOS, no heap) and host-tested in
   `prayer_host_tests/test_scheduler.cpp` -- part of `make test`: happy path,
-  DST fall-back / repeated local hour, mid-day startup, config reset, and the
+  DST fall-back / repeated local hour, mid-day startup, config reset,
+  premark grace, lateness cap, and the
   `UINT32_MAX` / `valid == false` sentinels. **Invariant: epoch comparison
   only -- no `(hour, minute)` equality anywhere**, so a repeated local hour or
-  an NTP step can neither double-fire nor skip a prayer. Out of scope in v1:
+  an NTP step can neither double-fire nor skip a prayer. **Lateness cap:**
+  a prayer more than `SCHEDULER_MAX_LATENESS_S` (120 s) in the past is
+  treated as missed -- marked fired without being published -- so a stalled
+  or stopped task cannot produce a burst of five catch-up adhans. Within
+  the cap the old catch-up semantics are unchanged. Out of scope in v1:
   jamat firing, DS3231 INT wake (ROADMAP Phase 6), audio (Phase 3).
   **Known limitation:** `tz_offset_minutes` is the offset at noon of the
   target date, so on a spring-forward / fall-back day a prayer before the
   transition can fire up to 1 h early / late (ROADMAP Phase 7). Fixing it
   needs a per-prayer offset in `svc_prayer_engine_times_t`; it is not a
   `svc_scheduler` bug and must not be worked around there.
+  **Known limitation (documented, deferred):** an Isha computed past local
+  24:00 -- far-north locations with Umm al-Qura or Moonsighting rules in
+  summer -- is dropped at the next date rollover, because the scheduler
+  still holds a single day. The fix belongs in the `svc_scheduler.c`
+  adapter (tomorrow's Isha into today's `scheduler_day_t`) and changes the
+  `svc_prayer_engine_service` ↔ `svc_scheduler` contract. See the
+  LIMITATION block in `scheduler_logic.h` and
+  [prayer-times-model.md](prayer-times-model.md) §2.1.
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).
@@ -174,7 +187,10 @@ Pre-push check: `.\test_harness\pre_push_check.ps1` (~3 min, no hardware wait).
   longer leaves the board syncing from the PC.
 - **Reference scenario (`scenarios/01_single_prayer_fire.py`):** boots at
   11:49:30, asserts exactly one `Dhuhr adhan due` at 11:50:00 and zero Fajr
-  fires. Verified on hardware 2026-10-31 (three consecutive PASSes, identical
+  fires. The `sync` assertion is anchored to the mock's known UTC
+  (`NTP sync ok (network): UTC 2026-10-31 11:49:\d{2}`), not the bare
+  `NTP sync ok` prefix, so a device still running on real time cannot satisfy
+  it. Verified on hardware 2026-10-31 (three consecutive PASSes, identical
   landing point and fire epoch, ~70 s wall clock).
 
 ---
