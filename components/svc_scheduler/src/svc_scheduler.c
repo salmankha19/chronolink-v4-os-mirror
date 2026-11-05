@@ -52,11 +52,19 @@ static TaskHandle_t      s_task    = NULL;
    lock is needed: there is never more than one writer. */
 static scheduler_state_t s_state;
 
+/* Last scheduler_day_t reset_state_from_service() adapted. Kept so a later
+   date rollover can recover yesterday's past-midnight Isha before state is
+   cleared. scheduler_tick() does NOT touch this (it uses a fresh local);
+   only reset_state_from_service() reads and writes it. */
+static scheduler_day_t s_current_day;
+
 static void scheduler_task(void *arg);
 
 /* C2 adapter: svc_prayer_engine_times_t -> scheduler_day_t, ADHAN tier only.
    Jamat firing is out of scope for v1 (prayer_kind_t.PRAYER_KIND_JAMAT is
-   reserved), so jamat_sec[] is deliberately ignored here. */
+   reserved), so jamat_sec[] is deliberately ignored here.
+   The caller stores its output in s_current_day for reset_state_from_service()
+   to consult at the next date rollover; scheduler_tick() uses a fresh local. */
 static void adapt_times(const svc_prayer_engine_times_t *times,
                         scheduler_day_t *day)
 {
@@ -71,16 +79,22 @@ static void adapt_times(const svc_prayer_engine_times_t *times,
     day->valid             = times->valid;
 }
 
-/* Re-fetch (time, prayer times), drop the fired bookkeeping and re-mark what
-   has already passed today. Publishes nothing: this is the response to
+/* Re-fetch (time, prayer times), preserve any pending Isha from the day
+   we are leaving, drop the fired bookkeeping, and re-mark what has already
+   passed today. Publishes nothing: this is the response to
    EVENT_TIME_DATE_CHANGED / EVENT_PRAYER_TIMES_UPDATED and the boot path, and
    firing a burst of catch-up adhans there would be wrong. */
 static void reset_state_from_service(void)
 {
     time_t now = 0;
     svc_prayer_engine_times_t times;
-    scheduler_day_t day;
+    scheduler_day_t new_day;
+    int64_t pending_isha;
 
+    /* Capture any already-pending Isha BEFORE the memset, so two resets in
+       the same drain (DATE_CHANGED followed by TIMES_UPDATED) do not lose
+       yesterday's deferred Isha. */
+    pending_isha = s_state.pending_isha_epoch;
     memset(&s_state, 0, sizeof(s_state));
 
     if (svc_time_get_epoch(&now) != ESP_OK) {
@@ -98,8 +112,29 @@ static void reset_state_from_service(void)
         return;
     }
 
-    adapt_times(&times, &day);
-    scheduler_premark_past((int64_t)now, &day, &s_state);
+    adapt_times(&times, &new_day);
+
+    /* Preserve yesterday's past-midnight Isha, but only on a true date
+       change. A same-date re-fetch (config change) must not stash today's
+       Isha into pending_isha_epoch: the live path would double-fire once
+       the state re-armed. sec[4] > 86400 == Isha falls after local 24:00. */
+    if (pending_isha == 0
+        && s_current_day.valid
+        && s_current_day.date_yyyymmdd != new_day.date_yyyymmdd
+        && s_current_day.sec[SCHEDULER_PRAYER_COUNT - 1] > 86400u
+        && s_current_day.sec[SCHEDULER_PRAYER_COUNT - 1] != UINT32_MAX) {
+        int64_t old_isha = scheduler_prayer_epoch(
+            s_current_day.date_yyyymmdd,
+            s_current_day.tz_offset_minutes,
+            s_current_day.sec[SCHEDULER_PRAYER_COUNT - 1]);
+        if (old_isha > (int64_t)now) {
+            pending_isha = old_isha;
+        }
+    }
+
+    s_state.pending_isha_epoch = pending_isha;
+    s_current_day = new_day;
+    scheduler_premark_past((int64_t)now, &new_day, &s_state);
 }
 
 /* One poll: fetch now + today's times, fire whatever is due. */

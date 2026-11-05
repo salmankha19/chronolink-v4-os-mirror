@@ -298,6 +298,74 @@ static void test_lateness_limit(void)
     CHECK(n == 1 && fired[0] == 0, "30s late still fires");
 }
 
+static void test_isha_rollover(void)
+{
+    /* Day 1 Isha at 25:00 local (= 01:00 Day 2 UTC).
+       Day 2 Isha at 20:00 local. Simulates svc_scheduler.c preserving Day 1's
+       past-midnight Isha into s_state.pending_isha_epoch before clearing
+       state at the Day 1 -> Day 2 rollover. */
+    const int64_t day1_isha_utc = kMidnightUtc + 90000;          /* 01:00 Day 2 */
+    const int64_t day2_isha_utc = kMidnightUtc + 86400 + 72000;  /* 20:00 Day 2 */
+
+    scheduler_day_t day2 = make_day(0, true,
+                                    36000, 43200, 54000, 64800, 72000);
+    day2.date_yyyymmdd = kDate + 1;   /* 20260622 */
+
+    scheduler_state_t st;
+    uint8_t fired[SCHEDULER_PRAYER_COUNT];
+
+    /* 30 min early: nothing fires, pending retained. */
+    memset(&st, 0, sizeof st);
+    st.pending_isha_epoch = day1_isha_utc;
+    int n = scheduler_evaluate(day1_isha_utc - 1800, &day2, &st, fired);
+    CHECK(n == 0, "pending isha does not fire 30 min early");
+    CHECK(st.pending_isha_epoch == day1_isha_utc,
+          "pending isha stays pending before its epoch");
+
+    /* At its epoch: fires once, id 4, pending cleared, last_fired set. */
+    memset(&st, 0, sizeof st);
+    st.pending_isha_epoch = day1_isha_utc;
+    n = scheduler_evaluate(day1_isha_utc + 1, &day2, &st, fired);
+    CHECK(n == 1 && fired[0] == 4, "pending isha fires once as id 4");
+    CHECK(st.last_fired_epoch[4] == day1_isha_utc,
+          "pending isha epoch recorded in last_fired[4]");
+    CHECK(st.pending_isha_epoch == 0, "pending isha consumed after firing");
+
+    /* Second tick at the same time: nothing fires again. */
+    n = scheduler_evaluate(day1_isha_utc + 1, &day2, &st, fired);
+    CHECK(n == 0, "pending isha does not double-fire");
+
+    /* Day 2's own Isha later that day: fires normally. (The four earlier
+       prayers are >120 s past by now, so they are marked missed, not fired;
+       only isha lands inside the lateness window.) */
+    n = scheduler_evaluate(day2_isha_utc, &day2, &st, fired);
+    CHECK(n == 1 && fired[0] == 4,
+          "day 2's own isha fires after the rollover");
+
+    /* Beyond the lateness cap: marked missed, not published. */
+    memset(&st, 0, sizeof st);
+    st.pending_isha_epoch = day1_isha_utc;
+    n = scheduler_evaluate(day1_isha_utc + 180, &day2, &st, fired);
+    CHECK(n == 0, "pending isha past the lateness cap is not fired");
+    CHECK(st.last_fired_epoch[4] == day1_isha_utc,
+          "pending isha past the lateness cap is marked fired");
+    CHECK(st.pending_isha_epoch == 0, "missed pending isha is consumed");
+
+    /* Premark grace: 1 s old, still inside the window, retained. */
+    memset(&st, 0, sizeof st);
+    st.pending_isha_epoch = day1_isha_utc;
+    scheduler_premark_past(day1_isha_utc + 1, &day2, &st);
+    CHECK(st.pending_isha_epoch == day1_isha_utc,
+          "pending isha in the premark grace window stays pending");
+
+    /* Premark past: 3 s old, outside the window, marked missed + cleared. */
+    scheduler_premark_past(day1_isha_utc + 3, &day2, &st);
+    CHECK(st.last_fired_epoch[4] == day1_isha_utc,
+          "pending isha past the premark window is premarked");
+    CHECK(st.pending_isha_epoch == 0,
+          "premarked pending isha is cleared");
+}
+
 int main(void)
 {
     printf("=== scheduler logic (epoch guard) ===\n");
@@ -309,6 +377,7 @@ int main(void)
     test_unscheduled_and_invalid();
     test_premark_grace();
     test_lateness_limit();
+    test_isha_rollover();
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }

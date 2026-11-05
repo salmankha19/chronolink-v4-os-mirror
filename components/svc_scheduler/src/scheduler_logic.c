@@ -117,6 +117,26 @@ int scheduler_evaluate(int64_t now_utc_epoch,
         count++;
     }
 
+    /* Consume yesterday's Isha if it was deferred past local midnight.
+       Guard both branches with last_fired_epoch[4] < pending: if today's
+       Isha (a later epoch) already fired this call, do not regress the
+       marker or it will double-fire on the next tick. */
+    if (state->pending_isha_epoch > 0 && count < SCHEDULER_PRAYER_COUNT) {
+        int64_t pending = state->pending_isha_epoch;
+        if (now_utc_epoch >= pending) {
+            if (state->last_fired_epoch[4] < pending) {
+                if (now_utc_epoch - pending <= SCHEDULER_MAX_LATENESS_S) {
+                    state->last_fired_epoch[4] = pending;
+                    fired_ids_out[count++] = 4;
+                } else {
+                    state->last_fired_epoch[4] = pending;   /* missed */
+                }
+            }
+            /* else: today's Isha already fired at a later epoch -- leave it */
+            state->pending_isha_epoch = 0;
+        }
+    }
+
     return count;
 }
 
@@ -143,5 +163,17 @@ void scheduler_premark_past(int64_t now_utc_epoch,
         }
 
         state->last_fired_epoch[p] = epoch;
+    }
+
+    /* Same grace window as today's prayers: only premark the pending Isha
+       once it is genuinely past, so a same-second reset does not swallow
+       it. Guarded by last_fired_epoch[4] < pending for the same reason as
+       in scheduler_evaluate(): never regress a later-epoch marker. */
+    if (state->pending_isha_epoch > 0 &&
+        state->pending_isha_epoch <= now_utc_epoch - SCHEDULER_PREMARK_GRACE_S) {
+        if (state->last_fired_epoch[4] < state->pending_isha_epoch) {
+            state->last_fired_epoch[4] = state->pending_isha_epoch;
+        }
+        state->pending_isha_epoch = 0;
     }
 }
