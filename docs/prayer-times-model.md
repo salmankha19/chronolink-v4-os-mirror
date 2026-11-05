@@ -303,10 +303,21 @@ fields; there is no silent staleness.
 mismatch, or `calculation` block ≠ current `svc_config_t` (canonical
 JSON compare). User files never auto-regenerate (handoff dec. 7).
 
-**Tripwire**: every recalculate where the file supplied today's values
-compares against a fresh engine call; a >60 s mismatch logs a warning and
-serves the fresh value for that field. Never fires in normal operation
-(deterministic inputs).
+**Tripwire (firmware files only, PR #125)**: every recalculate where a
+firmware-generated file supplied today's values compares against a fresh
+engine call; a >60 s mismatch logs a warning and serves the fresh value
+for that field. Never fires in normal operation (deterministic inputs).
+
+**Deviation policy**: a user-uploaded timetable is honoured verbatim. If
+a mosque's prayer time deviates from what the firmware would calculate,
+the difference is *not* rejected at upload, and the stored value is *not*
+overridden by the fresh calculation. The mosque's published sign is
+authoritative. Structural validation still applies to user uploads (JSON
+parses, `schema_version` supported, ≥ 1 day present) and jamat-bracket
+validation still rejects a jamat earlier than its adhan or at-or-after
+the next prayer, but a prayer time that differs from the firmware's
+calculation is accepted. If a future release wants a warn-only path, add
+it as a distinct PR — do not reintroduce the silent override.
 
 **Year guard**: prayer times are never published when `current_year ∉
 [2020, 2100]`.

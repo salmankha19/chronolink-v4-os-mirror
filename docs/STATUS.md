@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-05 at commit `HEAD` (PR: scheduler isha rollover, PR #124). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-05 at commit `HEAD` (PR: timetable deviation policy, PR #125). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -78,8 +78,11 @@ not.** Where another doc mentions a gap, this file has the detail.
   file types store final local-time seconds. Per-field fallback on
   **read** (never on upload): missing fields are computed from config
   each recalculate. Tripwire compares file values against a fresh
-  engine call (>60 s mismatch serves fresh). Year guard `[2020, 2100]`.
-  Jamat bracket validation rejects jamat < adhan, warns if jamat ≥
+  engine call (>60 s mismatch serves fresh) — **firmware files only**
+  (PR #125); user uploads are served verbatim per
+  [prayer-times-model.md](prayer-times-model.md) §5.5. Year guard
+  `[2020, 2100]`. Jamat bracket validation rejects jamat < adhan, warns
+  if jamat ≥
   next prayer. Atomic write via `.tmp` + rename. Config-change warning:
   server returns 409 for partial user file unless client confirms.
 - **`svc_timetable` hardening (PR 4):** internal state mutex (all public

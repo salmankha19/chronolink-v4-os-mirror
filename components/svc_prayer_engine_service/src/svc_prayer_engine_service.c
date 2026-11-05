@@ -376,7 +376,13 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     /* Source tag. */
     result.source = (uint8_t)svc_timetable_get_source();
 
-    /* Tripwire: compare file values against fresh; >60 s mismatch uses fresh. */
+    /* Tripwire: fires only on firmware-generated files, whose values are
+       deterministic and should match the fresh calculation exactly (a >60 s
+       difference means drift or a bug, and the fresh value wins). User
+       uploads are the mosque's authority and are honoured verbatim — the
+       mosque's published sign is the product contract (see
+       docs/prayer-times-model.md §5.5). Jamat-bracket validation below
+       still rejects impossible user inputs. */
     #define TT_TRIPWIRE(idx, field, name) do { \
         if (tt_today.has_##field) { \
             uint32_t _d = (tt_today.field > fresh_adhan[idx]) \
@@ -390,11 +396,13 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
         } \
     } while (0)
 
-    TT_TRIPWIRE(0, fajr,    "fajr");
-    TT_TRIPWIRE(1, dhuhr,   "dhuhr");
-    TT_TRIPWIRE(2, asr,     "asr");
-    TT_TRIPWIRE(3, maghrib, "maghrib");
-    TT_TRIPWIRE(4, isha,    "isha");
+    if (result.source == SVC_TIMETABLE_SOURCE_FIRMWARE) {
+        TT_TRIPWIRE(0, fajr,    "fajr");
+        TT_TRIPWIRE(1, dhuhr,   "dhuhr");
+        TT_TRIPWIRE(2, asr,     "asr");
+        TT_TRIPWIRE(3, maghrib, "maghrib");
+        TT_TRIPWIRE(4, isha,    "isha");
+    }
     #undef TT_TRIPWIRE
 
     /* Tier 3: jamat (today), seasonal. Winter/summer decision uses the
