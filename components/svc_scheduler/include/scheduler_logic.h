@@ -16,16 +16,6 @@
  * Prayer index order matches svc_config_prayer_t:
  *   0 = Fajr, 1 = Dhuhr, 2 = Asr, 3 = Maghrib, 4 = Isha
  */
-
-/*
- * LIMITATION: Isha after local midnight is not supported at date rollover.
- * If a calculation produces Isha past local 24:00, the scheduler drops it
- * at the next day's rollover. This affects far-north locations with
- * Umm al-Qura or Moonsighting rules in summer. A full fix requires the
- * adapter (svc_scheduler.c) to publish tomorrow's Isha into today's
- * scheduler_day_t -- deferred to a dedicated session because it changes
- * the contract between svc_prayer_engine_service and svc_scheduler.
- */
 #pragma once
 
 #include <stdbool.h>
@@ -67,6 +57,11 @@ typedef struct {
 typedef struct {
     int64_t last_fired_epoch[SCHEDULER_PRAYER_COUNT]; /* UTC epoch last fired
                                                          per prayer; 0 = never */
+    /* Yesterday's Isha when it falls after local midnight and has not yet
+       fired. Set by svc_scheduler.c at a true date rollover (never on a
+       same-date re-fetch: that would double-fire once the state re-arms).
+       Consumed by scheduler_evaluate() or scheduler_premark_past(). 0 = none. */
+    int64_t pending_isha_epoch;
 } scheduler_state_t;
 
 /*
@@ -84,6 +79,13 @@ typedef struct {
  * missed: marked fired without being reported, so a long stall cannot
  * produce a burst of catch-up adhans), or when
  * state->last_fired_epoch[p] is already >= its epoch.
+ *
+ * If state->pending_isha_epoch is non-zero (yesterday's Isha fell after
+ * local midnight and has not yet fired), that instant is also consumed:
+ * reported with id 4 if within SCHEDULER_MAX_LATENESS_S, otherwise marked
+ * fired without being published ("missed"). Today's Isha (slot 4) and
+ * yesterday's pending Isha cannot both be inside the 120 s window
+ * (they are 19+ hours apart), so fired_ids_out[5] remains sufficient.
  */
 int scheduler_evaluate(int64_t now_utc_epoch,
                        const scheduler_day_t* today,

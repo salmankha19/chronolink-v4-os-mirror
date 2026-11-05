@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-01 at commit `HEAD` (PR: svc_http security batch, PR 3). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-05 at commit `HEAD` (PR: scheduler isha rollover, PR #124). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -117,14 +117,12 @@ not.** Where another doc mentions a gap, this file has the detail.
   transition can fire up to 1 h early / late (ROADMAP Phase 7). Fixing it
   needs a per-prayer offset in `svc_prayer_engine_times_t`; it is not a
   `svc_scheduler` bug and must not be worked around there.
-  **Known limitation (documented, deferred):** an Isha computed past local
-  24:00 -- far-north locations with Umm al-Qura or Moonsighting rules in
-  summer -- is dropped at the next date rollover, because the scheduler
-  still holds a single day. The fix belongs in the `svc_scheduler.c`
-  adapter (tomorrow's Isha into today's `scheduler_day_t`) and changes the
-  `svc_prayer_engine_service` ↔ `svc_scheduler` contract. See the
-  LIMITATION block in `scheduler_logic.h` and
-  [prayer-times-model.md](prayer-times-model.md) §2.1.
+  **Isha past local midnight (PR #124):** preserved across the day
+  rollover via `scheduler_state_t.pending_isha_epoch`; fires once at its
+  real epoch (or is marked missed if stale by >120 s). Covered by
+  `test_scheduler::test_isha_rollover`. No change to
+  `svc_prayer_engine_times_t` — the adapter recovers the deferred epoch
+  from the previous `scheduler_day_t`.
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).
