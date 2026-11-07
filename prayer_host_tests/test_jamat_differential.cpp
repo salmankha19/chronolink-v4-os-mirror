@@ -103,7 +103,15 @@ static uint32_t old_compute_jamat(uint32_t adhan_sec,
     default:
         return UINT32_MAX;
     }
-    return old_round_to_min(base, round_min);
+
+    uint32_t rounded = old_round_to_min(base, round_min);
+    /* #128: matches the new floor in jamat_calculator.c's compute_jamat
+       so the differential continues to verify "no other behavior changed"
+       after the fix. */
+    if (cfg->anchor == SVC_CONFIG_JAMAT_ADHAN_PLUS && rounded < adhan_sec) {
+        rounded = adhan_sec;
+    }
+    return rounded;
 }
 
 /* The old today-path: season from the local date, then per-prayer compute
@@ -320,6 +328,44 @@ int main(void)
 
         CHECK(jamat_calculator_season_for_date(NULL, 20260615u) == 0,
               "NULL cfg must report season 0");
+        checks++;
+    }
+
+    /* 4. #128: ADHAN_PLUS jamat must never precede its own adhan after
+          rounding. Sweep the adhan across an hour with (offset, round)
+          combos that previously exposed the bug. */
+    {
+        svc_config_t cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.season.summer_start_month = 3;
+        cfg.season.summer_start_day   = 29;
+        cfg.season.winter_start_month = 10;
+        cfg.season.winter_start_day   = 25;
+
+        static const struct { uint16_t off; uint8_t rnd; } combos[] = {
+            {1, 5}, {1, 15}, {1, 30}, {0, 2}, {2, 10},
+        };
+        for (size_t i = 0; i < sizeof(combos) / sizeof(combos[0]); i++) {
+            for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+                cfg.jamat[p].winter.anchor     = SVC_CONFIG_JAMAT_ADHAN_PLUS;
+                cfg.jamat[p].summer.anchor     = SVC_CONFIG_JAMAT_ADHAN_PLUS;
+                cfg.jamat[p].winter.offset_min = combos[i].off;
+                cfg.jamat[p].summer.offset_min = combos[i].off;
+                cfg.jamat[p].round_min         = combos[i].rnd;
+            }
+            for (uint32_t a = 43200u; a < 43200u + 3600u; a += 13u) {
+                uint32_t eff[5] = { a, a, a, a, a };
+                uint32_t jamat[5];
+                uint8_t season;
+                new_run(&cfg, 20260115u, eff, 4u * 3600u, 23u * 3600u,
+                        jamat, &season);
+            for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
+                    CHECK(jamat[p] >= eff[p],
+                          "ADHAN_PLUS jamat >= adhan (#128 floor)");
+                    checks++;
+                }
+            }
+        }
         checks++;
     }
 

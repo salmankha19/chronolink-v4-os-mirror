@@ -8,7 +8,11 @@
  * date change, set_current_date() re-reads the file (cheap; once per day).
  *
  * Regeneration writes to timetable.json.tmp, fsyncs, then rename() to
- * timetable.json. FATFS supports atomic rename.
+ * timetable.json. FATFS rename() does not overwrite an existing file;
+ * when the destination exists the writer does: rename(main -> .bak),
+ * rename(.tmp -> main), remove(.bak). A leftover .bak or .tmp from a
+ * crash before the final rename is picked up by boot recovery in
+ * svc_timetable_init().
  */
 #include "svc_timetable.h"
 
@@ -335,9 +339,14 @@ static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
         bool is_tomorrow = (strncmp(d_marker, tomorrow_mmdd, 5) == 0);
 
         if (!is_today && !is_tomorrow) {
-            /* Still need to know if ANY entry is partial (for the UI flag) */
-            if (!any_incomplete && !strstr(entry_start, "\"jamat\"")) {
-                any_incomplete = true;
+            /* Still need to know if ANY entry is partial (for the UI flag).
+               Bound the search to this entry [entry_start, p) so a "jamat"
+               key in a later entry cannot mark this one as complete. */
+            if (!any_incomplete) {
+                const char *jm = strstr(entry_start, "\"jamat\"");
+                if (!jm || jm >= p) {
+                    any_incomplete = true;
+                }
             }
             continue;
         }
@@ -441,6 +450,45 @@ static esp_err_t reload_locked_io(void)
     return ESP_OK;
 }
 
+/* Boot recovery: try to salvage a usable timetable from a leftover .bak or
+   .tmp file if the main path is missing or unparseable. Called only from
+   svc_timetable_init() -- not on every reload or config change. On success
+   the recovered file is promoted to SVC_TIMETABLE_PATH so the normal
+   reload finds it where it expects. */
+static void try_recover_timetable(void)
+{
+    /* Main path OK? Nothing to recover. */
+    timetable_state_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (parse_file_at(SVC_TIMETABLE_PATH, &tmp) == ESP_OK &&
+        tmp.meta.day_count > 0) {
+        return;
+    }
+
+    /* Candidates in order of expected recency. */
+    static const char *candidates[] = {
+        "/storage/timetable.bak",
+        SVC_TIMETABLE_REGEN_TMP,
+        SVC_TIMETABLE_UPLOAD_TMP,
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        timetable_state_t cand;
+        memset(&cand, 0, sizeof(cand));
+        if (parse_file_at(candidates[i], &cand) != ESP_OK) continue;
+        if (cand.meta.day_count == 0) continue;
+
+        ESP_LOGW(TAG, "boot recovery: promoting %s -> %s (%u days)",
+                 candidates[i], SVC_TIMETABLE_PATH,
+                 (unsigned)cand.meta.day_count);
+        remove(SVC_TIMETABLE_PATH);
+        if (rename(candidates[i], SVC_TIMETABLE_PATH) != 0) {
+            ESP_LOGW(TAG, "boot recovery: rename failed; next reload will regenerate");
+            return;
+        }
+        return;
+    }
+}
+
 esp_err_t svc_timetable_init(void)
 {
     /* Create mutexes once. A second init() (from reload, or a caller
@@ -460,6 +508,7 @@ esp_err_t svc_timetable_init(void)
         }
     }
 
+    try_recover_timetable();
     esp_err_t err = reload_locked_io();
     s_initialized = true;
     return err;
