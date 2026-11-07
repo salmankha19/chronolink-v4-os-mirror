@@ -164,6 +164,31 @@ static void apply_preset_unlocked(svc_config_t *c, svc_config_preset_t preset)
     }
 }
 
+/* The POSIX TZ string a preset implies. #132 (R4): svc_time owns the
+   TZ (NVS namespace "time" key "tz"); this helper only maps a preset to
+   the string svc_http should hand to svc_time_set_timezone_posix() after
+   svc_config_apply_preset() runs. Returns NULL for any unrecognized
+   preset, so a caller can skip the TZ application.
+
+   POSIX TZ strings use inverted sign: "PKT-5" means UTC+5, no DST. UK
+   gets "GMT0BST,M3.5.0/1,M10.5.0" (GMT + British Summer Time, last
+   Sunday of March 01:00 -> last Sunday of October). Pakistan Standard
+   Time has no DST -- one fixed offset all year. */
+const char *svc_config_preset_timezone(svc_config_preset_t preset)
+{
+    switch (preset) {
+    case SVC_CONFIG_PRESET_UK:
+        return "GMT0BST,M3.5.0/1,M10.5.0";
+    case SVC_CONFIG_PRESET_PAKISTAN:
+        return "PKT-5";
+    case SVC_CONFIG_PRESET_UK_MOONSIGHTING:
+        return "GMT0BST,M3.5.0/1,M10.5.0";
+    case SVC_CONFIG_PRESET_COUNT:
+    default:
+        return NULL;
+    }
+}
+
 bool svc_config_round_min_is_valid(uint8_t round_min)
 {
     switch (round_min) {
