@@ -298,26 +298,69 @@ static esp_err_t get_config_handler(httpd_req_t *req)
     return err;
 }
 
+/* Common timetable-override confirmation check, used by both POST /api/config
+ * and POST /api/config/preset.
+ *
+ * Returns:
+ *   ESP_OK                -- proceed (no partial user timetable, or override confirmed)
+ *   ESP_ERR_INVALID_STATE -- 409 Conflict already sent; caller must return
+ *   ESP_ERR_INVALID_ARG   -- 400 Bad Request already sent; caller must return
+ *
+ * #128 (R7c) fix: previously the callers treated any header-fetch error as
+ * "header missing" (409), so a value over 7 chars (which triggers
+ * ESP_ERR_HTTPD_RESULT_TRUNC) was reported as 409 rather than 400, and any
+ * non-empty value ("no", "false") was accepted as confirmation. Now truncation
+ * and bogus values are 400; only "true", "yes", or "1" confirm. */
+static esp_err_t require_timetable_override_if_needed(httpd_req_t *req)
+{
+    svc_timetable_metadata_t meta = {0};
+    if (svc_timetable_get_metadata(&meta) != ESP_OK
+        || !meta.file_present
+        || meta.source != SVC_TIMETABLE_SOURCE_USER
+        || !meta.partial) {
+        return ESP_OK;
+    }
+
+    /* Buffer fits the longest accepted value ("true" = 4) plus NUL. A value
+       over 7 chars triggers ESP_ERR_HTTPD_RESULT_TRUNC, which we reject as
+       invalid (400) rather than treat as missing (409). */
+    char hdr[8];
+    esp_err_t err = httpd_req_get_hdr_value_str(
+        req, "X-Confirm-Timetable-Override", hdr, sizeof(hdr));
+
+    if (err == ESP_ERR_NOT_FOUND) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"warning\":\"user_timetable_partial\"}");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "%s: bad X-Confirm-Timetable-Override: %s",
+                 req->uri, esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "X-Confirm-Timetable-Override invalid");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (strcmp(hdr, "true") == 0 || strcmp(hdr, "yes") == 0 ||
+        strcmp(hdr, "1") == 0) {
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "%s: rejected X-Confirm-Timetable-Override='%s'",
+             req->uri, hdr);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                        "X-Confirm-Timetable-Override must be true/yes/1");
+    return ESP_ERR_INVALID_ARG;
+}
+
 /* POST /api/config */
 static esp_err_t post_config_handler(httpd_req_t *req)
 {
     if (!require_auth(req)) return ESP_FAIL;
 
     /* If a partial user timetable is present, require explicit confirm. */
-    svc_timetable_metadata_t _meta = {0};
-    if (svc_timetable_get_metadata(&_meta) == ESP_OK
-        && _meta.file_present
-        && _meta.source == SVC_TIMETABLE_SOURCE_USER
-        && _meta.partial) {
-        char _hdr[8];
-        if (httpd_req_get_hdr_value_str(req, "X-Confirm-Timetable-Override",
-                                        _hdr, sizeof(_hdr)) != ESP_OK) {
-            httpd_resp_set_status(req, "409 Conflict");
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_sendstr(req, "{\"warning\":\"user_timetable_partial\"}");
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
+    esp_err_t ovr_err = require_timetable_override_if_needed(req);
+    if (ovr_err != ESP_OK) return ovr_err;
 
     char *buf = read_body(req, 4096, NULL);
     if (!buf) return ESP_FAIL;
@@ -535,12 +578,26 @@ static esp_err_t post_config_handler(httpd_req_t *req)
     #undef APPLY_NUM
     #undef APPLY
 
+    /* #128 (R7a): the setters above apply as they are parsed, so on a partial
+       failure earlier fields are already persisted. A full validate-then-apply
+       refactor is out of scope; instead, (a) always recalculate so the display
+       reflects the actual persisted state, (b) return 400 (client error) rather
+       than 500 (server error), and (c) surface partial_apply in the body so
+       a client can distinguish "nothing applied" from "some applied, some
+       rejected". */
+    svc_prayer_engine_service_recalculate();
     if (first_err == ESP_OK) {
-        /* Force an immediate recalculation so the UI reflects new times instantly */
-        svc_prayer_engine_service_recalculate();
         httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     } else {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "One or more setters failed");
+        ESP_LOGW(TAG, "config apply partial: first_err=%s",
+                 esp_err_to_name(first_err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        char err_body[96];
+        snprintf(err_body, sizeof(err_body),
+                 "{\"error\":\"partial_apply\",\"detail\":\"%s\"}",
+                 esp_err_to_name(first_err));
+        httpd_resp_sendstr(req, err_body);
     }
     return first_err;
 }
@@ -899,20 +956,8 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
 {
     if (!require_auth(req)) return ESP_FAIL;
 
-    svc_timetable_metadata_t _meta = {0};
-    if (svc_timetable_get_metadata(&_meta) == ESP_OK
-        && _meta.file_present
-        && _meta.source == SVC_TIMETABLE_SOURCE_USER
-        && _meta.partial) {
-        char _hdr[8];
-        if (httpd_req_get_hdr_value_str(req, "X-Confirm-Timetable-Override",
-                                        _hdr, sizeof(_hdr)) != ESP_OK) {
-            httpd_resp_set_status(req, "409 Conflict");
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_sendstr(req, "{\"warning\":\"user_timetable_partial\"}");
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
+    esp_err_t ovr_err = require_timetable_override_if_needed(req);
+    if (ovr_err != ESP_OK) return ovr_err;
 
     char *buf = read_body(req, 128, NULL);
     if (!buf) return ESP_FAIL;
@@ -926,8 +971,14 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
 
     cJSON *preset = cJSON_GetObjectItem(root, "preset");
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    if (cJSON_IsNumber(preset)) {
-        err = svc_config_apply_preset((svc_config_preset_t)preset->valueint);
+    /* #128 (R7b): reject non-integral (1.5) and out-of-range before the
+       enum cast; the previous valueint path silently truncated 1.5 -> 1.
+       The upper bound tracks SVC_CONFIG_PRESET_COUNT automatically, so
+       adding a fourth preset needs no change here. */
+    double preset_v;
+    if (json_get_uint_range(preset, 0,
+                            (double)(SVC_CONFIG_PRESET_COUNT - 1), &preset_v)) {
+        err = svc_config_apply_preset((svc_config_preset_t)(int)preset_v);
     }
     cJSON_Delete(root);
 

@@ -328,8 +328,10 @@ wins).
 
 **Config-change warning**: if a partial user file is present and the
 user saves config, the server returns 409 unless the client sends
-`X-Confirm-Timetable-Override`; the web UI shows a `confirm()` before
-that POST.
+`X-Confirm-Timetable-Override: true` (also accepts `yes` or `1`). Any
+other value, including an over-length value that triggers
+`ESP_ERR_HTTPD_RESULT_TRUNC`, returns 400. The web UI shows a
+`confirm()` before that POST and sends `true` on confirmation.
 
 **Concurrency (PR 4).** All state reads and writes go through a mutex
 internal to `svc_timetable`; the public accessors are safe to call from
