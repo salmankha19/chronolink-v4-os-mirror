@@ -15,12 +15,16 @@
  * see docs/STATUS.md ("svc_time") and hal_rtc.h for the contract.
  *
  * Threading:
- *   worker task  svc_time_worker   -- mailbox drain, 1 Hz clock tick, syncs,
- *                                    status print
- *   esp_timer    backoff_timer_cb  -- retry after a failed sync; it calls
- *                                    run_ntp_sync() directly (design note in
- *                                    docs/STATUS.md), which blocks that task
- *                                    for up to SVC_TIME_SYNC_WAIT_MS
+ *   worker task  svc_time_worker   -- mailbox drain, 1 Hz clock tick,
+ *                                    status print; spawns one-shot sync
+ *                                    tasks (network connect, backoff)
+ *   one-shot     background_sync_task -- runs an NTP sync off the worker
+ *                                    and off the esp_timer task, so neither
+ *                                    is blocked for SVC_TIME_SYNC_WAIT_MS
+ *                                    (#130 R9a + R9b)
+ *   one-shot     daily_sync_task   -- runs the 23:00 daily NTP sync
+ *   esp_timer    backoff_timer_cb  -- just spawns background_sync_task;
+ *                                    never blocks
  *   callers      svc_time_sync_ntp_once() runs a sync in the caller's task
  *
  * Locks:
@@ -446,7 +450,11 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
     if (sync_is_fresh()) {
         ESP_LOGI(TAG, "sync skipped (%s): last sync is younger than %u s",
                  why, (unsigned)(SVC_TIME_RESYNC_MIN_MS / 1000u));
-        return ESP_OK;
+        /* #130 (R9c): return a distinct code, not ESP_OK. Callers such as
+           /debug/ntp and the test harness must distinguish "clock actually
+           moved" from "skipped because the previous sync is still fresh."
+           ESP_OK alone let them report a successful sync that never ran. */
+        return ESP_ERR_NOT_FINISHED;
     }
     if (!network_stack_ready()) {
         ESP_LOGW(TAG, "sync skipped (%s): network stack not up yet", why);
@@ -494,6 +502,21 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
     if (err == ESP_OK) {
         err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(SVC_TIME_SYNC_WAIT_MS));
     }
+
+    /* #130 (R9d): stop LwIP's periodic SNTP updates once this sync
+       finishes -- whether it succeeded or failed. Without this deinit,
+       LwIP keeps adjusting the system clock on its own hourly cycle while
+       the display reads the RTC via tick_snapshot(); the hourly
+       run_hourly_rtc_correction() would then snap the system clock back
+       to the RTC, reverting LwIP's adjustments. Making each sync fully
+       self-contained (init, wait, deinit) keeps the RTC and the system
+       clock in step. Our own sync paths (network connect, backoff retry,
+       23:00 daily) remain the only source of updates. */
+    if (s_sntp_initialized) {
+        esp_netif_sntp_deinit();
+        s_sntp_initialized = false;
+    }
+
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "NTP sync failed (%s): %s -- keeping the old time",
                  why, esp_err_to_name(err));
@@ -585,20 +608,30 @@ static esp_err_t run_ntp_sync(const char *why, bool is_daily_sync)
     return err;
 }
 
+/* One-shot task: run a background NTP sync without blocking the caller.
+   Used by the backoff timer (esp_timer task must not block for
+   SVC_TIME_SYNC_WAIT_MS) and by the worker's EVENT_NETWORK_CONNECTED
+   handler (the 1 Hz clock tick must keep moving). #130 R9a + R9b. */
+static void background_sync_task(void *arg)
+{
+    const char *why = (const char *)arg;
+    run_ntp_sync(why, false);
+    vTaskDelete(NULL);
+}
+
 static void backoff_timer_cb(void *arg)
 {
-    esp_err_t err;
-
     (void)arg;
-    /* Runs in the esp_timer task, not on the worker (design note in
-       docs/STATUS.md). esp_netif_sntp_sync_wait() blocks that task for up to
-       SVC_TIME_SYNC_WAIT_MS, which also delays every other esp_timer. The
-       wait is bounded and only happens while NTP is failing; if that ever
-       becomes a problem, signal the worker from here instead. */
-    ESP_LOGI(TAG, "backoff elapsed -- retrying NTP");
-    err = run_ntp_sync("backoff", false);
-    if (err != ESP_OK) {
-        ESP_LOGD(TAG, "backoff retry result: %s", esp_err_to_name(err));
+    /* #130 (R9a): do NOT call run_ntp_sync() directly here. It would block
+       the shared esp_timer task for up to SVC_TIME_SYNC_WAIT_MS and delay
+       every other timer. Spawn a one-shot task instead; if the spawn fails
+       (should not happen), re-arm so we try again after the next backoff
+       step. */
+    ESP_LOGI(TAG, "backoff elapsed -- scheduling NTP retry");
+    if (xTaskCreate(background_sync_task, "svc_time_backoff", 4096,
+                    (void *)"backoff", tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "failed to spawn backoff retry task -- re-arming");
+        arm_backoff();
     }
 }
 
@@ -838,15 +871,15 @@ static void svc_time_worker(void *arg)
             switch (evt.type) {
             case EVENT_NETWORK_CONNECTED: {
                 /* A fresh link may be exactly what the last attempt needed,
-                   so cancel the pending backoff and retry now. */
-                esp_err_t err;
+                   so cancel the pending backoff and retry now.
+                   #130 (R9b): spawn a one-shot task so the worker's 1 Hz
+                   tick keeps running during esp_netif_sntp_sync_wait(). */
                 s_network_connected = true;
-                ESP_LOGI(TAG, "network connected -- starting NTP sync");
+                ESP_LOGI(TAG, "network connected -- scheduling NTP sync");
                 cancel_backoff();
-                err = run_ntp_sync("network", false);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "NTP sync after connect failed: %s",
-                             esp_err_to_name(err));
+                if (xTaskCreate(background_sync_task, "svc_time_netsync", 4096,
+                                (void *)"network", tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
+                    ESP_LOGW(TAG, "failed to spawn network sync task");
                 }
                 break;
             }
@@ -1117,7 +1150,28 @@ esp_err_t svc_time_set_timezone_posix(const char *tz)
 
 const char *svc_time_get_timezone_posix(void)
 {
-    return s_tz;   /* file-static storage, filled by svc_time_start() */
+    /* #130 (R9e): DEPRECATED. Returns a pointer into s_tz, which is
+       modified by svc_time_set_timezone_posix() under s_state_lock; a
+       concurrent reader can observe a torn string. New code must use
+       svc_time_get_timezone_posix_copy() below. This entry point is kept
+       for source compatibility until existing callers migrate. */
+    return s_tz;
+}
+
+esp_err_t svc_time_get_timezone_posix_copy(char *out, size_t out_size)
+{
+    if (!out || out_size < SVC_TIME_TZ_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!state_lock()) {
+        return ESP_ERR_TIMEOUT;
+    }
+    memcpy(out, s_tz, SVC_TIME_TZ_MAX);
+    state_unlock();
+    return ESP_OK;
 }
 
 esp_err_t svc_time_get_snapshot(svc_time_snapshot_t *out)
