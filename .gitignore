@@ -80,10 +80,6 @@ pr-body.txt
 *.o
 *.o.*
 
-# Working documents (not committed)
-docs/session*-cline-prompt.md
-docs/session*-plan.md
-docs/session*-prompt.md
-
-docs/RESUME_*.md
+# Working documents (not committed) — whole session directory ignored
+docs/sessions/
 platformio.local.ini
