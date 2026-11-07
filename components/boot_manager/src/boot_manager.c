@@ -113,7 +113,7 @@ static boot_flags_t read_pending_boot_request(void)
 /* Wipe every persistent store that is user-owned, then reboot.
    Does not return.
      - NVS:       whole partition erased (all namespaces)
-     - /storage:  FATFS reformatted
+     - /storage:  whole partition erased (raw; next boot re-formats)
    Deliberately NOT touched:
      - otadata:   boot-slot preference is not user data
      - phy_init:  RF calibration data is board-specific, not user data
@@ -121,36 +121,41 @@ static boot_flags_t read_pending_boot_request(void)
 static void do_factory_reset(void) __attribute__((noreturn));
 static void do_factory_reset(void)
 {
-    ESP_LOGW(TAG, "Factory reset: erasing NVS and formatting %s",
-             CHRONOLINK_STORAGE_MOUNT_POINT);
+    ESP_LOGW(TAG, "Factory reset: erasing NVS and %s partition",
+             CHRONOLINK_STORAGE_PARTITION);
 
     esp_err_t err = nvs_flash_erase();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs_flash_erase failed: %s", esp_err_to_name(err));
-        /* Continue anyway -- we still want to try formatting storage and
+        /* Continue anyway -- we still want to try erasing storage and
            reboot. A failed NVS erase at worst leaves stale config. */
     } else {
         ESP_LOGW(TAG, "NVS erased");
     }
 
-    /* Mount the partition fresh so we can format it, then unmount.
-       Using the rw_wl variant to match init_fatfs() below. */
-    const esp_vfs_fat_mount_config_t mount_cfg = {
-        .format_if_mount_failed = true,
-        .max_files              = 5,
-        .allocation_unit_size   = 4096,
-        .use_one_fat            = false,
-    };
-    wl_handle_t tmp_wl = WL_INVALID_HANDLE;
-    err = esp_vfs_fat_spiflash_mount_rw_wl(CHRONOLINK_STORAGE_MOUNT_POINT,
-                                           CHRONOLINK_STORAGE_PARTITION,
-                                           &mount_cfg, &tmp_wl);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "storage format-on-mount failed: %s", esp_err_to_name(err));
+    /* #129 (R3): force-erase the /storage partition directly. The old code
+       used mount_rw_wl with format_if_mount_failed=true, which only formats
+       on mount FAILURE -- a cleanly-mountable FS kept its files, so
+       "erase ALL settings" left timetable.json behind. Erasing the
+       partition directly via the esp_partition API works regardless of
+       whether the FS would otherwise mount cleanly; next boot's
+       init_fatfs() mounts with format_if_mount_failed=true and finds no
+       valid FS on a 0xFF-erased partition, so it formats fresh. */
+    const esp_partition_t *storage = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT,
+        CHRONOLINK_STORAGE_PARTITION);
+    if (!storage) {
+        ESP_LOGE(TAG, "storage partition '%s' not found -- skipping wipe",
+                 CHRONOLINK_STORAGE_PARTITION);
     } else {
-        ESP_LOGW(TAG, "storage formatted");
-        esp_vfs_fat_spiflash_unmount_rw_wl(CHRONOLINK_STORAGE_MOUNT_POINT,
-                                           tmp_wl);
+        esp_err_t erase_err = esp_partition_erase_range(storage, 0, storage->size);
+        if (erase_err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_partition_erase_range failed: %s",
+                     esp_err_to_name(erase_err));
+        } else {
+            ESP_LOGW(TAG, "storage partition erased (%u bytes)",
+                     (unsigned)storage->size);
+        }
     }
 
     ESP_LOGW(TAG, "Factory reset complete, rebooting");
@@ -339,30 +344,14 @@ int boot_manager_init(boot_flags_t flags)
     s_last_stage = BOOT_STAGE_HANDOFF;
     publish_stage(BOOT_STAGE_HANDOFF, BOOT_STATUS_OK, 0);
 
-    /* CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE requires the app to explicitly
-     * mark itself valid after a fresh OTA. If it doesn't call this before
-     * the next reset, the bootloader reverts to the previous slot.
+    /* #129 (R2): esp_ota_mark_app_valid_cancel_rollback() used to be here,
+     * but boot_manager_init() returns before app_main() starts most
+     * services (svc_config, svc_time, svc_http, etc.). Marking the image
+     * valid this early meant a crash in any of those services was never
+     * caught by the rollback mechanism.
      *
-     * Placement: after core_os_start() returned and the HANDOFF stage was
-     * published -- i.e. the kernel and its tasks are up. Before
-     * publish_ready(), so any hypothetical failure in that path does not
-     * cost us the "image is good" mark.
-     *
-     * On a factory-flash device (or any boot after the first post-OTA
-     * boot), the image is already in VALID state and the call returns
-     * ESP_ERR_OTA_ROLLBACK_INVALID_STATE. That is the happy path, logged
-     * at DEBUG. */
-    {
-        esp_err_t ota_err = esp_ota_mark_app_valid_cancel_rollback();
-        if (ota_err == ESP_OK) {
-            ESP_LOGI(TAG, "OTA image marked valid (rollback cancelled)");
-        } else if (ota_err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
-            ESP_LOGD(TAG, "OTA mark-valid skipped (already valid or not OTA'd)");
-        } else {
-            ESP_LOGW(TAG, "esp_ota_mark_app_valid_cancel_rollback failed: %s",
-                     esp_err_to_name(ota_err));
-        }
-    }
+     * The mark-valid call now lives at the end of app_main() in main.c,
+     * after all service_start() calls have returned. */
 
     s_last_stage = BOOT_STAGE_READY;
     publish_ready();

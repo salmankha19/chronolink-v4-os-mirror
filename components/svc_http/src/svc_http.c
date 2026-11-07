@@ -16,7 +16,7 @@
 /* Compile-time gate: POST /api/ota must not ship without rollback
  * enabled. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y (PR 4.6) makes a
  * failed OTA image revert automatically. Without it, a bad image that
- * crashes before boot_manager marks it valid would brick the device. */
+ * crashes before app_main marks it valid would brick the device. */
 #ifndef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 #error "POST /api/ota requires CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y."
 #endif
@@ -648,9 +648,12 @@ static esp_err_t post_reboot_handler(httpd_req_t *req)
 /* POST /api/factory-reset
  *
  * Writes a one-shot factory-reset request to NVS and reboots. The actual
- * wipe (NVS erase + FATFS reformat) runs in boot_manager_init() on the
- * next boot, where all the provisioning code lives. That keeps the reset
- * logic in one place and avoids svc_http duplicating HAL/filesystem work.
+ * wipe (NVS erase + /storage partition erase) runs in boot_manager_init()
+ * on the next boot, where all the provisioning code lives. That keeps the
+ * reset logic in one place and avoids svc_http duplicating HAL/filesystem
+ * work. #129 R3 changed the storage wipe from mount-and-format-if-needed
+ * to a direct esp_partition_erase_range() so a cleanly-mountable FS is
+ * still erased.
  *
  * SECURITY: like /api/reboot and every other state-changing endpoint,
  * this handler calls require_auth() first, so a request needs
@@ -711,9 +714,10 @@ static esp_err_t post_factory_reset_handler(httpd_req_t *req)
  * still the shipped default ("change-me-before-flashing").
  *
  * Rollback safety: relies on PR 4.6. If the new image crashes before
- * boot_manager_init() reaches esp_ota_mark_app_valid_cancel_rollback(),
- * the bootloader reverts to the current slot on the next reset. The
- * build-time #error in this file guarantees that. */
+ * the running image marks itself valid at the end of app_main() (see
+ * main/main.c, #129 R2), the bootloader reverts to the current slot on
+ * the next reset. The build-time #error in this file guarantees
+ * rollback is enabled. */
 static esp_err_t post_ota_handler(httpd_req_t *req)
 {
     if (!require_auth(req)) return ESP_FAIL;
