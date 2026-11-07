@@ -39,7 +39,6 @@
 static const char *TAG = "svc_network";
 
 #define AP_SSID "ChronoLink-Setup"
-#define AP_MAX_RETRIES 3
 
 #define NVS_NAMESPACE_WIFI   "wifi"
 #define NVS_KEY_SSID         "ssid"
@@ -268,13 +267,16 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
             publish_disconnected(reason);
         }
 
+        /* #131 (R1): do NOT fall back to AP on retry exhaustion. Boot
+           before the router is up is a normal power-cut scenario; calling
+           start_ap_mode() here (which calls esp_wifi_stop()) would lock
+           the device in setup mode until the next power-cycle. Keep
+           retrying STA with the capped backoff (1 s -> 30 s); when the
+           router comes up, the next retry reconnects automatically.
+           AP mode is reachable only from svc_network_start() when
+           credentials are absent. */
         s_retry_count++;
-        if (s_retry_count >= AP_MAX_RETRIES) {
-            ESP_LOGW(TAG, "Max WiFi retries reached (%d).", AP_MAX_RETRIES);
-            start_ap_mode();
-        } else {
-            schedule_reconnect();
-        }
+        schedule_reconnect();
         break;
     }
 
@@ -309,7 +311,8 @@ static void start_ap_mode(void)
 {
     if (s_ap_mode) return;
 
-    ESP_LOGW(TAG, "Starting AP fallback mode (SSID: %s)", AP_SSID);
+    ESP_LOGW(TAG, "Starting AP setup mode (no WiFi credentials; SSID: %s)",
+             AP_SSID);
 
     esp_wifi_stop(); // Best-effort stop of STA mode
 
