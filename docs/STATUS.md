@@ -24,10 +24,13 @@ not.** Where another doc mentions a gap, this file has the detail.
   `POST /api/factory-reset` persistent request), NVS, FATFS `/storage`,
   OTA partition logging, hand-off to kernel.
 - **App rollback (PR 4.6):** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
-  `boot_manager_init()` calls `esp_ota_mark_app_valid_cancel_rollback()`
-  after `core_os_start()` returns, so a freshly-OTA'd image that reaches
-  the handoff stage marks itself valid. An image that crashes or resets
-  before that point is reverted to the previous slot on the next reset.
+  `app_main()` calls `esp_ota_mark_app_valid_cancel_rollback()` at the
+  end, after every service (`svc_config`, `svc_time`, `svc_timetable`,
+  `svc_prayer_engine`, `svc_network`, `svc_http`, `svc_scheduler`) has
+  started. An image that crashes or resets before that point is reverted
+  to the previous slot on the next reset. (#129 R2 moved this call from
+  `boot_manager_init()`, where it ran before any service was up, so
+  crashes in service init were not caught by rollback.)
 - **OTA over HTTP (PR 4.7):** `POST /api/ota` in `svc_http` streams a
   raw firmware image (`application/octet-stream`) to the inactive OTA
   slot via `esp_ota_begin` / `esp_ota_write` / `esp_ota_end` /
@@ -501,9 +504,9 @@ readers.
 
 | Name | What it does | Status |
 |---|---|---|
-| `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + reformat `/storage`, reboot. **Not an image reset.** | Exists in `boot_manager.c`; producers: caller-supplied flag, `POST /api/factory-reset` (PR 4.5) |
+| `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + erase `/storage` partition (reformatted on next boot), reboot. **Not an image reset.** | Exists in `boot_manager.c`; producers: caller-supplied flag, `POST /api/factory-reset` (PR 4.5). #129 (R3): erase via `esp_partition_erase_range()` so a cleanly-mountable FS is still wiped |
 | `factory` partition | Known-good golden image slot | Not present, **not planned** |
-| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | **Enabled** (PR 4.6); `boot_manager` calls `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()` |
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | **Enabled** (PR 4.6); `main.c` calls `esp_ota_mark_app_valid_cancel_rollback()` at the end of `app_main()`, after all services start (#129 R2) |
 | USB reflash | Manual recovery via `esptool.py` | Always available |
 
 ### Other planned boot work
@@ -525,7 +528,9 @@ The design intent is that all user configuration goes through a web UI.
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
 - **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
 - **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and a preset selector that calls `POST /api/config/preset`. Full prayer-times configuration is now settable from the browser without recompiling.
-- **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + FATFS reformat + reboot). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
+- **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + /storage partition
+  erase + reboot; #129 R3 erases the raw partition so a cleanly-mountable
+  FS is still wiped). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
 - **Firmware update over HTTP (PR 4.7):** `POST /api/ota` accepts a raw firmware image (`application/octet-stream`), requires the `X-OTA-Token` header, streams it in 4 KB chunks to the inactive OTA slot, and reboots into it on success. Compile-time gate: `#error` if `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set. Failure at any stage calls `esp_ota_abort()` and leaves the running image untouched.
 
 ---

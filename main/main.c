@@ -15,11 +15,15 @@
  *   9. svc_http_start()     — HTTP server (REST + web UI + OTA)
  *  10. svc_scheduler_init/start() — 1 Hz prayer poll, EVENT_PRAYER_TIME_REACHED
  *  11. audio_test_init()    — Initialize audio (if enabled)
+ *  12. esp_ota_mark_app_valid_cancel_rollback() — mark new OTA image valid
+ *      only after all services above are running (#129 R2: was previously
+ *      called inside boot_manager_init(), before any service started).
  *
  * Copyright (c) 2026 ChronoLink Project
  */
 #include "core_os.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"       /* #129 (R2): rollback mark-valid/invalid */
 #include "boot_manager.h"
 #include "ui_producer.h"
 #include "font_engine.h"
@@ -43,7 +47,16 @@ void app_main(void)
     ESP_LOGI(TAG, "ChronoLink v4 OS - ESP32-S3 Starting");
 
     if (boot_manager_init(0) != 0) {
-        ESP_LOGE(TAG, "Boot manager failed, entering safe loop");
+        /* #129 (R2): if boot_manager_init() failed, the running image is
+           not proven healthy. If rollback is available (a new OTA image
+           not yet marked valid), mark it invalid and reboot into the
+           previous slot. If not (first flash, or rollback disabled), the
+           call returns and we fall through to a safe spin loop. */
+        ESP_LOGE(TAG, "Boot manager failed -- attempting OTA rollback");
+        esp_err_t rb_err = esp_ota_mark_app_invalid_rollback_and_reboot();
+        ESP_LOGE(TAG,
+                 "esp_ota_mark_app_invalid_rollback_and_reboot returned %s -- entering safe loop",
+                 esp_err_to_name(rb_err));
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
@@ -150,6 +163,26 @@ void app_main(void)
         ESP_LOGE(TAG, "Audio test initialization failed: %s", esp_err_to_name(err));
     }
 #endif
+
+    /* #129 (R2): mark the OTA image valid only after every service has
+       started. Previously this ran at the end of boot_manager_init(),
+       before any of the services above were up -- a bad OTA image that
+       crashed in svc_config / svc_time / svc_network / svc_http /
+       svc_scheduler was already marked valid, so rollback could not
+       catch it. The mark-valid call was moved here from boot_manager.c.
+       A "stable-run check" (delay N seconds before marking valid) is
+       deliberately not added here; see PR #129 description. */
+    {
+        esp_err_t ota_err = esp_ota_mark_app_valid_cancel_rollback();
+        if (ota_err == ESP_OK) {
+            ESP_LOGI(TAG, "OTA image marked valid (rollback cancelled)");
+        } else if (ota_err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+            ESP_LOGD(TAG, "OTA mark-valid skipped (already valid or not OTA'd)");
+        } else {
+            ESP_LOGW(TAG, "esp_ota_mark_app_valid_cancel_rollback failed: %s",
+                     esp_err_to_name(ota_err));
+        }
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));

@@ -109,10 +109,14 @@ The mechanism:
 
 1. On boot after an OTA update, the new image starts in **pending
    verify** state.
-2. `boot_manager_init()` calls
-   `esp_ota_mark_app_valid_cancel_rollback()` after `core_os_start()`
-   returns — i.e. once the kernel and its tasks are up. This transitions
-   the image to **valid** and cancels the rollback timer.
+2. `app_main()` calls
+   `esp_ota_mark_app_valid_cancel_rollback()` after every service has
+   started: `svc_config`, `svc_time`, `svc_timetable`,
+   `svc_prayer_engine`, `svc_network`, `svc_http`, `svc_scheduler`.
+   This transitions the image to **valid** and cancels the rollback
+   timer. (#129 R2 moved this call from `boot_manager_init()`, where
+   it ran before any service was up, so crashes in service init were
+   not caught by rollback.)
 3. If the new image crashes, hangs, or fails any earlier init step
    (`HAL_Init()`, `core_os_init()`, `core_os_start()`) and resets before
    reaching that call, the bootloader reverts to the previous slot on
