@@ -210,6 +210,19 @@ esp_err_t svc_config_set_season(uint8_t summer_m, uint8_t summer_d,
    night_lamp_enable, zawal_buffer_min, or per-prayer adhan_offset_min.
    Persists the affected fields to NVS. */
 esp_err_t svc_config_apply_preset(svc_config_preset_t preset);
+
+/* The POSIX TZ string a preset implies. #132 (R4): svc_time owns the
+   timezone (NVS namespace "time" key "tz"); this helper only maps a
+   preset to the string svc_http should hand to
+   svc_time_set_timezone_posix() after svc_config_apply_preset() runs.
+   Returns NULL for any unrecognized preset, so a caller can skip the
+   TZ application.
+
+   UK and UK_MOONSIGHTING -> "GMT0BST,M3.5.0/1,M10.5.0" (GMT + BST).
+   PAKISTAN -> "PKT-5" (Pakistan Standard Time, UTC+5, no DST).
+   POSIX TZ strings use inverted sign: -5 means 5 hours east of UTC. */
+const char *svc_config_preset_timezone(svc_config_preset_t preset);
+
 esp_err_t svc_config_set_adhan_mode(svc_config_adhan_mode_t mode);
 esp_err_t svc_config_set_adhan_volume(uint8_t volume_0_100);
 esp_err_t svc_config_set_brightness_mode(uint8_t mode);

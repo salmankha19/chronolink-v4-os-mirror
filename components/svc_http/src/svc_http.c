@@ -987,6 +987,17 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     if (err == ESP_OK) {
+        /* #132 (R4): apply the preset's timezone BEFORE recalculating,
+           so the fresh prayer times and the timetable are expressed in
+           the new zone. svc_time owns TZ persistence; this call live-
+           applies and persists. Best-effort: the preset itself already
+           succeeded, and svc_time_set_timezone_posix() logs internally
+           on failure. */
+        const char *preset_tz =
+            svc_config_preset_timezone((svc_config_preset_t)(int)preset_v);
+        if (preset_tz) {
+            (void)svc_time_set_timezone_posix(preset_tz);
+        }
         svc_prayer_engine_service_recalculate();
         httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     } else {
