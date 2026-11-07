@@ -366,6 +366,62 @@ static void test_isha_rollover(void)
           "premarked pending isha is cleared");
 }
 
+static void test_rearm_no_double_fire(void)
+{
+    scheduler_day_t today = make_day(0, true, 36000, 43200, 54000, 64800, 72000);
+    scheduler_state_t st, rebuilt;
+    uint8_t fired[5];
+
+    /* Dhuhr fires on the 1 Hz tick; one second later a recalculation event
+       rebuilds the state. The rebuilt state must not fire it again. */
+    memset(&st, 0, sizeof st);
+    CHECK(scheduler_evaluate(at(12, 0), &today, &st, fired) == 1 && fired[0] == 1,
+          "rearm setup: Dhuhr fires");
+    scheduler_rearm(at(12, 0) + 1, &today, &st, 0, &rebuilt);
+    CHECK(scheduler_evaluate(at(12, 0) + 1, &today, &rebuilt, fired) == 0,
+          "rearm 1 s after a fire does not double-fire");
+
+    /* 3 s later the premark itself covers it (same outcome). */
+    scheduler_rearm(at(12, 0) + 3, &today, &st, 0, &rebuilt);
+    CHECK(scheduler_evaluate(at(12, 0) + 3, &today, &rebuilt, fired) == 0,
+          "rearm 3 s after a fire does not double-fire");
+
+    /* A prayer due in the very second of the rearm is still swallowed by
+       nothing: it was never fired, so it fires. */
+    memset(&st, 0, sizeof st);
+    scheduler_rearm(at(10, 0), &today, &st, 0, &rebuilt);
+    CHECK(scheduler_evaluate(at(10, 0), &today, &rebuilt, fired) == 1 && fired[0] == 0,
+          "rearm in the prayer's own second still lets it fire");
+
+    /* In-place rebuild (prev aliases out), the way svc_scheduler.c uses it. */
+    memset(&st, 0, sizeof st);
+    scheduler_evaluate(at(12, 0), &today, &st, fired);
+    scheduler_rearm(at(12, 0) + 1, &today, &st, 0, &st);
+    CHECK(scheduler_evaluate(at(12, 0) + 1, &today, &st, fired) == 0,
+          "in-place rearm keeps the fired marker");
+
+    /* Backwards NTP step: Asr fired 'early' on a wrong clock, then the clock
+       is corrected one hour back. The marker is for a FUTURE instant, so it
+       is dropped and Asr fires again at its true time. */
+    memset(&st, 0, sizeof st);
+    scheduler_evaluate(at(15, 0), &today, &st, fired);                /* early Asr */
+    scheduler_rearm(at(14, 0), &today, &st, 0, &rebuilt);              /* clock now 14:00 */
+    CHECK(scheduler_evaluate(at(15, 0), &today, &rebuilt, fired) == 1 && fired[0] == 2,
+          "marker for a future instant is dropped: Asr fires at its true time");
+
+    /* A prayer moved LATER after it fired (config change) still fires once more. */
+    scheduler_day_t moved = make_day(0, true, 36000, 43200 + 300, 54000, 64800, 72000);
+    memset(&st, 0, sizeof st);
+    scheduler_evaluate(at(12, 0), &today, &st, fired);
+    scheduler_rearm(at(12, 0) + 10, &moved, &st, 0, &rebuilt);
+    CHECK(scheduler_evaluate(at(12, 5), &moved, &rebuilt, fired) == 1 && fired[0] == 1,
+          "prayer moved later fires at its new instant");
+
+    /* Pending Isha survives the rebuild; NULL prev is accepted. */
+    scheduler_rearm(at(12, 0), &today, NULL, at(1, 0) + 86400, &rebuilt);
+    CHECK(rebuilt.pending_isha_epoch == at(1, 0) + 86400, "pending Isha preserved by rearm");
+}
+
 int main(void)
 {
     printf("=== scheduler logic (epoch guard) ===\n");
@@ -378,6 +434,7 @@ int main(void)
     test_premark_grace();
     test_lateness_limit();
     test_isha_rollover();
+    test_rearm_no_double_fire();
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }

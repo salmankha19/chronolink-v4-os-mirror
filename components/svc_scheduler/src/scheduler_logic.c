@@ -177,3 +177,33 @@ void scheduler_premark_past(int64_t now_utc_epoch,
         state->pending_isha_epoch = 0;
     }
 }
+
+void scheduler_rearm(int64_t now_utc_epoch,
+                     const scheduler_day_t *new_day,
+                     const scheduler_state_t *prev,
+                     int64_t pending_isha_epoch,
+                     scheduler_state_t *out)
+{
+    scheduler_state_t carried;
+
+    if (!out) {
+        return;
+    }
+
+    /* prev may alias out: copy what we need before clearing. */
+    memset(&carried, 0, sizeof(carried));
+    if (prev) {
+        carried = *prev;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->pending_isha_epoch = pending_isha_epoch;
+    scheduler_premark_past(now_utc_epoch, new_day, out);
+
+    for (int p = 0; p < SCHEDULER_PRAYER_COUNT; p++) {
+        int64_t m = carried.last_fired_epoch[p];
+        if (m > out->last_fired_epoch[p] && m <= now_utc_epoch) {
+            out->last_fired_epoch[p] = m;
+        }
+    }
+}
