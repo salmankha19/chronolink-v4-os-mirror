@@ -11,7 +11,7 @@
  */
 #include "jamat_calculator.h"
 #include <stdbool.h>
-#include <stddef.h>       /* ← NEW — for NULL */
+#include <stddef.h>       /* for NULL (portable declaration) */
 #include <stdint.h>
 
 /* True if (m, d) is in [start, end) with year-wrap. */
@@ -64,7 +64,20 @@ static uint32_t compute_jamat(uint32_t adhan_sec,
     default:
         return UINT32_MAX;
     }
-    return round_to_min(base, round_min);
+
+    uint32_t rounded = round_to_min(base, round_min);
+
+    /* #128: rounding to the nearest step can produce an ADHAN_PLUS jamat
+       earlier than adhan itself. base = adhan + offset_min*60; when offset
+       is smaller than half the round_min step and base falls in the half
+       before a lower boundary, the rounded value lands before adhan.
+       Clamp: never publish a jamat before its own adhan. Only applies to
+       ADHAN_PLUS -- the other anchors reference sunrise or midnight, which
+       have their own interval guarantees. */
+    if (cfg->anchor == SVC_CONFIG_JAMAT_ADHAN_PLUS && rounded < adhan_sec) {
+        rounded = adhan_sec;
+    }
+    return rounded;
 }
 
 /* Summer (1) if (m, d) is in [summer_start, winter_start), else winter (0).
