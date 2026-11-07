@@ -1257,6 +1257,23 @@ static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
     }
 
     err = svc_time_sync_ntp_once();
+    if (err == ESP_ERR_NOT_FINISHED) {
+        /* #130 R9c follow-up: the previous sync is still fresh (<60 s), so
+           svc_time_sync_ntp_once() returned ESP_ERR_NOT_FINISHED instead of
+           running. The HIL harness hits this on every scenario (set_ntp_host
+           runs right after the auto post-DHCP sync); a 500 here aborts the
+           run. Report the skip honestly with a 200 so the harness can tell
+           "skipped, clock already fresh" from a real failure. */
+        (void)svc_time_get_epoch(&epoch);
+        ESP_LOGI(TAG, "debug/ntp: sync skipped, previous sync still fresh");
+        snprintf(body, sizeof(body),
+                 "{\"status\":\"skipped\",\"host\":\"%s\",\"reason\":\"fresh\",\"epoch\":%lld}",
+                 host, (long long)epoch);
+        httpd_resp_set_status(req, "200 OK");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
+    }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "debug/ntp: svc_time_sync_ntp_once failed: %s",
                  esp_err_to_name(err));

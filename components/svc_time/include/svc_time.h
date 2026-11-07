@@ -94,10 +94,21 @@ esp_err_t svc_time_start(void);
  */
 esp_err_t svc_time_set_timezone_posix(const char *tz);
 
-/* Current POSIX TZ string ("" before svc_time_start() completes). Owned by
-   the service; do not free. Only svc_time_set_timezone_posix() changes it,
-   under the service lock -- copy it if you need it across a concurrent set. */
+/* DEPRECATED: returns a pointer into the service's internal TZ buffer.
+   Reading the pointer while svc_time_set_timezone_posix() is running is a
+   data race (#130 R9e): the buffer is being rewritten under s_state_lock,
+   and the reader takes no lock. Prefer svc_time_get_timezone_posix_copy()
+   below. Kept for source compatibility until existing callers migrate. */
 const char *svc_time_get_timezone_posix(void);
+
+/* Copy the current POSIX TZ string into `out`, which must be at least
+   SVC_TIME_TZ_MAX bytes. The copy happens under the service lock, so it is
+   safe against a concurrent svc_time_set_timezone_posix().
+
+   Returns ESP_OK on success; ESP_ERR_INVALID_ARG if out is NULL or out_size
+   < SVC_TIME_TZ_MAX; ESP_ERR_INVALID_STATE if svc_time_start() has not run;
+   ESP_ERR_TIMEOUT if the service lock is unavailable. */
+esp_err_t svc_time_get_timezone_posix_copy(char *out, size_t out_size);
 
 /* Copy the snapshot. Returns ESP_ERR_INVALID_ARG if out is NULL and
    ESP_ERR_INVALID_STATE if the service is not started. Always fills `out`
@@ -137,6 +148,13 @@ esp_err_t svc_time_get_last_sync_time(time_t *out);
  * sync already in flight. Do not call it from the kernel event dispatcher
  * task (core_os' event_disp) or from an esp_timer callback. Intended for a
  * future web UI "sync now" button.
+ *
+ * Returns ESP_OK only when a new sync actually ran and succeeded.
+ *
+ * Returns ESP_ERR_NOT_FINISHED when a sync was skipped because the previous
+ * successful one is still fresh (< SVC_TIME_RESYNC_MIN_MS = 60 s). #130 R9c
+ * added this distinct code so callers can distinguish "clock moved" from
+ * "skipped, clock already accurate".
  *
  * Returns ESP_ERR_INVALID_STATE before svc_time_start(), while another sync
  * is running, or if the network stack is not up yet (svc_network has not
