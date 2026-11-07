@@ -526,7 +526,7 @@ readers.
 The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
-- **AP Fallback Mode (PR 4.2):** If no WiFi credentials are saved, or if connection fails 3 times, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
+- **AP Setup Mode (PR 4.2; #131 removed fallback):** If no WiFi credentials are saved, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). `ui_producer` displays these setup instructions on the screen instead of the clock.
 - **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and a preset selector that calls `POST /api/config/preset`. Full prayer-times configuration is now settable from the browser without recompiling.
 - **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + /storage partition
   erase + reboot; #129 R3 erases the raw partition so a cleanly-mountable
