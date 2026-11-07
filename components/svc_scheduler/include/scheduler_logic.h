@@ -107,6 +107,28 @@ void scheduler_premark_past(int64_t now_utc_epoch,
                             scheduler_state_t* state);
 
 /*
+ * Rebuild the scheduling state after the day or the times changed (boot,
+ * EVENT_TIME_DATE_CHANGED, EVENT_PRAYER_TIMES_UPDATED).
+ *
+ *   out  = clean state, pending_isha_epoch = the value passed in,
+ *          scheduler_premark_past(now, new_day) applied, then
+ *          each prayer's last_fired_epoch raised to prev's marker when that
+ *          marker is for an instant that has already happened (<= now).
+ *
+ * Why the carry-over: premark leaves SCHEDULER_PREMARK_GRACE_S un-marked so a
+ * prayer due this very second is not swallowed. A prayer that fired a moment
+ * ago is inside that window too; without the carry-over, wiping the state
+ * would let it fire a second time. Markers for instants in the FUTURE (a
+ * backwards NTP step after an early fire) are deliberately dropped, so the
+ * prayer can fire again at its true time. prev may be NULL; it may alias out.
+ */
+void scheduler_rearm(int64_t now_utc_epoch,
+                     const scheduler_day_t* new_day,
+                     const scheduler_state_t* prev,
+                     int64_t pending_isha_epoch,
+                     scheduler_state_t* out);
+
+/*
  * Convert (date, local_sec, tz_offset) to a UTC epoch.
  *
  * local_sec may exceed 86400 (Isha / Islamic midnight can fall after local

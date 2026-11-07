@@ -90,12 +90,14 @@ static void reset_state_from_service(void)
     svc_prayer_engine_times_t times;
     scheduler_day_t new_day;
     int64_t pending_isha;
+    scheduler_state_t prev = s_state;   /* fired markers, carried over below */
 
-    /* Capture any already-pending Isha BEFORE the memset, so two resets in
-       the same drain (DATE_CHANGED followed by TIMES_UPDATED) do not lose
-       yesterday's deferred Isha. */
+    /* Capture any already-pending Isha BEFORE the state is rebuilt, so two
+       resets in the same drain (DATE_CHANGED followed by TIMES_UPDATED) do
+       not lose yesterday's deferred Isha. */
     pending_isha = s_state.pending_isha_epoch;
     memset(&s_state, 0, sizeof(s_state));
+    s_state.pending_isha_epoch = pending_isha;   /* survives the early returns */
 
     if (svc_time_get_epoch(&now) != ESP_OK) {
         ESP_LOGD(TAG, "no valid time yet -- scheduling state cleared");
@@ -132,9 +134,11 @@ static void reset_state_from_service(void)
         }
     }
 
-    s_state.pending_isha_epoch = pending_isha;
     s_current_day = new_day;
-    scheduler_premark_past((int64_t)now, &new_day, &s_state);
+    /* Rebuild: premark the past, keep pending Isha, and carry over the markers
+       of prayers that fired a moment ago -- the premark grace window would
+       otherwise let a prayer that fired up to 2 s ago fire a second time. */
+    scheduler_rearm((int64_t)now, &new_day, &prev, pending_isha, &s_state);
 }
 
 /* One poll: fetch now + today's times, fire whatever is due. */
