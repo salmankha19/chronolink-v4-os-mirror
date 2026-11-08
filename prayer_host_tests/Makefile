@@ -29,14 +29,17 @@ $(OUT)/scheduler_logic.o: $(SCHEDSRC) $(SCHED)/include/scheduler_logic.h | $(OUT
 $(OUT)/test_scheduler: test_scheduler.cpp $(OUT)/scheduler_logic.o | $(OUT);    $(CXX) $(CXXFLAGS) -I$(SCHED)/include $^ -o $@
 $(OUT)/jamat_calculator.o: $(JAMAT)/src/jamat_calculator.c | $(OUT);            $(CC) $(JAMATFLAGS) -c $< -o $@
 $(OUT)/test_jamat_differential: test_jamat_differential.cpp $(OUT)/jamat_calculator.o | $(OUT); $(CXX) $(CXXFLAGS) $(JAMATINC) $^ -o $@
+$(OUT)/merge_logic.o: $(JAMAT)/src/merge_logic.c $(JAMAT)/src/merge_logic.h | $(OUT); $(CC) -std=gnu11 -O2 -Wall -Wextra -I$(JAMAT)/src -c $< -o $@
+$(OUT)/test_merge_logic: test_merge_logic.cpp $(OUT)/merge_logic.o | $(OUT);    $(CXX) $(CXXFLAGS) -I$(JAMAT)/src $^ -o $@
 $(OUT)/test_moonsighting: test_moonsighting.cpp $(LIBSRC) | $(OUT); $(CXX) $(CXXFLAGS) $^ -o $@
 
 golden:; python3 gen_golden.py > golden.csv
-test: $(OUT)/test_golden $(OUT)/test_wrapper $(OUT)/test_scheduler $(OUT)/test_jamat_differential $(OUT)/test_moonsighting
+test: $(OUT)/test_golden $(OUT)/test_wrapper $(OUT)/test_scheduler $(OUT)/test_jamat_differential $(OUT)/test_merge_logic $(OUT)/test_moonsighting
 	@echo "=== golden (vs PyEphem, tol 30 s) ===";  $(OUT)/test_golden golden.csv 30
 	@echo; echo "=== C wrapper ==="; $(OUT)/test_wrapper
 	@echo; echo "=== scheduler logic ==="; $(OUT)/test_scheduler
 	@echo; echo "=== jamat differential ==="; $(OUT)/test_jamat_differential
+	@echo; echo "=== merge logic (jamat resolve) ==="; $(OUT)/test_merge_logic
 	@echo; echo "=== Moonsighting vs adhan-js (tol 90 s) ==="; $(OUT)/test_moonsighting moonsighting_adhan.csv 90
 
 test-highlat: $(OUT)/test_invariants

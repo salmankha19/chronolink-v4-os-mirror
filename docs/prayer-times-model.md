@@ -352,7 +352,7 @@ a mosque's prayer time deviates from what the firmware would calculate,
 the difference is *not* rejected at upload, and the stored value is *not*
 overridden by the fresh calculation. The mosque's published sign is
 authoritative. Structural validation still applies to user uploads (JSON
-parses, `schema_version` supported, ≥ 1 day present) and jamat-bracket
+parses, `schema_version` in [0, current], ≥ 1 day present) and jamat-bracket
 validation still rejects a jamat earlier than its adhan or at-or-after
 the next prayer, but a prayer time that differs from the firmware's
 calculation is accepted. If a future release wants a warn-only path, add
@@ -384,7 +384,7 @@ upload cannot be overwritten by a concurrently running regenerator (or
 vice versa).
 
 Uploads are validated (`svc_timetable_validate`: JSON parses,
-`schema_version` is supported, at least one day is present) before the
+`schema_version` is in [0, current], at least one day is present) before the
 atomic rename to `/storage/timetable.json`. A rejected upload removes its
 temp file and returns 400; the live timetable continues serving unchanged.
 Validation runs against a private temporary, so a bad file cannot corrupt
