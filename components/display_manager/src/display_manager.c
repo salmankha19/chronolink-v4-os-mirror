@@ -17,9 +17,6 @@ static QueueHandle_t s_frame_queue = NULL;
 static SemaphoreHandle_t s_submit_mutex = NULL;
 static bool s_initialized = false;
 
-/* Frames dequeued and executed since boot; read through the accessor below. */
-static uint32_t s_frames_dispatched = 0;
-
 /* Icon registry — populated at init time, read-only in hot path */
 static struct {
     uint16_t id;
@@ -292,13 +289,9 @@ void display_manager_process_frame(void)
         HAL_Display_Show();
     }
 
-    /* ------------------------------------------------------------------
-     * The frame left the queue and every command was offered to the HAL,
-     * so this proves the producer -> queue -> core1_task -> driver chain
-     * even with no panel attached. See docs/pr6-preflight.md section 6.
-     * ------------------------------------------------------------------ */
-    s_frames_dispatched++;
-
+    /* Every command in the frame was offered to the HAL, so reaching here
+     * proves the producer -> queue -> core1_task -> driver chain even with
+     * no panel attached. See docs/pr6-preflight.md section 6. */
 }
 
 void display_manager_clear_queue(void)
@@ -308,11 +301,3 @@ void display_manager_clear_queue(void)
     }
 }
 
-/* --------------------------------------------------------------------------
- * Diagnostics
- * -------------------------------------------------------------------------- */
-
-uint32_t display_manager_frames_dispatched(void)
-{
-    return s_frames_dispatched;
-}

@@ -6,8 +6,6 @@
 static const char *TAG = "event_bus";
 static QueueHandle_t g_event_queue = NULL;
 
-#define DEFAULT_EVENT_QUEUE_LEN 64
-
 /* Subscriber fan-out (PR 5b-1).
  *
  * Each entry is one (queue, type) rule, added by event_bus_subscribe() and
@@ -24,18 +22,16 @@ static struct {
 
 void event_bus_init(QueueHandle_t queue)
 {
+    g_event_queue = queue;
     if (queue) {
-        g_event_queue = queue;
-        ESP_LOGI(TAG, "Event Bus initialized (external queue=%p)", (void*)g_event_queue);
-        return;
-    }
-
-    g_event_queue = xQueueCreate(DEFAULT_EVENT_QUEUE_LEN, sizeof(event_t));
-    if (!g_event_queue) {
-        ESP_LOGE(TAG, "event_bus_init: failed to create internal queue");
+        ESP_LOGI(TAG, "Event Bus initialized (queue=%p)", (void*)g_event_queue);
     } else {
-        ESP_LOGI(TAG, "Event Bus initialized (internal queue=%p, len=%d)",
-                 (void*)g_event_queue, DEFAULT_EVENT_QUEUE_LEN);
+        /* The only expected caller is core_os.c passing the kernel event
+           queue. A NULL here means a future caller forgot the argument;
+           event_bus_publish() already handles a NULL queue by logging and
+           dropping, so the device stays alive, but the log makes the
+           mistake visible. */
+        ESP_LOGE(TAG, "event_bus_init called with NULL queue");
     }
 }
 

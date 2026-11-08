@@ -17,9 +17,3 @@ Runs on Core 1 through core1_task. Any task can submit frames using
 display_manager_submit_frame(); submits are serialised by a mutex (5 ms mutex
 timeout, 5 ms queue timeout), and a frame that cannot be queued is dropped
 with a warning.
-
-## Statistics
-`display_manager_frames_dispatched()` returns the number of frames
-dequeued and executed since boot. The counter increments once per
-executed frame; no periodic log is emitted (the PR 6 bring-up
-`ESP_LOGI` was removed once the panel was verified).
