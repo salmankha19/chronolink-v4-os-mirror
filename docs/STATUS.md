@@ -102,15 +102,25 @@ not.** Where another doc mentions a gap, this file has the detail.
   in `components/event_bus/include/time_events.h`) exactly once per prayer
   per day, adhan tier only (`PRAYER_KIND_JAMAT` reserved). Subscribes to
   `EVENT_TIME_DATE_CHANGED` (6) and `EVENT_PRAYER_TIMES_UPDATED` (96); both
-  re-fetch the times, clear `last_fired_epoch[]`, and pre-mark the prayers
-  that already passed without publishing. `svc_scheduler_init()` does the
+  re-fetch the times, and -- only if the epoch read and `_get_times()` both
+  succeed -- clear `last_fired_epoch[]` and pre-mark the prayers that already
+  passed without publishing. A failed fetch/epoch read leaves
+  `last_fired_epoch[]` and `pending_isha_epoch` intact (as of #136), so one
+  NTP-step hiccup cannot make today's already-fired prayers fire twice.
+  `svc_scheduler_init()` does the
   same pre-marking at boot, so a 13:00 boot does not replay the 10:00 and
-  12:00 adhans. Decision logic is pure C (`scheduler_logic.c`: no ESP-IDF, no
+  12:00 adhans. **Event subscriber state (as of #136):** `EVENT_PRAYER_TIME_REACHED`
+  has zero subscribers -- the scheduler publishes correctly, but the intended
+  consumers (`svc_audio` at Phase 3, `ui_producer` for display state) are not
+  wired yet. Wiring deferred until Phase 3 audio lands, at which point the
+  payload already carries everything a consumer needs (`prayer_id`, `kind`,
+  `scheduled_epoch`). Documented here as intentional, not a defect.
+  Decision logic is pure C (`scheduler_logic.c`: no ESP-IDF, no
   FreeRTOS, no heap) and host-tested in
   `prayer_host_tests/test_scheduler.cpp` -- part of `make test`: happy path,
   DST fall-back / repeated local hour, mid-day startup, config reset,
-  premark grace, lateness cap, and the
-  `UINT32_MAX` / `valid == false` sentinels. **Invariant: epoch comparison
+  premark grace, lateness cap, the exact-midnight prayer (`sec[p] == 0`), and
+  the `UINT32_MAX` / `valid == false` sentinels. **Invariant: epoch comparison
   only -- no `(hour, minute)` equality anywhere**, so a repeated local hour or
   an NTP step can neither double-fire nor skip a prayer. **Lateness cap:**
   a prayer more than `SCHEDULER_MAX_LATENESS_S` (120 s) in the past is

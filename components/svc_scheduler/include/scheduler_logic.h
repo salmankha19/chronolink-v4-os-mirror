@@ -45,8 +45,9 @@ extern "C" {
    svc_prayer_engine_times_t (adhan tier only). */
 typedef struct {
     uint32_t sec[SCHEDULER_PRAYER_COUNT]; /* adhan seconds since local
-                                             midnight; 0 or UINT32_MAX =
-                                             not scheduled */
+                                             midnight; UINT32_MAX = not
+                                             scheduled (0 is a valid
+                                             midnight instant, #136) */
     uint32_t date_yyyymmdd;               /* local calendar date of sec[] */
     int16_t  tz_offset_minutes;           /* local - UTC at noon of
                                              date_yyyymmdd */
@@ -73,8 +74,8 @@ typedef struct {
  * state->last_fired_epoch for every prayer it reports, so calling it again
  * with the same `now` returns 0 (idempotent).
  *
- * A prayer is skipped when it is not scheduled (sec == 0 or UINT32_MAX),
- * when today->valid is false, when its epoch is still in the future, when
+ * A prayer is skipped when it is not scheduled (sec == UINT32_MAX), when
+ * today->valid is false, when its epoch is still in the future, when
  * it is more than SCHEDULER_MAX_LATENESS_S seconds in the past (treated as
  * missed: marked fired without being reported, so a long stall cannot
  * produce a burst of catch-up adhans), or when
