@@ -14,6 +14,7 @@
 #include "svc_timetable.h"
 #include "adhan_calculator.h"   /* internal: engine call + adhan offsets */
 #include "jamat_calculator.h"   /* internal: season + jamat arithmetic */
+#include "merge_logic.h"        /* internal: pure merge decision (host-tested) */
 #include "event_bus.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -138,9 +139,10 @@ static uint32_t merge_adhan(bool has_file, uint32_t file_val, uint32_t fresh_val
 }
 
 /* Validate a jamat against its adhan and the next prayer's time.
-   Stays in the service rather than jamat_calculator.c: it consumes the
-   parsed timetable values and the next-prayer bracket, neither of which
-   is an input to jamat_calculator_run().
+   The DECISION is delegated to merge_logic_jamat_resolve() (a pure
+   helper, host-tested in prayer_host_tests/test_merge_logic.cpp).
+   This wrapper stays in the service because it emits ESP_LOGW, which
+   merge_logic.c deliberately cannot (that module is ESP-IDF-free).
    - file_val < adhan_val         : reject (fall back to computed)
    - file_val >= next_val != 0    : accept with warn (mosque authority)
    - else                         : accept silently */
@@ -150,17 +152,17 @@ static uint32_t merge_jamat(bool has_file, uint32_t file_val,
                             uint32_t next_val,
                             const char *name)
 {
-    if (!has_file) return computed_val;
-    if (file_val < adhan_val) {
+    merge_jamat_action_t act;
+    uint32_t r = merge_logic_jamat_resolve(has_file, file_val, computed_val,
+                                           adhan_val, next_val, &act);
+    if (act == MERGE_JAMAT_BELOW_ADHAN) {
         ESP_LOGW(TAG, "timetable jamat[%s]=%u < adhan=%u -- using computed",
                  name, (unsigned)file_val, (unsigned)adhan_val);
-        return computed_val;
-    }
-    if (next_val != 0 && file_val >= next_val) {
+    } else if (act == MERGE_JAMAT_ABOVE_NEXT) {
         ESP_LOGW(TAG, "timetable jamat[%s]=%u >= next=%u -- accepting (mosque authority)",
                  name, (unsigned)file_val, (unsigned)next_val);
     }
-    return file_val;
+    return r;
 }
 
 esp_err_t svc_prayer_engine_service_start(void)
@@ -323,7 +325,6 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     adhan_result_t adhan_today;
     err = adhan_calculator_run(&cfg, date_today, tz_offset_min, &adhan_today);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "calculate failed: %s", esp_err_to_name(err));
         /* #133 (A4): when the engine cannot compute for the CURRENT
            day (polar day/night -- valid inputs, no astronomical
            boundary), a previously-good cache must not survive forever.
@@ -344,8 +345,24 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
             if (lock_take()) {
                 s_cache_valid = false;
                 lock_give();
-                ESP_LOGW(TAG, "engine INVALID_STATE -- cache invalidated");
+                /* #138 (i): polar-latitude WARN rate-limit. The worker
+                   calls recalculate every 60 s; while the engine cannot
+                   compute for the same date (polar day/night), every
+                   call fails identically and logs 2 WARN/min forever.
+                   Emit the invalidation WARN once per calendar date and
+                   demote same-date repeats to DEBUG. Non-INVALID_STATE
+                   errors are unaffected (they are rare and self-healing). */
+                static uint32_t s_invalid_state_warned_date = 0;
+                if (s_invalid_state_warned_date != date_today) {
+                    s_invalid_state_warned_date = date_today;
+                    ESP_LOGW(TAG, "engine INVALID_STATE -- cache invalidated");
+                } else {
+                    ESP_LOGD(TAG, "engine INVALID_STATE (already warned on %lu)",
+                             (unsigned long)date_today);
+                }
             }
+        } else {
+            ESP_LOGW(TAG, "calculate failed: %s", esp_err_to_name(err));
         }
         return err;
     }

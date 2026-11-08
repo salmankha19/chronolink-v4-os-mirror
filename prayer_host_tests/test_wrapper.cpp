@@ -74,6 +74,42 @@ int main() {
     // --- Jafaria reachable ---
     e = svc_prayer_engine_calculate(2026,10,17,35.69,51.39,3.5,SVC_PRAYER_METHOD_JAFARIA,SVC_PRAYER_MADHAB_STANDARD,SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &t);
     CHECK(e==ESP_OK && t.valid, "Jafaria calculates");
+
+    /* #138 (m): Moonsighting PRECONDITION guard. The Moonsighting method
+       applies a +5 min adjustment to dhuhr (see test_moonsighting.cpp
+       header: "Dhuhr (+5 min) and Maghrib (+3 min) ARE compared"). That
+       adjustment is what makes #133 (A3) observable: A3 computed the
+       zawal window start from raw.dhuhr_sec instead of raw.zawal_sec,
+       pushing the safe-stop boundary ~5 min late. Without the +5 min
+       adjustment, zawal and dhuhr would be within seconds and A3 would
+       have been invisible.
+
+       This assertion guards that PRECONDITION, not the A3 fix itself.
+       A3 lives in svc_prayer_engine_service.c (fresh_zawal =
+       raw.dhuhr_sec -> raw.zawal_sec), which this C-wrapper harness does
+       NOT exercise. A true service-layer counterfactual test needs mocks
+       for svc_config_get, svc_time_get_snapshot, svc_timetable_get_today,
+       and adhan_calculator_run -- deferred to a future harness PR.
+
+       Expected gap: 360 s, not 300 s. dhuhr is a start-of-window field
+       (rounds UP to the next whole minute) and zawal is an end-of-window
+       field (rounds DOWN to the previous whole minute), so the 300 s raw
+       offset gains up to 60 s from each side; with the transit off a
+       minute boundary the observed gap is exactly 360 s (300 s only if
+       the transit lands exactly on a minute boundary). 240-360 brackets
+       both, and sits on the inclusive upper bound by design. */
+    e = svc_prayer_engine_calculate(2026,6,21, 52.7075,-2.7527, 1.0,
+                                     SVC_PRAYER_METHOD_MOONSIGHTING,
+                                     SVC_PRAYER_MADHAB_STANDARD,
+                                     SVC_PRAYER_HIGHLAT_AUTO,
+                                     0.0, 0.0, &t);
+    CHECK(e==ESP_OK && t.valid, "Moonsighting calculates (Shrewsbury 21 Jun)");
+    if (t.valid) {
+        long long gap = (long long)t.dhuhr_sec - (long long)t.zawal_sec;
+        CHECK(gap >= 240 && gap <= 360,
+              "Moonsighting: dhuhr_sec - zawal_sec in [240, 360] s "
+              "(method +5 min adjustment is the A3 precondition)");
+    }
     // --- Shrewsbury across the year: isha always after maghrib, in range ---
     int wrap=0; for (int doy=0; doy<365; doy++) { static const int md[]={31,28,31,30,31,30,31,31,30,31,30,31}; int m=0,d=doy; while(d>=md[m]){d-=md[m];m++;}
         svc_prayer_engine_calculate(2026,m+1,d+1,52.7075,-2.7527,0.0,SVC_PRAYER_METHOD_MWL,SVC_PRAYER_MADHAB_STANDARD,SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &t);

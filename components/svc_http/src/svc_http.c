@@ -6,7 +6,7 @@
 #include "svc_network.h"
 #include "svc_prayer_engine_service.h"
 #include "svc_timetable.h"
-#include "svc_time.h"   /* /debug/ntp test hook only; include is unconditional */
+#include "svc_time.h"   /* /debug/ntp hooks + preset TZ application (R4 #132) */
 #include "esp_system.h"
 #include "esp_random.h"
 #include "nvs.h"
@@ -979,7 +979,7 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
        enum cast; the previous valueint path silently truncated 1.5 -> 1.
        The upper bound tracks SVC_CONFIG_PRESET_COUNT automatically, so
        adding a fourth preset needs no change here. */
-    double preset_v;
+    double preset_v = 0.0;
     if (json_get_uint_range(preset, 0,
                             (double)(SVC_CONFIG_PRESET_COUNT - 1), &preset_v)) {
         err = svc_config_apply_preset((svc_config_preset_t)(int)preset_v);

@@ -76,7 +76,10 @@ location and method, and does something at each.
   `PRAYER_KIND_JAMAT` is reserved). Sunrise / sunset / day rollover stay
   with `svc_time` + `svc_prayer_engine_service`. The decision logic is
   pure C (`scheduler_logic.c`) and unit-tested on the host in
-  `prayer_host_tests/test_scheduler.cpp`.
+  `prayer_host_tests/test_scheduler.cpp`. `EVENT_PRAYER_TIME_REACHED`
+  currently has no wired consumer -- wiring is deferred to Phase 3
+  audio; the intentional-deferral note is in `STATUS.md`
+  (`svc_scheduler`).
 - `svc_config` (new component): NVS-backed settings -- location, method,
   madhab, iqamah offsets, adhan mode, display preferences. *(Landed as PR 12;
   the schema is in `components/svc_config/include/svc_config.h`.)*

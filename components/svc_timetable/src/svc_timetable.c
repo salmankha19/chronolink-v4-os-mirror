@@ -241,9 +241,16 @@ static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
     if (!root) { free(buf); return ESP_ERR_INVALID_RESPONSE; }
 
     const cJSON *ver = cJSON_GetObjectItemCaseSensitive(root, "schema_version");
-    if (!cJSON_IsNumber(ver) || ver->valueint > SVC_TIMETABLE_SCHEMA_VER) {
-        ESP_LOGW(TAG, "schema_version unsupported (%d > %d)",
-                 cJSON_IsNumber(ver) ? ver->valueint : -1, SVC_TIMETABLE_SCHEMA_VER);
+    /* #138 (j): reject negative too. A negative integer (e.g. -5) would
+       pass the > upper-bound check and be stored via a (uint16_t) cast
+       as 65531, which then reads as "newer than current" in
+       needs_regen() and skips regeneration. Guard at parse. */
+    if (!cJSON_IsNumber(ver)
+        || ver->valueint < 0
+        || ver->valueint > SVC_TIMETABLE_SCHEMA_VER) {
+        ESP_LOGW(TAG, "schema_version unsupported (got %d, expected 0..%d)",
+                 cJSON_IsNumber(ver) ? ver->valueint : -1,
+                 SVC_TIMETABLE_SCHEMA_VER);
         cJSON_Delete(root);
         free(buf);
         return ESP_ERR_INVALID_VERSION;

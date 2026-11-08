@@ -136,7 +136,7 @@ void scheduler_rearm(int64_t now_utc_epoch,
  * midnight); the arithmetic handles that without wrapping.
  * Returns 0 for an invalid date, for local_sec == UINT32_MAX, or if the
  * conversion fails -- 0 is outside the representable range for every date
- * this firmware accepts (year >= 1970).
+ * this firmware accepts (years 2020-2100).
  *
  * Exposed for testability.
  */

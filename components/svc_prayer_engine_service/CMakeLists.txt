@@ -3,6 +3,7 @@ idf_component_register(
         "src/svc_prayer_engine_service.c"
         "src/adhan_calculator.c"
         "src/jamat_calculator.c"
+        "src/merge_logic.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "src"
     REQUIRES

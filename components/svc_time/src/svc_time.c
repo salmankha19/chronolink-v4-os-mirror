@@ -114,7 +114,6 @@ static const uint32_t k_backoff_ms[] = {
 
 static bool                s_started          = false;
 static bool                s_nvs_open         = false;
-static bool                s_sntp_initialized = false;
 static nvs_handle_t        s_nvs;
 
 static QueueHandle_t       s_mailbox          = NULL;
@@ -460,13 +459,6 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Stop any previous session first: LwIP holds pointers into
-       s_lwip_servers, which is rewritten just below. */
-    if (s_sntp_initialized) {
-        esp_netif_sntp_deinit();
-        s_sntp_initialized = false;
-    }
-
     if (!state_lock()) {
         ESP_LOGE(TAG, "state lock unavailable -- sync aborted (%s)", why);
         return ESP_ERR_TIMEOUT;
@@ -493,9 +485,10 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
         cfg.servers[i] = s_lwip_servers[i];   /* static: LwIP keeps the pointer */
     }
 
+    bool init_ok = false;
     err = esp_netif_sntp_init(&cfg);
     if (err == ESP_OK) {
-        s_sntp_initialized = true;
+        init_ok = true;
         err = esp_netif_sntp_start();
     }
     if (err == ESP_OK) {
@@ -511,9 +504,8 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
        self-contained (init, wait, deinit) keeps the RTC and the system
        clock in step. Our own sync paths (network connect, backoff retry,
        23:00 daily) remain the only source of updates. */
-    if (s_sntp_initialized) {
+    if (init_ok) {
         esp_netif_sntp_deinit();
-        s_sntp_initialized = false;
     }
 
     if (err != ESP_OK) {
