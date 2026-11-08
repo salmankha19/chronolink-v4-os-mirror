@@ -21,8 +21,11 @@
 #endif
 
 /* A prayer is scheduled when its seconds-since-local-midnight value is a
-   real instant. 0 is local midnight (and what a zeroed struct holds);
-   UINT32_MAX is the engine's "cannot be computed / disabled" sentinel. */
+   real instant. 0 is local midnight and a valid instant (#136); UINT32_MAX
+   is the engine's "cannot be computed / disabled" sentinel. The
+   today->valid gate above is what protects against a zeroed struct -- a
+   memset scheduler_day_t has sec[]==0 for all entries and would otherwise
+   look like five midnights. */
 static bool prayer_scheduled(const scheduler_day_t *today, int p)
 {
     if (!today || !today->valid) {
@@ -31,7 +34,7 @@ static bool prayer_scheduled(const scheduler_day_t *today, int p)
     if (p < 0 || p >= SCHEDULER_PRAYER_COUNT) {
         return false;
     }
-    return today->sec[p] != 0u && today->sec[p] != UINT32_MAX;
+    return today->sec[p] != UINT32_MAX;
 }
 
 int64_t scheduler_prayer_epoch(uint32_t date_yyyymmdd,

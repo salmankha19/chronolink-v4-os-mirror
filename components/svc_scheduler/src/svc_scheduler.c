@@ -90,17 +90,17 @@ static void reset_state_from_service(void)
     svc_prayer_engine_times_t times;
     scheduler_day_t new_day;
     int64_t pending_isha;
-    scheduler_state_t prev = s_state;   /* fired markers, carried over below */
+    scheduler_state_t prev;
 
-    /* Capture any already-pending Isha BEFORE the state is rebuilt, so two
-       resets in the same drain (DATE_CHANGED followed by TIMES_UPDATED) do
-       not lose yesterday's deferred Isha. */
-    pending_isha = s_state.pending_isha_epoch;
-    memset(&s_state, 0, sizeof(s_state));
-    s_state.pending_isha_epoch = pending_isha;   /* survives the early returns */
+    /* #136 (c): the two early-return error paths below must NOT drop
+       last_fired_epoch[]. A transient get_epoch() failure (e.g. mid-NTP
+       step) would otherwise wipe the fired markers for prayers that
+       already fired this day, letting them re-fire on the next tick once
+       time is valid again. Fetch first; only clear s_state once we know we
+       have fresh inputs to rebuild it from. */
 
     if (svc_time_get_epoch(&now) != ESP_OK) {
-        ESP_LOGD(TAG, "no valid time yet -- scheduling state cleared");
+        ESP_LOGD(TAG, "no valid time yet -- state preserved");
         return;
     }
 
@@ -108,11 +108,19 @@ static void reset_state_from_service(void)
     if (err != ESP_OK || !times.valid) {
         /* Expected during boot: svc_config may have no location yet, or
            svc_time has no trusted time. DEBUG on purpose (A1) -- the next
-           tick retries. */
-        ESP_LOGD(TAG, "no prayer times yet (%s) -- state cleared",
+           tick retries. State is preserved so a fired marker from an
+           earlier call is not lost. */
+        ESP_LOGD(TAG, "no prayer times yet (%s) -- state preserved",
                  err == ESP_OK ? "not valid" : esp_err_to_name(err));
         return;
     }
+
+    /* Now that we have fresh inputs, take the snapshot of what we are
+       leaving, clear the state, and rebuild from the new_day. */
+    prev = s_state;
+    pending_isha = s_state.pending_isha_epoch;
+    memset(&s_state, 0, sizeof(s_state));
+    s_state.pending_isha_epoch = pending_isha;
 
     adapt_times(&times, &new_day);
 

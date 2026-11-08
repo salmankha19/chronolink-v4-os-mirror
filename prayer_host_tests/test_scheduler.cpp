@@ -60,6 +60,11 @@ static void test_epoch_conversion(void)
     CHECK(scheduler_prayer_epoch(kDate, 0, 25u * 3600u) == at(1, 0) + 86400,
           "local seconds past 24:00 roll into the next UTC day");
 
+    /* #136: local_sec 0 is a valid midnight instant (a real prayer that
+       computes to exactly 00:00:00), not the "not scheduled" sentinel. */
+    CHECK(scheduler_prayer_epoch(kDate, 0, 0u) == kMidnightUtc,
+          "local_sec 0 is midnight, a valid prayer instant");
+
     /* Sentinels and impossible dates convert to 0 (= not scheduled). */
     CHECK(scheduler_prayer_epoch(kDate, 0, UINT32_MAX) == 0,
           "UINT32_MAX is not a prayer instant");
@@ -214,9 +219,10 @@ static void test_config_reset(void)
 
 static void test_unscheduled_and_invalid(void)
 {
-    /* Asr at local 0 and Isha unavailable (UINT32_MAX): only the three real
-       instants fire. */
-    scheduler_day_t today = make_day(0, true, 36000, 43200, 0, 64800, UINT32_MAX);
+    /* Asr and Isha both unavailable (UINT32_MAX): only the three real
+       instants fire. (#136 changed asr==0 from "unscheduled" to "midnight";
+       this test's intent is preserved by using UINT32_MAX for both.) */
+    scheduler_day_t today = make_day(0, true, 36000, 43200, UINT32_MAX, 64800, UINT32_MAX);
     scheduler_state_t st;
     uint8_t fired[5];
 
@@ -253,6 +259,27 @@ static void test_unscheduled_and_invalid(void)
     scheduler_premark_past(at(23, 0), NULL, &st);
     scheduler_premark_past(at(23, 0), &today, NULL);
     CHECK(1, "premark tolerates NULL");
+}
+
+static void test_midnight_prayer(void)
+{
+    /* #136: Fajr at exactly 00:00:00 local (sec[0] == 0) must fire at the
+       exact midnight instant, not be silently skipped as "unscheduled".
+       Pre-#136, prayer_scheduled() rejected sec[p]==0, so a prayer
+       computed to midnight was indistinguishable from a zeroed struct. */
+    scheduler_day_t today = make_day(0, true, 0, 43200, 54000, 64800, 72000);
+    scheduler_state_t st;
+    uint8_t fired[5];
+
+    memset(&st, 0, sizeof st);
+    int n = scheduler_evaluate(kMidnightUtc, &today, &st, fired);
+    CHECK(n == 1 && fired[0] == 0, "fajr at exactly 00:00:00 fires");
+    CHECK(st.last_fired_epoch[0] == kMidnightUtc,
+          "midnight fajr epoch recorded");
+    CHECK(scheduler_evaluate(kMidnightUtc, &today, &st, fired) == 0,
+          "midnight fajr does not double-fire at the same instant");
+    CHECK(scheduler_evaluate(kMidnightUtc + 1, &today, &st, fired) == 0,
+          "midnight fajr does not re-fire on the next tick");
 }
 
 static void test_premark_grace(void)
@@ -431,6 +458,7 @@ int main(void)
     test_startup_mid_day();
     test_config_reset();
     test_unscheduled_and_invalid();
+    test_midnight_prayer();
     test_premark_grace();
     test_lateness_limit();
     test_isha_rollover();
