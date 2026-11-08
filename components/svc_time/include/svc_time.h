@@ -97,8 +97,10 @@ esp_err_t svc_time_set_timezone_posix(const char *tz);
 /* DEPRECATED: returns a pointer into the service's internal TZ buffer.
    Reading the pointer while svc_time_set_timezone_posix() is running is a
    data race (#130 R9e): the buffer is being rewritten under s_state_lock,
-   and the reader takes no lock. Prefer svc_time_get_timezone_posix_copy()
-   below. Kept for source compatibility until existing callers migrate. */
+   and the reader takes no lock. Use svc_time_get_timezone_posix_copy()
+   below instead. No in-tree callers remain as of #139; this shim is
+   scheduled for removal once out-of-tree users are confirmed zero. */
+__attribute__((deprecated("pointer races with svc_time_set_timezone_posix() (#130 R9e); use svc_time_get_timezone_posix_copy()")))
 const char *svc_time_get_timezone_posix(void);
 
 /* Copy the current POSIX TZ string into `out`, which must be at least
