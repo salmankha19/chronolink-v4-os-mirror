@@ -70,23 +70,29 @@ High-lat:  SVC_PRAYER_HIGHLAT_AUTO
 Offsets:   Fajr 0, Dhuhr 0, Asr 0, Maghrib +2, Isha 0
 ```
 
-### Per-prayer residuals (measured, Δ = calendar − ChronoLink, minutes)
+### Per-prayer residuals (measured, Δ = published − ChronoLink-with-config, minutes)
+
+Positive Δ = mosque publishes later than ChronoLink calculates.
+`Sun` and `Istiwa` are raw ChronoLink (no config offset). `Dhuhr` uses
+the built-in MOON output (includes MOON's +5 adjustment). `Maghrib`
+uses the ChronoLink output **after adding the +2 config offset**
+(total +5 from raw sunset, matching the mosque's normal convention).
 
 | Date | Fajr | Sun | Istiwa | Dhuhr | Asr | Maghrib | Isha |
 |---|---|---|---|---|---|---|---|
-| Jan 02 (Fri) | 0 | 0 | +1 | *(Jumu'ah)* | 0 | +2 | −4 |
-| Jan 03 (Sat) | 0 | +1 | +2 | −1 | 0 | +3 | −5 |
-| Feb 02 (Mon) | +3 | 0 | +2 | −1 | 0 | +2 | −10 |
-| Mar 02 (Mon) | +5 | +1 | +2 | −1 | 0 | **+5** ⚠️ | −8 |
-| Mar 29 (Sun) | +1 | +1 | +1 | 0 | 0 | +3 | −5 |
-| Apr 01 (Wed) | +2 | +1 | +1 | 0 | 0 | +3 | −5 |
-| May 01 (Fri) | −3 | +1 | +2 | *(Jumu'ah)* | 0 | +2 | −5 |
-| Jun 21 (Sun) | +3 | +1 | +1 | 0 | 0 | +2 | **+8** ⚠️ |
-| Jul 01 (Wed) | +5 | +1 | +1 | 0 | 0 | +2 | **+8** ⚠️ |
-| Aug 01 (Sat) | +1 | +1 | +1 | 0 | 0 | +2 | −4 |
-| Oct 25 (Sun) | +1 | +1 | +1 | 0 | 0 | +2 | −3 |
-| Nov 01 (Sun) | +3 | +1 | +1 | 0 | 0 | +2 | −5 |
-| Dec 21 (Mon) | +1 | +1 | +1 | 0 | 0 | +3 | −2 |
+| Jan 02 (Fri) | 0 | 0 | +1 | *(Jumu'ah)* | 0 | 0 | +4 |
+| Jan 03 (Sat) | 0 | +1 | +2 | +1 | +1 | +1 | +5 |
+| Feb 02 (Mon) | −3 | 0 | +2 | +1 | 0 | 0 | +10 |
+| Mar 02 (Mon) | −5 | +1 | +2 | +1 | 0 | **+6** ⚠️ | +8 |
+| Mar 29 (Sun) | −1 | +1 | +1 | 0 | 0 | 0 | +5 |
+| Apr 01 (Wed) | +1 | +1 | +1 | 0 | 0 | 0 | +5 |
+| May 01 (Fri) | +3 | +1 | +2 | *(Jumu'ah)* | 0 | 0 | +5 |
+| Jun 21 (Sun) | −3 | +1 | +1 | 0 | 0 | 0 | **−11** ⚠️ |
+| Jul 01 (Wed) | −1 | +1 | +1 | 0 | 0 | 0 | **−8** ⚠️ |
+| Aug 01 (Sat) | +2 | +1 | +1 | 0 | 0 | 0 | +2 |
+| Oct 25 (Sun) | −1 | +1 | +1 | 0 | 0 | 0 | +3 |
+| Nov 01 (Sun) | −3 | +1 | +1 | 0 | +2 | 0 | +5 |
+| Dec 21 (Mon) | −1 | +1 | +1 | 0 | +1 | +1 | +2 |
 
 ### Findings
 
