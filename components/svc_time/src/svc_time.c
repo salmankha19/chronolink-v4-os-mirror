@@ -104,7 +104,6 @@ static const uint32_t k_backoff_ms[] = {
 #define SVC_TIME_TASK_PRIO          (tskIDLE_PRIORITY + 3)
 #define SVC_TIME_TASK_CORE          0
 #define SVC_TIME_TICK_PERIOD_MS     1000  /* worker wake-up: one clock tick */
-#define SVC_TIME_STATUS_TICKS       5     /* TEMPORARY: print every 5th tick (5 s) */
 
 #define SVC_TIME_LOCK_TICKS         pdMS_TO_TICKS(1000)
 #define SVC_TIME_SYNC_LOCK_TICKS    pdMS_TO_TICKS(100)
@@ -835,32 +834,10 @@ static void run_periodic_clock_tasks(void)
     }
 }
 
-/* TEMPORARY: remove when the display path lands. */
-static void log_local_status(uint32_t tick)
-{
-    svc_time_snapshot_t snap;
-
-    if (svc_time_get_snapshot(&snap) != ESP_OK) {
-        ESP_LOGW(TAG, "status: snapshot unavailable [tick=%u]", (unsigned)tick);
-        return;
-    }
-    if (!snap.valid) {
-        ESP_LOGI(TAG, "status: no valid time yet (state=%s) [tick=%u]",
-                 state_to_str(snap.state), (unsigned)tick);
-        return;
-    }
-    ESP_LOGI(TAG, "status: local %02u:%02u:%02u (UTC %02u:%02u:%02u) state=%s [tick=%u]",
-             (unsigned)snap.local.hours, (unsigned)snap.local.minutes,
-             (unsigned)snap.local.seconds, (unsigned)snap.utc.hours,
-             (unsigned)snap.utc.minutes, (unsigned)snap.utc.seconds,
-             state_to_str(snap.state), (unsigned)tick);
-}
-
 static void svc_time_worker(void *arg)
 {
     event_t evt;
     const char *source;
-    uint32_t tick = 0;
 
     (void)arg;
     ESP_LOGI(TAG, "worker started");
@@ -911,9 +888,6 @@ static void svc_time_worker(void *arg)
 
             /* Phase 3: hourly RTC correction + 23:00 daily sync. */
             run_periodic_clock_tasks();
-        }
-        if (++tick % SVC_TIME_STATUS_TICKS == 0) {
-            log_local_status(tick);   /* TEMPORARY: remove with the status print */
         }
     }
 }

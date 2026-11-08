@@ -61,21 +61,43 @@ ends at the true Fajr — the fast begins at the astronomy, not at the call
 to prayer. Same for Iftar: it breaks at sunset, not at the Jafaria
 maghrib angle (which is 15+ minutes later in summer).
 
-### 2.1 Minute rounding (PR 5.4)
+### 2.1 Minute rounding (PR 5.4, refined by #133)
 
-`hours_to_sec()` in `svc_prayer_engine.cpp` converts the engine's decimal
-hours to seconds. As of PR 5.4 it rounds **up** to the next whole minute
-(ceiling) before any offsets are applied: Fajr 05:06:15 becomes 05:07:00,
-never 05:06:00. This guarantees a published time is never earlier than
-the astronomical instant. Adhan offsets (`adhan_offset_min[]`) and jamat
-anchors/offsets then operate on minute-aligned values, so every published
-`*_sec` field is a multiple of 60, with two documented exceptions:
+`hours_to_sec_common()` in `svc_prayer_engine.cpp` converts the engine's
+decimal hours to seconds. As of PR #133 the rounding is direction-aware,
+via two thin wrappers (`hours_to_sec_start` / `hours_to_sec_end`):
+
+- **Start-of-window fields** (`fajr_sec`, `dhuhr_sec`, `sunset_sec`,
+  `asr_sec`, `maghrib_sec`, `isha_sec`) round **up** (ceiling). The
+  fired moment is never before the astronomical instant, which is the
+  safe side for anything that triggers an action (adhan, iftar).
+- **End-of-window fields** (`sunrise_sec`, `asr_yellow_sec`,
+  `zawal_sec`, `midnight_sec`, `sehri_end_sec`) round **down** (floor).
+  The window closes at or before the astronomical boundary, which is
+  the safe side for anything that ends a permissible period (sehri,
+  zawal, asr-yellow end).
+
+Rationale: getting a start-of-window field one minute late is safe
+(you start slightly after the astronomical instant). Getting an
+end-of-window field one minute late is unsafe (you end slightly after
+the boundary). PR 5.4 ceiled every field; #133 recognised that ceil is
+only the safe direction for start-of-window, and split the helper so
+end-of-window uses floor.
+
+All published `*_sec` fields remain minute-aligned (multiples of 60)
+after the split, with two documented exceptions:
 
 - `asr_yellow_sec` may hold `UINT32_MAX` (the "sun never reached 5°"
   sentinel), which is not a multiple of 60.
 - `isha_sec` / `midnight_sec` are clamped at 172799 (2 days − 1 s) as a
   safety net; that clamp value is not a multiple of 60 either, though it
   is unreachable in normal operation.
+
+`sehri_end_sec` (see `svc_prayer_times_t` in
+`components/svc_prayer_engine/include/svc_prayer_engine.h`) is the floor
+of the same astronomical Fajr that `fajr_sec` ceils — distinct values so
+`svc_prayer_engine_service` can pass the ceil to the adhan tier and the
+floor to the Ramadan endpoint.
 
 **Isha past local midnight (PR #124).** If a day's Isha computes past
 local 24:00 (far-north latitude, or Umm al-Qura / Moonsighting rules
@@ -448,9 +470,9 @@ esp_err_t adhan_calculator_run(const svc_config_t *cfg,
 
 `adhan_result_t` exposes two tiers: `raw`, the untouched
 `svc_prayer_times_t` (fajr, sunrise, dhuhr, asr_yellow, sunset, zawal,
-asr, maghrib, isha, midnight), and `adhan_sec[5]`, the offset-applied
-values. The result is **pre-merge and pre-tripwire**: the parent merges
-the timetable and validates.
+asr, maghrib, isha, midnight, sehri_end), and `adhan_sec[5]`, the
+offset-applied values. The result is **pre-merge and pre-tripwire**: the
+parent merges the timetable and validates.
 
 **`src/jamat_calculator.{c,h}`** (commit `98c5fc0`) — pure arithmetic:
 season selection, anchor selection, offset, rounding. No engine call, no

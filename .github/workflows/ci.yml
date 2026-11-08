@@ -10,8 +10,12 @@ on:
 
 jobs:
   platformio-build:
-    name: PlatformIO build (single_mcu)
+    name: PlatformIO build (${{ matrix.env }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [single_mcu, single_mcu_test]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,13 +36,16 @@ jobs:
             ${{ runner.os }}-platformio-
 
       - name: Install PlatformIO
-        run: python -m pip install -U platformio
+        # Pin the version so a new PIO release cannot silently change what
+        # CI builds. Bump deliberately after checking `pio --version` locally.
+        run: python -m pip install -U "platformio==6.2.0"
 
-      - name: Build single_mcu
-        run: python -m platformio run -e single_mcu
+      - name: Build ${{ matrix.env }}
+        run: python -m platformio run -e ${{ matrix.env }}
         working-directory: ${{ github.workspace }}
 
       - name: Verify production image has no /debug/ntp route
+        if: matrix.env == 'single_mcu'
         run: |
           # The /debug/ntp route is compiled only under
           # CONFIG_CHRONOLINK_TEST_HOOKS / CHRONOLINK_TEST_HOOKS, which
@@ -51,8 +58,8 @@ jobs:
           fi
           echo "OK: /debug/ntp route not present in production image"
 
-      - name: Upload firmware (tags and manual only)
-        if: success() && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
+      - name: Upload firmware (single_mcu, tags and manual only)
+        if: success() && matrix.env == 'single_mcu' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')
         uses: actions/upload-artifact@v4
         with:
           name: platformio-firmware-${{ github.sha }}
@@ -85,7 +92,7 @@ jobs:
       - name: Setup ESP-IDF
         uses: espressif/install-esp-idf-action@v1
         with:
-          version: 'v6.0.2'
+          version: 'v6.0.1'
 
       - name: Show IDF version
         run: idf.py --version
