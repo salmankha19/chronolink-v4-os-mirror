@@ -91,14 +91,6 @@ void display_manager_process_frame(void);
 void display_manager_clear_queue(void);
 
 /* --------------------------------------------------------------------------
- * Diagnostics
- * -------------------------------------------------------------------------- */
-
-/* Frames dequeued and executed by display_manager_process_frame() since boot.
-   A snapshot: the counter may advance between two reads. */
-uint32_t display_manager_frames_dispatched(void);
-
-/* --------------------------------------------------------------------------
  * Producer API (safe from any task / core)
  * -------------------------------------------------------------------------- */
 

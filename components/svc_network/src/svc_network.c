@@ -58,7 +58,6 @@ static bool                         s_started      = false;
 static esp_netif_t                 *s_ap_netif     = NULL;
 static bool                         s_connected    = false;
 static bool                         s_ap_mode      = false;
-static uint8_t                      s_retry_count  = 0;
 static esp_netif_t                 *s_sta_netif    = NULL;
 static esp_event_handler_instance_t s_wifi_evt_instance = NULL;
 static esp_event_handler_instance_t s_ip_evt_instance   = NULL;
@@ -237,8 +236,6 @@ static void reset_backoff(void)
 /* Event handlers                                                     */
 /* ------------------------------------------------------------------ */
 
-static void start_ap_mode(void);
-
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
@@ -275,7 +272,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
            router comes up, the next retry reconnects automatically.
            AP mode is reachable only from svc_network_start() when
            credentials are absent. */
-        s_retry_count++;
         schedule_reconnect();
         break;
     }
@@ -295,7 +291,6 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
         snprintf(s_ip_str, sizeof(s_ip_str), IPSTR, IP2STR(&e->ip_info.ip));
 
         s_connected = true;
-        s_retry_count = 0;
         reset_backoff();
 
         ESP_LOGI(TAG, "Got IP: %s", s_ip_str);
@@ -532,7 +527,6 @@ esp_err_t svc_network_stop(void)
     s_ip_str[0] = '\0';
     s_started = false;
     s_ap_mode = false;
-    s_retry_count = 0;
     reset_backoff();
 
     ESP_LOGI(TAG, "WiFi stopped");

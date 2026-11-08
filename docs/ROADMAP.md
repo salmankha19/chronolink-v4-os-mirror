@@ -20,7 +20,7 @@ dependency, not by promise of a date.
 | Event bus | `event_dispatch_task` drains the kernel queue; `event_bus_subscribe()` fans out per type (8 subscriber slots). |
 | `svc_time` | First event-bus subscriber. NTP syncs, the DS3231M write path soft-fails on a bare devkit, POSIX TZ (default UK `GMT0BST,M3.5.0/1,M10.5.0`), 1 Hz tick on the snapshot, publishes `EVENT_TIME_UPDATE`. |
 | `ui_producer` | 250 ms poll task on core 0; builds a single-string `dm_frame_t` (one `draw_text_scaled` for the clock, plus an optional 3-command red banner when RTC is untrusted) only when the rendered string changes. First frame adds a one-time clear. |
-| `display_manager` | Frame queue plus frame counter (`display_manager_frames_dispatched()`). Frames dispatch at 1 Hz on the devkit and the counter advances -- verified on hardware against the PR 6 boot log. |
+| `display_manager` | Frame queue. Frames dispatch at 1 Hz on the devkit -- verified on hardware against the PR 6 boot log. (The `display_manager_frames_dispatched()` counter was removed in #137a: it had no observer.) |
 | Panel | None wired. The ST7796S HAL initialises, RDDID returns all-zero (non-fatal by design), frames write into the void: no crash, no log spam. |
 | CI | Two jobs (`PlatformIO build (single_mcu)`, then `ESP-IDF build (esp32s3)`). Artifacts upload only on tag pushes and manual dispatch (`retention-days: 7`), so ordinary push/PR runs leave no artifact storage behind. |
 
