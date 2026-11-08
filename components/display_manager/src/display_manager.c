@@ -299,10 +299,6 @@ void display_manager_process_frame(void)
      * ------------------------------------------------------------------ */
     s_frames_dispatched++;
 
-    /* TEMPORARY: remove when panel verified on real hardware */
-    if ((s_frames_dispatched % 5U) == 0U) {
-        ESP_LOGI("display_manager", "frame dispatched [n=%lu]", (unsigned long)s_frames_dispatched);
-    }
 }
 
 void display_manager_clear_queue(void)

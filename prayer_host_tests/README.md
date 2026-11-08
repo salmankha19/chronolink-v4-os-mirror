@@ -2,6 +2,13 @@
 
 Run without ESP-IDF:  `make test`   (needs only g++; golden.csv is committed)
 
+**Windows / MSYS2:** a fresh MSYS2 MinGW install ships `g++` but not `make`, so `make -C prayer_host_tests test` fails with `CommandNotFoundException: make`. One-time fix:
+
+    D:\tools\msys64\usr\bin\pacman.exe -S --noconfirm make
+    $env:PATH = "D:\tools\msys64\usr\bin;$env:PATH"      # per-session, or add to user PATH permanently
+
+Adjust the path if your MSYS2 lives elsewhere (e.g. `C:\msys64\usr\bin`).
+
 * test_golden.cpp   - engine vs PyEphem reference (gen_golden.py), 9 cities x ~122 dates x up to 7 events, tolerance 30 s.
                       Uses HighLatitudeRule::NONE so only the astronomy is tested.
 * test_wrapper.cpp  - C API: unwrapped Isha/midnight, argument + date validation, Asr-yellow sentinel, Jafaria, polar day.

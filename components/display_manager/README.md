@@ -19,6 +19,7 @@ timeout, 5 ms queue timeout), and a frame that cannot be queued is dropped
 with a warning.
 
 ## Statistics
-display_manager_frames_dispatched() returns the number of frames dequeued and
-executed since boot. A TEMPORARY ESP_LOGI in display_manager_process_frame()
-prints it every 5th frame until the panel is verified on real hardware.
+`display_manager_frames_dispatched()` returns the number of frames
+dequeued and executed since boot. The counter increments once per
+executed frame; no periodic log is emitted (the PR 6 bring-up
+`ESP_LOGI` was removed once the panel was verified).
