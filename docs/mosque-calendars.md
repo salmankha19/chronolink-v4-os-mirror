@@ -11,6 +11,8 @@
 **No universal preset can fit all mosques.** Each mosque publishes its own calendar, derived from local calculation tools, manual tweaks, and community consensus. ChronoLink's `svc_config` + `svc_prayer_engine` can reproduce *any* single mosque's calendar within tolerance when configured correctly, but the config values differ per mosque.
 
 **Three mosques analyzed, across two countries, three configs:**
+§0 establishes the official Umm Al-Qura standard (Makkah) as the
+canonical reference point for all entries below.
 
 | Mosque | Country | City | Method base | Madhab | Dhuhr offset | Maghrib offset |
 |---|---|---|---|---|---|---|
@@ -49,6 +51,47 @@
 - Masjid Quba — **measured** (actual diagnostic output). High.
 - Crawley — **hand-math + measured** (1 month). Medium.
 - Tawheed — **measured** (3 dates × 6 prayers, all within ±1 min). High for angle, **zero offsets confirmed**.
+
+---
+
+## §0 — Reference standard: Umm Al-Qura (Makkah)
+
+Official Saudi standard, Umm Al-Qura University. **This is the
+canonical calibration point for the engine.** All other mosques in
+this document are described relative to it.
+
+| Parameter | Value |
+|---|---|
+| Fajr | 18.5° |
+| Isha | Maghrib + 90 min (fixed interval, not angle) |
+| Isha in Ramadan | Maghrib + 120 min (Hijri-based) |
+| Asr | Standard (shadow 1×) |
+| Coordinates | Makkah 21.4225, 39.8262 |
+| TZ | UTC+3, no DST |
+| High-lat rule | none needed at 21.4°N |
+
+**Engine status:** `SVC_PRAYER_METHOD_UMM_AL_QURA` is fully
+implemented — `prayertimes::UMM_AL_QURA` in `Method.hpp`, wired at
+`svc_prayer_engine.cpp:109`. Parameters: Fajr 18.5°, `isha_interval
+= 90` (per `gen_golden.py:30`). Covered by `test_golden` (~730 rows
+at Makkah coords, full 2026) and `test_invariants`.
+
+**Verified:** calculated values match the official Umm Al-Qura
+calendar CSV within 1 min across the full non-Ramadan year
+(spot-checked Jun/Jul/Oct/Nov/Dec 2026 against the official
+published table).
+
+**Known gap — Ramadan +120 min:** The engine uses `isha_interval =
+90` year-round. The official standard switches to +120 during
+Ramadan (Hijri-based). Confirmed absent from the handler — no
+`ramadan` or `hijri` references in `svc_prayer_engine/src/`, and
+`golden.csv` Feb 2026 (Ramadan 1447) shows a 90-min Isha gap where
++120 is expected. Backlog item filed: "Implement Hijri date support
+for Umm Al-Qura Ramadan Isha switch."
+
+No dedicated fixture added here — the existing `test_golden`
+already exercises the UMM_AL_QURA method path against the same
+engine. This section is the documented reference for that coverage.
 
 ---
 
@@ -292,6 +335,7 @@ At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosqu
 | C | `summer_isha_offset_min` — fixed offset from Maghrib in peak summer | Config | Medium | Medium |
 | D | `/api/mosque-preview` — user provides calendar, system shows calculated-vs-published diff | HTTP | Large | Low |
 | E | Grow this file to 5-10 more mosques (UK, US, EU, Middle East) | Docs | Incremental | Low |
+| F | Umm Al-Qura Ramadan +120 min Isha switch — blocked on confirmed-date table (see backlog). | Config | Medium | Medium |
 
 ---
 
