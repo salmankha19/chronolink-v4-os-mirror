@@ -248,6 +248,11 @@ static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
         free(buf);
         return ESP_ERR_INVALID_VERSION;
     }
+    /* #135: record the loaded version. Lower-than-current is accepted
+       (old firmware files and old uploads must still parse); the version
+       difference is acted on by svc_timetable_needs_regen_from_config(),
+       which regenerates firmware files and warns on user files. */
+    out->meta.schema_version = (uint16_t)ver->valueint;
 
     const cJSON *src = cJSON_GetObjectItemCaseSensitive(root, "source");
     if (cJSON_IsString(src) && strcmp(src->valuestring, "firmware") == 0) {
@@ -573,16 +578,42 @@ bool svc_timetable_needs_regen_from_config(void)
     bool file_present;
     svc_timetable_source_t source;
     int32_t year;
+    uint16_t loaded_ver;
     char calc_json[1024];
 
     if (!take_state_lock()) return true;   /* fail-safe: prefer to regenerate */
     file_present = s_meta.file_present;
     source       = s_meta.source;
     year         = s_meta.year;
+    loaded_ver   = s_meta.schema_version;
     memcpy(calc_json, s_meta.calculation_json, sizeof(calc_json));
     give_state_lock();
 
     if (!file_present) return true;
+
+    /* #135: schema-version regen check. Must run BEFORE the source check
+       below, because user files skip all regen rules. v1 files carry
+       pre-#133 zawal_start/sehri_end rounding (unsafe direction). Firmware
+       files are derived from config and safe to regenerate; user files are
+       the mosque's authoritative times and must never be overwritten
+       (§5.5) -- warn once instead so the operator can re-export. */
+    if (loaded_ver < SVC_TIMETABLE_SCHEMA_VER) {
+        if (source == SVC_TIMETABLE_SOURCE_FIRMWARE) {
+            ESP_LOGI(TAG, "timetable schema v%u < current v%u -- regenerating",
+                     (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            return true;
+        }
+        static int16_t s_warned_ver = -1;
+        if (s_warned_ver != (int16_t)loaded_ver) {
+            ESP_LOGW(TAG, "user timetable schema v%u < current v%u; "
+                          "zawal_start/sehri_end may be pre-#133 unsafe; "
+                          "consider re-export",
+                     (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            s_warned_ver = (int16_t)loaded_ver;
+        }
+        return false;
+    }
+
     if (source != SVC_TIMETABLE_SOURCE_FIRMWARE) return false;
 
     /* Year rollover: last year's file must never serve this year's dates.
