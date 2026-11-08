@@ -322,8 +322,25 @@ change after upload immediately affects the displayed times for missing
 fields; there is no silent staleness.
 
 **Regeneration** (firmware files only): file missing, unparseable, year
-mismatch, or `calculation` block ≠ current `svc_config_t` (canonical
-JSON compare). User files never auto-regenerate (handoff dec. 7).
+mismatch, `schema_version` below the current `SVC_TIMETABLE_SCHEMA_VER`,
+or `calculation` block ≠ current `svc_config_t` (canonical JSON compare).
+User files never auto-regenerate (handoff dec. 7).
+
+**Schema-version regen (PR #135).** The timetable file carries a
+`schema_version` at the top level; the current version is
+`SVC_TIMETABLE_SCHEMA_VER = 2`. A firmware-generated file whose version
+is lower is treated as "needs regen" — this makes PR #133's safe-side
+zawal/sehri rounding fixes land on every device that already has a
+timetable on flash, without requiring a config change or factory reset.
+A user-uploaded file whose version is lower is **not** regenerated (the
+mosque's published times are authoritative — see the deviation policy
+above), but a one-shot `ESP_LOGW` is emitted the first time such a file
+is loaded in a boot, so the operator knows to re-export from a current
+firmware. The warn is keyed to the loaded schema version, not to file
+identity — a v1 → v2 → v1 re-upload cycle warns only on the first v1
+load, not on the second. Pre-#133 firmware wrote v1; the v1→v2 bump and
+this rule are the upgrade path, and v2 files written by current firmware
+are trusted verbatim.
 
 **Tripwire (firmware files only, PR #125)**: every recalculate where a
 firmware-generated file supplied today's values compares against a fresh

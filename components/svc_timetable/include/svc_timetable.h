@@ -37,7 +37,7 @@ extern "C" {
    svc_timetable_generate_full_year() does not need editing. Do NOT use it in
    new code; pick UPLOAD_TMP or REGEN_TMP explicitly. */
 #define SVC_TIMETABLE_PATH_TMP    SVC_TIMETABLE_REGEN_TMP
-#define SVC_TIMETABLE_SCHEMA_VER  1
+#define SVC_TIMETABLE_SCHEMA_VER  2   /* #135: v1 files carry pre-#133 unsafe zawal/sehri */
 #define SVC_TIMETABLE_YEAR_PERMANENT (-1)
 
 typedef enum {
@@ -66,6 +66,13 @@ typedef struct {
     bool                   file_present;
     bool                   partial;       /* true if any day has any field missing */
     char                   calculation_json[1024];
+    /* #135: schema_version read from the timetable file header. Used by
+       svc_timetable_needs_regen_from_config() to force regeneration when
+       a firmware-generated file was written by older firmware (v1 = pre-
+       #133, which carried the unsafe zawal_start and sehri_end rounding).
+       User-uploaded files at old schema emit a one-shot warn instead --
+       mosque authority is preserved per prayer-times-model.md §5.5. */
+    uint16_t               schema_version;
 } svc_timetable_metadata_t;
 
 esp_err_t svc_timetable_init(void);
