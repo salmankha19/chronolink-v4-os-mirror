@@ -115,6 +115,67 @@ int main() {
         svc_prayer_engine_calculate(2026,m+1,d+1,52.7075,-2.7527,0.0,SVC_PRAYER_METHOD_MWL,SVC_PRAYER_MADHAB_STANDARD,SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &t);
         if (!t.valid || t.isha_sec <= t.maghrib_sec || t.isha_sec >= 172800) wrap++; }
     CHECK(wrap==0, "Shrewsbury 2026: Isha after Maghrib on all 365 days");
+
+    /* --- MASJID QUBA (London N16 6AA) DIAGNOSTIC v2 -- TEMPORARY ---
+       Multi-config comparison at exact coordinates from Google Maps
+       (HW8J+2G London: 51.5651073, -0.0687256). 13 dates spanning
+       seasons + both DST transitions. All four configs use HANAFI
+       madhab -- v1's Asr delta vs Standard confirmed Hanafi (Shafi'i
+       Asr was 30-74 min earlier than the calendar across all seasons).
+       Candidate methods: ISNA 15/15, MWL 18/17, Karachi 18/18,
+       Moonsighting 18/18 + high-lat special. The v1 MWL/Standard run
+       ruled out MWL as Fajr/Isha source (Fajr 23 min early, Isha 17
+       min late in winter); this run answers "which method fits best"
+       by exposing all four side by side.
+       tz: 0 = GMT (winter), 1 = BST (Mar 29..Oct 25 2026). */
+    {
+        static const struct { int m, d, tz; const char *label; } q[] = {
+            {1,  2, 0, "Jan 02 Fri"}, {1,  3, 0, "Jan 03 Sat"},
+            {2,  2, 0, "Feb 02 Mon"}, {3,  2, 0, "Mar 02 Mon"},
+            {3, 29, 1, "Mar 29 Sun"}, {4,  1, 1, "Apr 01 Wed"},
+            {5,  1, 1, "May 01 Fri"}, {6, 21, 1, "Jun 21 Sun"},
+            {7,  1, 1, "Jul 01 Wed"}, {8,  1, 1, "Aug 01 Sat"},
+            {10,25, 0, "Oct 25 Sun"}, {11, 1, 0, "Nov 01 Sun"},
+            {12,21, 0, "Dec 21 Mon"},
+        };
+        static const struct {
+            svc_prayer_method_t m;
+            const char *name;
+        } methods[] = {
+            { SVC_PRAYER_METHOD_ISNA,         "ISNA 15/15" },
+            { SVC_PRAYER_METHOD_MWL,          "MWL 18/17"  },
+            { SVC_PRAYER_METHOD_KARACHI,      "KHI 18/18"  },
+            { SVC_PRAYER_METHOD_MOONSIGHTING, "MOON 18/18" },
+        };
+        auto pr = [](uint32_t s) {
+            printf(" %2u:%02u", (unsigned)(s/3600u),
+                               (unsigned)((s%3600u)/60u));
+        };
+        for (auto &mm : methods) {
+            printf("\n=== MASJID QUBA 51.5651N, 0.0687W | %s | HANAFI AUTO ===\n",
+                   mm.name);
+            printf("%-11s %6s %6s %6s %6s %6s %6s %6s\n",
+                   "date", "fajr", "sun", "istiw", "dhuhr", "asr", "magh", "isha");
+            for (auto &dt : q) {
+                svc_prayer_times_t r;
+                esp_err_t e2 = svc_prayer_engine_calculate(
+                    2026, dt.m, dt.d, 51.56510732559983, -0.0687256000863376, (double)dt.tz,
+                    mm.m, SVC_PRAYER_MADHAB_HANAFI,
+                    SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &r);
+                printf("%-11s", dt.label);
+                if (e2 != ESP_OK || !r.valid) {
+                    printf(" INVALID (e=%d)\n", (int)e2);
+                    continue;
+                }
+                pr(r.fajr_sec); pr(r.sunrise_sec); pr(r.zawal_sec);
+                pr(r.dhuhr_sec); pr(r.asr_sec);
+                pr(r.maghrib_sec); pr(r.isha_sec);
+                printf("\n");
+            }
+        }
+        printf("=== end diagnostic ===\n");
+    }
+
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }
