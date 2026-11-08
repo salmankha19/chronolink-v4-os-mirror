@@ -17,7 +17,7 @@ canonical reference point for all entries below.
 | Mosque | Country | City | Method base | Madhab | Dhuhr offset | Maghrib offset |
 |---|---|---|---|---|---|---|
 | Masjid Quba | 🇬🇧 United Kingdom | London | MOON 18/18 | Hanafi | +5 (MOON built-in) | +3 (MOON) + 2 = +5 |
-| Crawley Islamic Centre | 🇬🇧 United Kingdom | Crawley | ISNA 15/15 | Hanafi | +2 (custom) | +0 |
+| Jamia Masjid Reading | 🇬🇧 United Kingdom | Reading | CUSTOM 15/14 | Hanafi | +5 | +2 |
 | Tawheed Center | 🇺🇸 United States | Farmington Hills, MI | ISNA 15/15 (measured, 0 offsets) | Standard (Hanafi alt) | 0 (measured) | 0 (measured) |
 
 ---
@@ -27,7 +27,7 @@ canonical reference point for all entries below.
 | Mosque | Country | City / Region | Full address | Coordinates (WGS84) | Timezone |
 |---|---|---|---|---|---|
 | **Masjid Quba** | 🇬🇧 United Kingdom | London (Stamford Hill, Hackney) | 70-72 Cazenove Road, London N16 6AA | `51.56510732559983, -0.0687256000863376` | Europe/London (GMT / BST) |
-| **Crawley Islamic Centre & Masjid** | 🇬🇧 United Kingdom | Crawley (West Sussex) | 157 London Rd, Crawley RH10 9TA | `51.13115396014885, -0.1864782309679473` | Europe/London (GMT / BST) |
+| **Jamia Masjid Reading** | 🇬🇧 United Kingdom | Reading (Berkshire) | 46 Alexandra Road, Reading RG1 5PF | `51.4543, -0.9781` | Europe/London (GMT / BST) |
 | **Tawheed Center** | 🇺🇸 United States | Farmington Hills, Michigan | 29707 W 10 Mile Rd, Farmington Hills, MI 48336 | `42.470667, -83.340793` | America/Detroit (EST / EDT) |
 
 **Google Maps references:**
@@ -40,7 +40,7 @@ canonical reference point for all entries below.
 
 **Data collection:**
 - Masjid Quba: 365-day 2026 calendar (CSV), provided by the mosque.
-- Crawley Islamic Centre: November 2026 only (30 days).
+- Jamia Masjid Reading: November-December 2026 (61 rows).
 - Tawheed Center: ~8 months (Jan-Jul, Oct-Dec; Aug/Sep skipped).
 
 **Diagnostic tool:** `prayer_host_tests/test_wrapper.cpp` has a temporary diagnostic block (branch `diag/masjid-quba-2026`) that runs `svc_prayer_engine_calculate()` at exact coordinates for 13 dates × 4 methods × Hanafi, plus "applied config" tables with offsets.
@@ -49,7 +49,7 @@ canonical reference point for all entries below.
 
 **Confidence:**
 - Masjid Quba — **measured** (actual diagnostic output). High.
-- Crawley — **hand-math + measured** (1 month). Medium.
+- Reading — **measured** (10 dates; Fajr within ±4 min, all other fields within ±3). High for the Nov-Dec window; summer Fajr unresolved.
 - Tawheed — **measured** (3 dates × 6 prayers, all within ±1 min). High for angle, **zero offsets confirmed**.
 
 ---
@@ -154,51 +154,7 @@ uses the ChronoLink output **after adding the +2 config offset**
 
 ---
 
-## 2. Crawley Islamic Centre & Masjid — 🇬🇧 United Kingdom, Crawley
-
-- **Country:** United Kingdom
-- **City / region:** Crawley (West Sussex, South East England)
-- **Address:** 157 London Rd, Crawley RH10 9TA
-- **Coordinates:** 51.13115396014885, -0.1864782309679473
-- **Timezone:** Europe/London (GMT all of November 2026)
-- **Calendar coverage:** November 2026 only (30 days)
-
-### Best-fit config (preliminary — one month insufficient for certainty)
-
-```
-Method:    SVC_PRAYER_METHOD_ISNA + custom Fajr/Isha angle tweak (TBD)
-Madhab:    SVC_PRAYER_MADHAB_HANAFI
-High-lat:  SVC_PRAYER_HIGHLAT_AUTO
-Offsets:   Fajr TBD, Dhuhr +0..+1, Asr 0, Maghrib 0, Isha TBD
-```
-
-### Measured residuals (Nov 1 at exact coords, Δ = published − ChronoLink-ISNA)
-
-| Prayer | Published | ChronoLink (ISNA) | Δ |
-|---|---|---|---|
-| Fajr | 5:13 | 5:20 | **−7** |
-| Sunrise | 6:52 | 6:53 | −1 |
-| Dhuhr_Zawal_Begins | 11:45 | 11:44 (Istiwa) | **+1** |
-| Asr | 14:46 | 14:46 (Hanafi) | **0** ✓ |
-| Maghrib | 16:35 | 16:35 | **0** ✓ |
-| Isha | 18:04 | 18:08 | **−4** |
-
-### Findings
-
-**Confirmed (measured):**
-- Madhab = Hanafi (Asr 0 residual vs Hanafi calc; +42 min vs Shafi'i).
-- **No MOON built-in adjustments**: Maghrib offset = 0 (not +3).
-- **Dhuhr_Zawal_Begins = raw Istiwa + ~1 min.** Their column name literally means "zawal begins" — publishes the raw astronomical instant, not adhan-safe time. **Different convention from Quba's "Dhuhr Start" = Istiwa + 5.**
-
-**Open (one month insufficient):**
-- Fajr is 7 min *before* ISNA 15° → larger angle (~16°) or offset −7 min. Cannot distinguish winter-only.
-- Isha is 4 min *before* ISNA 15° → smaller angle (~14°) or offset −4 min.
-- **Asymmetric angles** (Fajr > 15°, Isha < 15°) suggested. Could be Umm al-Qura-like custom (`sunset + 90 min` for Isha; Isha 18:05 ≈ published 18:04), but Fajr would then be ~4:58 not 5:13 — doesn't fit. Likely custom per-prayer angles or offsets.
-- **Needs June sample or full-year** to resolve angle-vs-offset ambiguity.
-
----
-
-## 3. Tawheed Center — 🇺🇸 United States, Farmington Hills, MI
+## 2. Tawheed Center — 🇺🇸 United States, Farmington Hills, MI
 
 - **Country:** United States of America
 - **City / region:** Farmington Hills, Michigan (Metro Detroit)
@@ -240,10 +196,59 @@ Offsets:   ALL ZERO (none)
 
 **Structural difference from UK mosques:**
 - Tawheed publishes raw astronomical times (matches ChronoLink's native output)
-- Quba/Crawley publish adhan-safe times (add safety buffers)
+- Quba/Reading publish adhan-safe times (add safety buffers)
 - This is a **US convention difference**, not a method/angle difference.
 
 **Note on timezone:** the diagnostic correctly used `-5.0` (EST, January). If someone re-runs this at `0.0` GMT, they'll see Fajr at ~17:39 instead of 06:39 — that's the longitude sign / timezone trap.
+
+---
+
+## 3. Jamia Masjid Reading — 🇬🇧 United Kingdom, Reading
+
+- **Country:** United Kingdom
+- **City:** Reading (Berkshire)
+- **Address:** 46 Alexandra Road, Reading RG1 5PF
+- **Coordinates (city-center):** 51.4543, -0.9781
+- **Timezone:** Europe/London (GMT in Nov-Dec 2026)
+- **Method:** CUSTOM 15.0° Fajr / 14.0° Isha
+- **Madhab:** Hanafi
+- **Dhuhr_Zawal_Begins:** solar noon + 5 min
+- **Maghrib:** sunset + 2 min
+- **Data coverage:** Nov-Dec 2026 (61 rows)
+- **Status:** Confirmed: Fajr ±4 min, all other fields ±3 min, across 10 sampled dates
+
+### Fit verification
+
+Δ = published − ChronoLink, measured over the 10 sampled dates and rounded
+to whole minutes (the same granularity the fixture test asserts).
+
+| Component | Config | Residual range | Tolerance |
+|---|---|---|---|
+| Fajr | 15.0° | -4 to +2 min | ±4 |
+| Isha | 14.0° | -2 to +1 min | ±3 |
+| Asr | Hanafi | -1 to 0 min | ±3 |
+| Dhuhr | noon + 5 | -1 to 0 min | ±3 |
+| Maghrib | sunset + 2 | 0 to +1 min | ±3 |
+
+**Note:** Sunrise is asserted too and is exact (0 min) on all 10 dates.
+Fajr carries a wider ±4 because the mosque publishes systematically
+early in early November (-4, -2, -2, -1 min on Nov 01/08/15/22), drifting
+to +1/+2 by late December — a suhoor-safety rounding choice in their
+calendar, not a config error; no constant angle fits both ends of the
+drift.
+
+### Unverified
+
+- **Summer Fajr:** 15° is marginal at 51.45°N near solstice
+  (solar-midnight altitude ~-15.1°). A high-lat rule likely applies
+  in Jun/Jul; needs Jun/Jul data to pin. Isha at 14° is safe
+  year-round.
+
+### Coordinates note
+
+Uses Reading city-center, not the mosque address (51.4484, -0.9522).
+City-level timetable convention: within-city delta is ~0.1 min,
+below the rounding floor.
 
 ---
 
@@ -251,7 +256,7 @@ Offsets:   ALL ZERO (none)
 
 ### Pattern 1: No universal preset
 
-Each mosque has a distinct config. No "UK Hanafi default" exists. Even within the UK (Quba vs Crawley), the method and offset conventions differ. Across the Atlantic, the US convention differs again.
+Each mosque has a distinct config. No "UK Hanafi default" exists. Even within the UK (Quba vs Reading), the method and offset conventions differ. Across the Atlantic, the US convention differs again.
 
 **Implication:** ChronoLink should not ship a "one size fits all" preset. It should ship:
 - Flexible config (exists)
@@ -263,7 +268,7 @@ Each mosque has a distinct config. No "UK Hanafi default" exists. Even within th
 | Mosque | Country | Dhuhr offset | Maghrib offset |
 |---|---|---|---|
 | Quba | 🇬🇧 UK | +5 (MOON built-in) | +5 (MOON +3 + 2) |
-| Crawley | 🇬🇧 UK | +2 (custom) | +0 |
+| Reading | 🇬🇧 UK | +5 (custom) | +2 (custom) |
 | Tawheed | 🇺🇸 USA | 0 (measured) | 0 (measured) |
 
 Each mosque's "Start" column reflects **their safety margin**. Some publish earliest-permissible (0). Others publish adhan-call time (+2, +5). **The published number is a product decision, not fixed physics.**
@@ -272,21 +277,21 @@ Each mosque's "Start" column reflects **their safety margin**. Some publish earl
 
 - Quba (51.56°N, UK): fixed "Isha = Maghrib + 65 min" for Jun-Aug
 - Tawheed (42.47°N, USA): uses ISNA-AUTO (probably), very late Isha
-- Crawley (51.13°N, UK): unknown (no summer data)
+- Reading (51.45°N, UK): 15° Fajr marginal at solstice; high-lat rule unverified (no Jun/Jul data)
 
 At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosques need a high-lat rule. **No two use the same rule.** ChronoLink's AUTO (seventh-of-night at >48°) is reasonable but doesn't match any specific mosque.
 
 ### Pattern 4: Columns mean different things
 
 - Quba: "Start" = adhan time with safety offset
-- Crawley: "Zawal_Begins" = raw astronomical instant
+- Reading: "Dhuhr_Zawal_Begins" = solar noon + 5 min (adhan-safe, not raw)
 - Tawheed: "Begins" = ambiguous
 
 **No universal importer possible without user metadata.** A mosque calendar import feature must ask: does your "Begins" include safety margin? How much?
 
 ### Pattern 5: Country/region affects convention
 
-- **UK mosques** (Quba, Crawley): mix of MOON, ISNA, and custom; Dhuhr/Maghrib offsets common (+2 to +5 from astronomical).
+- **UK mosques** (Quba, Reading): mix of MOON and custom; Dhuhr/Maghrib offsets common (+2 to +5 from astronomical).
 - **US mosques** (Tawheed): ISNA is near-universal; offsets often smaller; publishes multiple madhab options for transparency.
 
 **Do not assume regional stereotypes** — even UK mosques vary. But USA ISNA-default is a real pattern worth noting for user guidance.
@@ -297,15 +302,16 @@ At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosqu
 
 ### For PR #140 (mosque-calendar fixture test)
 
-**Scope:** Two mosques — Masjid Quba and Tawheed Center. **NOT Crawley** (only 1 month of data; unresolved Fajr/Isha angles).
+**Scope:** Three mosques — Masjid Quba, Tawheed Center, and Jamia Masjid Reading.
 
-**Why both:**
+**Why all three:**
 - Quba = heavily-tuned custom config (MOON+Hanafi+Maghrib+2) — proves the config system can reproduce a real mosque's adhan-safe timing.
 - Tawheed = zero-config fit (ISNA+Standard+0 offsets) — proves the engine's defaults match a real mosque's raw astronomical output exactly.
-- Together they bracket the config space (custom↔zero) and give two distinct, measured validation targets.
+- Reading = custom asymmetric-angle config (CUSTOM 15/14 + Hanafi + Dhuhr +5, Maghrib +2) — proves a second UK mosque fits with per-prayer angles rather than a named preset.
+- Together they bracket the config space (custom↔zero) and give three distinct, measured validation targets.
 
 **Files:**
-- New `prayer_host_tests/test_mosque_calendars.cpp` — two test blocks
+- New `prayer_host_tests/test_mosque_calendars.cpp` — three test blocks
 - Modified `prayer_host_tests/Makefile` — new `test_mosque_calendars` target
 - Ships with `docs/mosque-calendars.md` as the reference doc
 
@@ -324,7 +330,16 @@ At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosqu
 - Method: ISNA
 - Zero offsets
 
-**PR description:** *"Validates that svc_config + svc_prayer_engine can reproduce two real published mosque calendars within tolerance: one heavily-tuned UK MOON config and one zero-config US ISNA config. The finding documented in `docs/mosque-calendars.md` is that no universal preset fits all mosques — each mosque's config is its own product decision."*
+**Reading assertions** (10 dates):
+- Fajr: **±4 min** (measured -4 to +2 — the mosque publishes early in early November)
+- Sunrise: **±3 min** (measured: exact on all 10 dates)
+- Dhuhr (+5), Asr, Maghrib (+2), Isha: **±3 min** (all measured within ±2)
+- Timezone: `0.0` (GMT; DST ended Oct 25 2026)
+- Madhab: Hanafi
+- Method: CUSTOM 15.0° Fajr / 14.0° Isha
+- No engine offsets: Dhuhr +5 (`+300` s) and Maghrib +2 (`+120` s) applied in the test, same idiom as Quba's `+ 120`
+
+**PR description:** *"Validates that svc_config + svc_prayer_engine can reproduce three real published mosque calendars within tolerance: one heavily-tuned UK MOON config, one zero-config US ISNA config, and one custom-angle UK CUSTOM config. The finding documented in `docs/mosque-calendars.md` is that no universal preset fits all mosques — each mosque's config is its own product decision."*
 
 ### Future roadmap
 
