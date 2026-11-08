@@ -638,11 +638,22 @@ bool svc_timetable_needs_regen_from_config(void)
     svc_config_t cfg;
     if (svc_config_get(&cfg) != ESP_OK) return false;
 
-    const char *tz = svc_time_get_timezone_posix();
+    char tz_buf[SVC_TIME_TZ_MAX];
+    esp_err_t tz_err = svc_time_get_timezone_posix_copy(tz_buf, sizeof(tz_buf));
+    if (tz_err != ESP_OK) {
+        /* #139: cannot read the current TZ to compare against. Fail-safe:
+           prefer to regenerate (matches take_state_lock()'s pattern). The
+           regen path will also fail on _copy() if the condition persists,
+           and will retry on the next call. Returning false here would skip
+           regen even on transient lock-timeout. */
+        ESP_LOGW(TAG, "needs_regen: TZ copy failed (%s) -- regenerating",
+                 esp_err_to_name(tz_err));
+        return true;
+    }
     char *current = malloc(1024);
     if (!current) return false;
 
-    serialize_calc(&cfg, tz, current);
+    serialize_calc(&cfg, tz_buf, current);
 
     /* cJSON round-trips "%.3f" floats differently than serialize_calc
        writes them: 18.000 (printf) vs 18 (cJSON). A strcmp therefore
@@ -789,7 +800,17 @@ static esp_err_t generate_full_year_locked(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    const char *tz = svc_time_get_timezone_posix();
+    /* #139: copy the current TZ under the service lock. Previous code read
+       a pointer into svc_time's internal buffer, which races with
+       svc_time_set_timezone_posix() (#130 R9e). On copy failure do NOT
+       create the temp file -- surface the error so the caller sees it. */
+    char tz_buf[SVC_TIME_TZ_MAX];
+    esp_err_t tz_err = svc_time_get_timezone_posix_copy(tz_buf, sizeof(tz_buf));
+    if (tz_err != ESP_OK) {
+        ESP_LOGE(TAG, "generate_full_year: TZ copy failed (%s)",
+                 esp_err_to_name(tz_err));
+        return tz_err;
+    }
 
     FILE *f = fopen(SVC_TIMETABLE_PATH_TMP, "w");
     if (!f) {
@@ -799,7 +820,7 @@ static esp_err_t generate_full_year_locked(void)
 
     /* Stream the header (no cJSON tree). */
     char calc_json[1024];
-    serialize_calc(&cfg, tz, calc_json);
+    serialize_calc(&cfg, tz_buf, calc_json);
 
     time_t now = time(NULL);
     struct tm tmv;
