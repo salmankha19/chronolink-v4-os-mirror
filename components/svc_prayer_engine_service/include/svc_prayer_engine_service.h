@@ -84,9 +84,11 @@ typedef struct {
     uint32_t asr_yellow_sec;
 
     /* -----------------------------------------------------------------
-     * Ramadan endpoints (astronomical tier).
-     *   sehri_end_sec = astronomical_fajr_sec (pre adhan-offset)
-     *   iftar_sec     = sunset_sec
+     * Ramadan endpoints (astronomical tier, safe-side rounding).
+     *   sehri_end_sec = floor(astronomical fajr) -- window closes at or
+     *                   before the true boundary (#133 A1)
+     *   iftar_sec     = sunset_sec (ceil, start-of-window -- fires at
+     *                   or after the true sunset)
      * ----------------------------------------------------------------- */
     uint32_t sehri_end_sec;
     uint32_t iftar_sec;

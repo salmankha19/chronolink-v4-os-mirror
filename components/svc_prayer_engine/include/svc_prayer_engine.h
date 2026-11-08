@@ -50,13 +50,24 @@ typedef enum {
 
 /* Output. Most times are seconds since local midnight (0..86399).
    Isha and Islamic midnight may be up to 172799 (i.e. after midnight,
-   same day +1) when they fall after 00:00. As of PR 5.4 every field is
-   rounded UP to a whole minute (a multiple of 60) before publication,
-   with two documented exceptions: asr_yellow_sec may hold UINT32_MAX as
-   a "sun never reached 5 deg" sentinel, and isha_sec / midnight_sec are
-   clamped at 172799 (2 days - 1 s) as a safety net. If any prayer cannot
-   be calculated (extreme latitude), valid is false and numeric fields
-   are 0.
+   same day +1) when they fall after 00:00.
+
+   Rounding policy (#133 A1): start-of-window fields (fajr_sec,
+   dhuhr_sec, sunset_sec, asr_sec, maghrib_sec, isha_sec) round UP to
+   the next whole minute — the fired moment is never before the
+   astronomical instant, which is safe. End-of-window fields
+   (sunrise_sec, asr_yellow_sec, zawal_sec, midnight_sec, and the
+   derived sehri_end_sec) round DOWN to the previous whole minute — the
+   window closes at or before the astronomical boundary, which is safe.
+   Getting this backwards fires adhan one minute late (safe) but
+   displays an end-of-window boundary one minute late (unsafe: user
+   could act past the true boundary).
+
+   Two documented exceptions: asr_yellow_sec may hold UINT32_MAX as a
+   "sun never reached 5 deg" sentinel, and isha_sec / midnight_sec are
+   clamped at 172799 (2 days - 1 s) as a safety net. If any prayer
+   cannot be calculated (extreme latitude), valid is false and numeric
+   fields are 0.
 
    asr_yellow_sec uses UINT32_MAX as a sentinel for "sun does not reach
    5 degrees above the horizon today" (high-latitude winter), distinct
@@ -74,6 +85,11 @@ typedef struct {
     uint32_t maghrib_sec;
     uint32_t isha_sec;
     uint32_t midnight_sec;
+    /* #133 (A1): floor of the same astronomical fajr that fajr_sec
+       ceils. Distinct value so the service can pass fajr_sec (ceil) to
+       the adhan tier and sehri_end_sec (floor) to the sehri-end
+       display/consumer, which requires the safe-side rounding. */
+    uint32_t sehri_end_sec;
 } svc_prayer_times_t;
 
 /* Day-rollover contract.

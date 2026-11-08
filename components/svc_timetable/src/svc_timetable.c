@@ -714,13 +714,13 @@ static cJSON *build_day_entry(const svc_config_t *cfg,
     cJSON_AddNumberToObject(o, "isha",     adhan[SVC_CONFIG_PRAYER_ISHA]);
     cJSON_AddNumberToObject(o, "midnight",     raw.midnight_sec);
     uint32_t zw = (uint32_t)cfg->zawal_buffer_min * 60u;
-    cJSON_AddNumberToObject(o, "zawal_start",  raw.dhuhr_sec > zw ? raw.dhuhr_sec - zw : 0u);
+    cJSON_AddNumberToObject(o, "zawal_start",  raw.zawal_sec > zw ? raw.zawal_sec - zw : 0u);
     if (raw.asr_yellow_sec == UINT32_MAX) {
         cJSON_AddNullToObject(o, "asr_yellow");
     } else {
         cJSON_AddNumberToObject(o, "asr_yellow", raw.asr_yellow_sec);
     }
-    cJSON_AddNumberToObject(o, "sehri_end", raw.fajr_sec);
+    cJSON_AddNumberToObject(o, "sehri_end", raw.sehri_end_sec);
     cJSON_AddNumberToObject(o, "iftar",     raw.sunset_sec);
 
     cJSON *ja = cJSON_AddArrayToObject(o, "jamat");

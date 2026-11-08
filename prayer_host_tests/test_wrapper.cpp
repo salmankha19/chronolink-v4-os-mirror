@@ -15,6 +15,41 @@ int main() {
     CHECK(t.isha_sec < 172800, "isha_sec within 0..172799");
     CHECK(t.midnight_sec >= t.isha_sec, "midnight not before isha");
     CHECK(t.fajr_sec < t.sunrise_sec, "fajr before sunrise");
+
+    /* #133 (A1): the SHARED astronomical instant gets two roundings --
+       fajr_sec ceils (start-of-window, adhan must not fire early) and
+       sehri_end_sec floors (end-of-window, user must not fast past the
+       true boundary). Both come from the same raw value, so they
+       bracket it with 0..60 s between them. */
+    CHECK(t.sehri_end_sec <= t.fajr_sec,
+          "sehri_end_sec (floor) <= fajr_sec (ceil) -- same instant, opposite roundings");
+    CHECK((t.fajr_sec - t.sehri_end_sec) <= 60,
+          "sehri_end_sec and fajr_sec bracket the same instant within 60 s");
+
+    /* #133 (A1): every minute-rounded field must land on a 60-s boundary.
+       Applies to both start-of-window (ceil) and end-of-window (floor)
+       fields. asr_yellow_sec is guarded because it may hold the
+       UINT32_MAX sentinel at high-latitude winter. */
+    CHECK(t.fajr_sec % 60 == 0,     "fajr_sec minute-aligned");
+    CHECK(t.sunrise_sec % 60 == 0,  "sunrise_sec minute-aligned");
+    CHECK(t.dhuhr_sec % 60 == 0,    "dhuhr_sec minute-aligned");
+    CHECK(t.asr_sec % 60 == 0,      "asr_sec minute-aligned");
+    CHECK(t.maghrib_sec % 60 == 0,  "maghrib_sec minute-aligned");
+    CHECK(t.isha_sec % 60 == 0,     "isha_sec minute-aligned");
+    CHECK(t.midnight_sec % 60 == 0, "midnight_sec minute-aligned");
+    CHECK(t.zawal_sec % 60 == 0,    "zawal_sec minute-aligned");
+    CHECK(t.sehri_end_sec % 60 == 0, "sehri_end_sec minute-aligned");
+    if (t.asr_yellow_sec != UINT32_MAX) {
+        CHECK(t.asr_yellow_sec % 60 == 0,
+              "asr_yellow_sec minute-aligned when not the UINT32_MAX sentinel");
+    }
+
+    /* #133 (A3): zawal_sec is the astronomical zawal (sun at/just past
+       zenith). dhuhr_sec (start-of-window) is at or after it. If zawal
+       were computed from dhuhr -- the A3 bug -- this ordering would be
+       inverted or equal-though-later for a daylight location. */
+    CHECK(t.zawal_sec <= t.dhuhr_sec,
+          "zawal_sec (astronomical zawal) <= dhuhr_sec (start-of-window)");
     CHECK(llabs((long long)t.fajr_sec + 86400 - (long long)t.isha_sec) > 1800, "Fajr and Isha are at least 30 min apart");
     // Hanafi Asr later than standard
     svc_prayer_times_t h; svc_prayer_engine_calculate(2026,6,21,52.7075,-2.7527,1.0,SVC_PRAYER_METHOD_MWL,SVC_PRAYER_MADHAB_HANAFI,SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &h);

@@ -324,6 +324,29 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     err = adhan_calculator_run(&cfg, date_today, tz_offset_min, &adhan_today);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "calculate failed: %s", esp_err_to_name(err));
+        /* #133 (A4): when the engine cannot compute for the CURRENT
+           day (polar day/night -- valid inputs, no astronomical
+           boundary), a previously-good cache must not survive forever.
+           Without this invalidation the last successful calculation
+           keeps being served with no error signal -- a user who just
+           set a location the engine cannot handle sees stale times
+           from a previous location/date. Invalidate so get_times()
+           returns ESP_ERR_INVALID_STATE and callers can render
+           "--:--" (or whatever fallback policy is chosen).
+
+           Scope: only invalidate on the deterministic engine failure
+           (ESP_ERR_INVALID_STATE). Other failure paths in this
+           function (time not yet synced, config read timeout) are
+           transient and self-heal within one 60s prayer_task tick;
+           wiping the cache on those would blank a previously-good
+           day during a routine NTP outage. */
+        if (err == ESP_ERR_INVALID_STATE) {
+            if (lock_take()) {
+                s_cache_valid = false;
+                lock_give();
+                ESP_LOGW(TAG, "engine INVALID_STATE -- cache invalidated");
+            }
+        }
         return err;
     }
 
@@ -366,11 +389,25 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
     result.midnight_sec   = midnight_used;
 
     uint32_t zawal_off = (uint32_t)cfg.zawal_buffer_min * 60U;
-    uint32_t fresh_zawal = (adhan_today.raw.dhuhr_sec > zawal_off)
-                         ? (adhan_today.raw.dhuhr_sec - zawal_off) : 0U;
+    /* #133 (A3): start from the astronomical zawal instant, not from
+       dhuhr. raw.zawal_sec is the moment the sun begins its descent
+       (the actual start of the zawal window); dhuhr is a later
+       derived instant. Using dhuhr_sec pushed zawal_start ~5-10 min
+       late depending on location, which is the window's legal
+       boundary -- users must be told to stop praying BEFORE it, so
+       being late is the unsafe direction. */
+    uint32_t fresh_zawal = (adhan_today.raw.zawal_sec > zawal_off)
+                         ? (adhan_today.raw.zawal_sec - zawal_off) : 0U;
     result.zawal_start_sec = merge_adhan(tt_today.has_zawal_start, tt_today.zawal_start, fresh_zawal);
 
-    result.sehri_end_sec = merge_adhan(tt_today.has_sehri_end, tt_today.sehri_end, adhan_today.raw.fajr_sec);
+    /* #133 (A1): fall back to the FLOORED engine field, not fajr_sec.
+       raw.fajr_sec is ceiled (start-of-window, safe direction for adhan);
+       raw.sehri_end_sec is the floor of the same astronomical instant
+       (end-of-window, safe direction for sehri). Using the ceiled value
+       here meant sehri ended up to 59 s AFTER astronomical fajr -- the
+       user could legally eat past the true boundary. */
+    result.sehri_end_sec = merge_adhan(tt_today.has_sehri_end, tt_today.sehri_end,
+                                       adhan_today.raw.sehri_end_sec);
     result.iftar_sec     = merge_adhan(tt_today.has_iftar,     tt_today.iftar,     adhan_today.raw.sunset_sec);
 
     /* Source tag. */
