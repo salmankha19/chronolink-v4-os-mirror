@@ -15,26 +15,41 @@
 
 extern "C" {
 
-static uint32_t hours_to_sec(double h)
+/* Shared rounding helper. `round_up = true` (ceil) is used for
+   start-of-window boundaries -- the fired moment must never be before
+   the astronomical instant. `round_up = false` (floor) is used for
+   end-of-window boundaries -- the window must close at or before the
+   astronomical boundary. See svc_prayer_engine.h for the contract. */
+static uint32_t hours_to_sec_common(double h, bool round_up)
 {
     // Use isnan() not isfinite(): on this picolibc build, isfinite(NaN)
     // returns true, so !isfinite() would miss NaN and hit the UB cast
     // (uint32_t)NaN below. isnan() is proven working (PR 16).
     if (isnan(h)) return 0;
-    // Round UP to the next whole minute (ceiling). A published prayer
-    // time must never be earlier than the astronomical instant; ceiling
-    // guarantees that. Convert hours -> minutes, ceil, then back to
-    // seconds. Adhan offsets and jamat calculations in
-    // svc_prayer_engine_service operate on the resulting minute-aligned
-    // values.
-    //
+
     // Do not wrap to 24h. Isha and Midnight can exceed 86400.
     // Clamp at 2 days (172799) just as a safety net.
     double m = h * 60.0;
-    double s = ceil(m) * 60.0;
+    double s = (round_up ? ceil(m) : floor(m)) * 60.0;
     if (s < 0.0) s = 0.0;
     if (s > 172799.0) s = 172799.0;
     return (uint32_t)s;
+}
+
+/* Start-of-window boundaries (fajr, dhuhr, sunset, asr, maghrib, isha).
+   Rounds UP so the fired moment is never before the astronomical
+   instant. */
+static uint32_t hours_to_sec_start(double h)
+{
+    return hours_to_sec_common(h, true);
+}
+
+/* End-of-window boundaries (sunrise, asr_yellow, zawal, midnight,
+   sehri_end). Rounds DOWN so the window closes at or before the
+   astronomical boundary. */
+static uint32_t hours_to_sec_end(double h)
+{
+    return hours_to_sec_common(h, false);
 }
 
 /* Days in the given month, accounting for leap years.
@@ -130,22 +145,27 @@ esp_err_t svc_prayer_engine_calculate(
         return ESP_ERR_INVALID_STATE;
     }
 
-    out->fajr_sec     = hours_to_sec(t.fajr);
-    out->sunrise_sec  = hours_to_sec(t.sunrise);
-    out->dhuhr_sec    = hours_to_sec(t.dhuhr);
+    out->fajr_sec     = hours_to_sec_start(t.fajr);
+    out->sunrise_sec  = hours_to_sec_end(t.sunrise);
+    out->dhuhr_sec    = hours_to_sec_start(t.dhuhr);
     /* On high-latitude days where the sun never reaches 5 degrees above
        the horizon, asr_yellowing is NaN. Distinguish that from a genuine
        00:00:00 using UINT32_MAX as the sentinel. Use isnan() not
-       isfinite(): see hours_to_sec() comment above. */
+       isfinite(): see hours_to_sec_common() comment above. */
     out->asr_yellow_sec = isnan(t.asr_yellowing)
                         ? UINT32_MAX
-                        : hours_to_sec(t.asr_yellowing);
-    out->sunset_sec      = hours_to_sec(t.sunset);
-    out->zawal_sec    = hours_to_sec(t.zawal);
-    out->asr_sec      = hours_to_sec(t.asr);
-    out->maghrib_sec  = hours_to_sec(t.maghrib);
-    out->isha_sec     = hours_to_sec(t.isha);
-    out->midnight_sec = hours_to_sec(t.midnight);
+                        : hours_to_sec_end(t.asr_yellowing);
+    out->sunset_sec      = hours_to_sec_start(t.sunset);
+    out->zawal_sec    = hours_to_sec_end(t.zawal);
+    out->asr_sec      = hours_to_sec_start(t.asr);
+    out->maghrib_sec  = hours_to_sec_start(t.maghrib);
+    out->isha_sec     = hours_to_sec_start(t.isha);
+    out->midnight_sec = hours_to_sec_end(t.midnight);
+    /* #133 (A1): floor of the same astronomical fajr that fajr_sec ceils.
+       sehri_end must close at or before astronomical fajr; fajr_sec
+       (adhan) must not fire before it. Distinct values so the service
+       can pass the safe one to each consumer. */
+    out->sehri_end_sec = hours_to_sec_end(t.fajr);
     out->valid        = true;
 
     return ESP_OK;
