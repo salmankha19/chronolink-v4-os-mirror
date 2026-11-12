@@ -62,7 +62,8 @@ public:
         const Coordinates& coords,
         double timezone_offset,
         const Method& method,
-        HighLatitudeRule highlat_rule = HighLatitudeRule::AUTO
+        HighLatitudeRule highlat_rule = HighLatitudeRule::AUTO,
+        bool is_ramadan = false
     );
 
 private:

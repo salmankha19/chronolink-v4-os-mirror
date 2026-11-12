@@ -33,9 +33,15 @@ $(OUT)/merge_logic.o: $(JAMAT)/src/merge_logic.c $(JAMAT)/src/merge_logic.h | $(
 $(OUT)/test_merge_logic: test_merge_logic.cpp $(OUT)/merge_logic.o | $(OUT);    $(CXX) $(CXXFLAGS) -I$(JAMAT)/src $^ -o $@
 $(OUT)/test_moonsighting: test_moonsighting.cpp $(LIBSRC) | $(OUT); $(CXX) $(CXXFLAGS) $^ -o $@
 $(OUT)/test_mosque_calendars: test_mosque_calendars.cpp $(COMP)/src/svc_prayer_engine.cpp $(LIBSRC) | $(OUT); $(CXX) $(CXXFLAGS) $^ -o $@
+$(OUT)/hijri_calendar.o: $(JAMAT)/../svc_config/src/hijri_calendar.c $(JAMAT)/../svc_config/src/hijri_calendar.h | $(OUT); $(CC) -std=gnu11 -O2 -Wall -Wextra -I$(JAMAT)/../svc_config/src -c $< -o $@
+$(OUT)/test_hijri_calendar: test_hijri_calendar.cpp $(OUT)/hijri_calendar.o | $(OUT); $(CXX) $(CXXFLAGS) -I$(JAMAT)/../svc_config/src $^ -o $@
+$(OUT)/ramadan_window_validator.o: $(JAMAT)/../svc_config/src/ramadan_window_validator.c $(JAMAT)/../svc_config/src/ramadan_window_validator.h | $(OUT); $(CC) -std=gnu11 -O2 -Wall -Wextra -I$(JAMAT)/../svc_config/src -c $< -o $@
+$(OUT)/test_ramadan_window_validator: test_ramadan_window_validator.cpp $(OUT)/ramadan_window_validator.o | $(OUT); $(CXX) $(CXXFLAGS) -I$(JAMAT)/../svc_config/src $^ -o $@
+$(OUT)/svc_config_ramadan_resolution.o: $(JAMAT)/../svc_config/src/svc_config_ramadan_resolution.c $(JAMAT)/../svc_config/include/svc_config.h $(JAMAT)/../svc_config/src/hijri_calendar.h | $(OUT); $(CC) -std=gnu11 -O2 -Wall -Wextra -I$(JAMAT)/../svc_config/include -I$(JAMAT)/../svc_config/src -Istubs -c $< -o $@
+$(OUT)/test_config_ramadan_resolution: test_config_ramadan_resolution.cpp $(OUT)/svc_config_ramadan_resolution.o $(OUT)/hijri_calendar.o | $(OUT); $(CXX) $(CXXFLAGS) -I$(JAMAT)/../svc_config/include $^ -o $@
 
 golden:; python3 gen_golden.py > golden.csv
-test: $(OUT)/test_golden $(OUT)/test_wrapper $(OUT)/test_scheduler $(OUT)/test_jamat_differential $(OUT)/test_merge_logic $(OUT)/test_moonsighting $(OUT)/test_mosque_calendars
+test: $(OUT)/test_golden $(OUT)/test_wrapper $(OUT)/test_scheduler $(OUT)/test_jamat_differential $(OUT)/test_merge_logic $(OUT)/test_moonsighting $(OUT)/test_mosque_calendars $(OUT)/test_hijri_calendar $(OUT)/test_ramadan_window_validator $(OUT)/test_config_ramadan_resolution
 	@echo "=== golden (vs PyEphem, tol 30 s) ===";  $(OUT)/test_golden golden.csv 30
 	@echo; echo "=== C wrapper ==="; $(OUT)/test_wrapper
 	@echo; echo "=== scheduler logic ==="; $(OUT)/test_scheduler
@@ -43,6 +49,9 @@ test: $(OUT)/test_golden $(OUT)/test_wrapper $(OUT)/test_scheduler $(OUT)/test_j
 	@echo; echo "=== merge logic (jamat resolve) ==="; $(OUT)/test_merge_logic
 	@echo; echo "=== mosque calendars (fixtures) ==="; $(OUT)/test_mosque_calendars
 	@echo; echo "=== Moonsighting vs adhan-js (tol 90 s) ==="; $(OUT)/test_moonsighting moonsighting_adhan.csv 90
+	@echo; echo "=== hijri calendar (UAQ Ramadan windows) ==="; $(OUT)/test_hijri_calendar
+	@echo; echo "=== ramadan window validator ==="; $(OUT)/test_ramadan_window_validator
+	@echo; echo "=== svc_config_is_ramadan (resolution) ==="; $(OUT)/test_config_ramadan_resolution
 
 test-highlat: $(OUT)/test_invariants
 	@$(OUT)/test_invariants

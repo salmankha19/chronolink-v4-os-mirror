@@ -36,11 +36,20 @@ esp_err_t adhan_calculator_run(const svc_config_t *cfg,
     svc_prayer_madhab_t  madhab  = (svc_prayer_madhab_t)cfg->madhab;
     svc_prayer_highlat_t highlat = (svc_prayer_highlat_t)cfg->high_lat_rule;
 
+    // Per-date Ramadan resolution. User override (from svc_config's
+    // ramadan_windows[]) takes precedence over the confirmed KSA table
+    // for any year it touches; otherwise the table is consulted; otherwise
+    // false. See svc_config.h for the precedence contract. Passing this
+    // flag through to the engine enables the +120 Isha interval override
+    // for UMM_AL_QURA on Ramadan dates, and is a no-op for every other
+    // method (they have isha_interval_ramadan == 0 in Method.hpp).
+    bool is_ramadan = svc_config_is_ramadan(cfg, year, month, day);
     esp_err_t err = svc_prayer_engine_calculate(
         year, month, day,
         cfg->latitude, cfg->longitude, tz_off,
         method, madhab, highlat,
         cfg->custom_fajr_angle, cfg->custom_isha_angle,
+        is_ramadan,
         &out->raw);
     if (err != ESP_OK) return err;
 

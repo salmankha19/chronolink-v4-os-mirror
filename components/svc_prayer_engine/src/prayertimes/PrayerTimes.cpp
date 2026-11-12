@@ -233,10 +233,21 @@ PrayerTimes PrayerTimesCalculator::calculate(
     const Coordinates& coords,
     double timezone_offset,
     const Method& method,
-    HighLatitudeRule highlat_rule
+    HighLatitudeRule highlat_rule,
+    bool is_ramadan
 ) {
     PrayerTimes result{};
     result.valid = false;
+
+    /* Ramadan override. If this method carries a Ramadan-specific interval
+       (currently only UMM_AL_QURA, 120 min vs the base 90) AND the caller
+       flagged this date as Ramadan, use that interval for this call. The
+       three Isha-related code paths below all read effective_isha_interval
+       instead of method.isha_interval so they cannot disagree. */
+    const int effective_isha_interval =
+        (is_ramadan && method.isha_interval_ramadan > 0)
+            ? method.isha_interval_ramadan
+            : method.isha_interval;
 
     double jd = julian_date(date.year, date.month, date.day);
     /* Iterated solar transit: re-samples the equation of time at the
@@ -269,8 +280,8 @@ PrayerTimes PrayerTimesCalculator::calculate(
     }
 
     double isha;
-    if (method.isha_interval > 0) {
-        isha = maghrib + method.isha_interval / 60.0;
+    if (effective_isha_interval > 0) {
+        isha = maghrib + effective_isha_interval / 60.0;
     } else {
         isha = sun_angle_time_iterated(jd, mid, coords.latitude, coords.longitude,
                                        method.isha_angle, 1.0);
@@ -323,7 +334,7 @@ PrayerTimes PrayerTimesCalculator::calculate(
     if (fajr_portion > 0) {
         if (isnan(fajr) || (sunrise - fajr) > fajr_portion) fajr = sunrise - fajr_portion;
     }
-    if (isha_portion > 0 && method.isha_interval == 0) {
+    if (isha_portion > 0 && effective_isha_interval == 0) {
         // Measured from Maghrib, not sunset: for methods with a Maghrib angle
         // (Jafaria, 4 deg) Maghrib is later than sunset, and a sunset-based
         // limit could put Isha before Maghrib at high latitude.
@@ -344,7 +355,7 @@ PrayerTimes PrayerTimesCalculator::calculate(
         // southern hemisphere behaves symmetrically.)
         if (fabs(coords.latitude) >= 55.0) {
             fajr = sunrise - night / 7.0;
-            if (method.isha_interval == 0) isha = sunset + night / 7.0;
+            if (effective_isha_interval == 0) isha = sunset + night / 7.0;
         }
 
         int dyy = days_since_solstice(date.year, date.month, date.day, coords.latitude);

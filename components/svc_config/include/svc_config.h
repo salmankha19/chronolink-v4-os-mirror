@@ -42,6 +42,12 @@ extern "C" {
 /* Capacity of location_name including the terminating NUL. */
 #define SVC_CONFIG_NAME_MAX 64
 
+// Maximum number of user Ramadan-window overrides. One per Hijri year is
+// enough for any realistic lookahead; eight covers more than a decade of
+// future planning and keeps svc_config_t well within the NVS blob budget
+// (8 x 8 bytes = 64 bytes plus a count byte).
+#define SVC_CONFIG_RAMADAN_MAX 8
+
 /* Calculation method IDs. Values 0..7 match svc_prayer_method_t
    exactly. Moonsighting Committee (6) applies seasonal twilight bounds.
    Custom (7) uses user-provided Fajr/Isha angles. */
@@ -111,6 +117,39 @@ typedef struct {
     uint8_t winter_start_day;
 } season_cfg_t;
 
+// A single user-supplied Ramadan window: inclusive Gregorian date range
+// (start_date .. end_date). end_year is explicit so a same-year window and
+// a single-year-cross window (end_year == start_year + 1) are the only two
+// accepted shapes, and validation is a plain date comparison rather than an
+// end_month < start_month heuristic.
+//
+// Parallel to uaq_ramadan_window_t (now in components/svc_config/src/
+// hijri_calendar.h) but NOT the same shape, and not reused on purpose:
+//
+//   - uaq_ramadan_window_t carries only start_year, and derives end_year
+//     implicitly (end_year = start_year + 1 iff end_month < start_month).
+//     That keeps the confirmed KSA table rows compact: every entry needs
+//     only one year, and a cross-year window is expressed by month order.
+//
+//   - svc_config_ramadan_window_t carries explicit start_year AND
+//     end_year, because the validator rejects multi-year windows with a
+//     single comparison (end_year > start_year + 1). Deriving end_year
+//     from a month-wrap heuristic would let a user persist a decade-long
+//     window that silently suppresses non-Ramadan Isha year-round.
+//
+// Collapsing the two would force one of those to lose its natural shape:
+// either every KSA table row must duplicate a year, or the multi-year
+// guard disappears. The 10-byte cost of two distinct types is cheaper
+// than either.
+typedef struct {
+    uint16_t start_year;
+    uint8_t  start_month;
+    uint8_t  start_day;
+    uint16_t end_year;
+    uint8_t  end_month;
+    uint8_t  end_day;
+} svc_config_ramadan_window_t;
+
 typedef enum {
     SVC_CONFIG_PRESET_UK                = 0,
     SVC_CONFIG_PRESET_PAKISTAN          = 1,
@@ -153,6 +192,18 @@ typedef struct {
     uint16_t zawal_buffer_min;
     bool     auto_brightness;
     bool     night_lamp_enable;
+
+    // User override list for Ramadan windows. Entries 0..count-1 are live;
+    // entries beyond count are ignored (their content is unspecified).
+    // count == 0 means "no overrides" -- the service falls back to the
+    // confirmed KSA table in hijri_calendar.c.
+    //
+    // Placed at the end of the struct so the offsets of every existing field
+    // are unchanged: the four fields above keep their current positions, so
+    // any code that zero-initialises svc_config_t and sets specific fields
+    // (all existing callers) sees no behavioural change.
+    svc_config_ramadan_window_t ramadan_windows[SVC_CONFIG_RAMADAN_MAX];
+    uint8_t  ramadan_window_count;
 } svc_config_t;
 
 /* --------------------------------------------------------------------------
@@ -175,6 +226,28 @@ esp_err_t svc_config_start(void);
    ESP_ERR_INVALID_STATE if svc_config_start() has not run, or
    ESP_ERR_TIMEOUT if the service lock could not be taken within 1 s. */
 esp_err_t svc_config_get(svc_config_t *out);
+
+// True iff (year, month, day) is inside a Ramadan window for cfg.
+//
+// Resolution order (user override REPLACES the confirmed table for any
+// year that has at least one override entry):
+//
+//   1. If any cfg->ramadan_windows[0..count-1] entry has start_year ==
+//      year OR end_year == year, then the user owns that year: return
+//      true iff (year, month, day) falls inside some override window,
+//      and NEVER fall through to the confirmed table for that year.
+//      A user who narrows the window (e.g. Feb 17 - Mar 18 vs the
+//      table's Feb 18 - Mar 19) gets exactly their narrower window.
+//
+//   2. Else, no override touches year: use the confirmed KSA table via
+//      uaq_is_ramadan(). If the table has no entry for year, returns
+//      false (safe non-Ramadan, +90 min Isha for UMM_AL_QURA).
+//
+// NULL cfg returns false. No allocation, no lock, no NVS access -- the
+// caller passes a snapshot from svc_config_get(). Safe to call from the
+// prayer service worker, from svc_timetable regen, or anywhere else that
+// already has a cfg snapshot.
+bool svc_config_is_ramadan(const svc_config_t *cfg, int year, int month, int day);
 
 esp_err_t svc_config_set_location_name(const char *name);
 esp_err_t svc_config_set_location(double lat, double lon);
@@ -229,6 +302,27 @@ esp_err_t svc_config_set_brightness_mode(uint8_t mode);
 esp_err_t svc_config_set_high_lat_rule(uint8_t rule);
 esp_err_t svc_config_set_adhan_offset(svc_config_prayer_t p, uint16_t minutes);
 esp_err_t svc_config_set_zawal_buffer(uint16_t minutes);
+
+// Replace the full user override list for Ramadan windows.
+//
+// Overrides take precedence over the confirmed KSA table
+// (uaq_ramadan_confirmed_window) when the prayer service resolves
+// is_ramadan for a date. Entries beyond count are ignored; count == 0
+// clears all overrides. To clear, call with (NULL, 0).
+//
+// Validation: count must be <= SVC_CONFIG_RAMADAN_MAX. For count > 0,
+// windows must be non-NULL and every entry must pass
+// svc_config_ramadan_window_is_valid(). On invalid input the call returns
+// ESP_ERR_INVALID_ARG and leaves the persisted value unchanged.
+//
+// On success the RAM cache is updated in all cases and the value is
+// persisted to NVS when NVS is available. A failed persist returns
+// ESP_ERR_NVS_NOT_INITIALIZED (RAM cache still updated), matching every
+// other setter in this file.
+esp_err_t svc_config_set_ramadan_windows(
+    const svc_config_ramadan_window_t *windows,
+    uint8_t count);
+
 esp_err_t svc_config_set_auto_brightness(bool enabled);
 esp_err_t svc_config_set_night_lamp(bool enabled);
 

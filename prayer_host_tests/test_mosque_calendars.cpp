@@ -62,7 +62,7 @@ static void test_quba() {
         esp_err_t e = svc_prayer_engine_calculate(
             2026, r.m, r.d, 51.56510732559983, -0.0687256000863376, (double)r.tz,
             SVC_PRAYER_METHOD_MOONSIGHTING, SVC_PRAYER_MADHAB_HANAFI,
-            SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &t);
+            SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, false, &t);
         if (e != ESP_OK || !t.valid) {
             printf("FAIL: %s: INVALID (e=%d)\n", r.label, (int)e);
             bad++;
@@ -102,7 +102,7 @@ static void test_tawheed() {
         esp_err_t e = svc_prayer_engine_calculate(
             2026, r.m, r.d, 42.470667, -83.340793, -5.0,
             SVC_PRAYER_METHOD_ISNA, SVC_PRAYER_MADHAB_STANDARD,
-            SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, &t);
+            SVC_PRAYER_HIGHLAT_AUTO, 0.0, 0.0, false, &t);
         if (e != ESP_OK || !t.valid) {
             printf("FAIL: %s: INVALID (e=%d)\n", r.label, (int)e);
             bad++;
@@ -167,7 +167,7 @@ static void test_reading() {
         esp_err_t e = svc_prayer_engine_calculate(
             r.y, r.mo, r.d, 51.4543, -0.9781, 0.0,
             SVC_PRAYER_METHOD_CUSTOM, SVC_PRAYER_MADHAB_HANAFI,
-            SVC_PRAYER_HIGHLAT_AUTO, 15.0, 14.0, &t);
+            SVC_PRAYER_HIGHLAT_AUTO, 15.0, 14.0, false, &t);
 
         char label[24];
         snprintf(label, sizeof label, "Reading %s %02d", mon[r.mo], r.d);

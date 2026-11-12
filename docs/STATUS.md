@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-05 at commit `HEAD` (PR: timetable deviation policy, PR #125). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-11 at commit `HEAD` (PR: Ramadan +120 UAQ Isha override, feat/umalqura-ramadan-120). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -88,6 +88,19 @@ not.** Where another doc mentions a gap, this file has the detail.
   if jamat ≥
   next prayer. Atomic write via `.tmp` + rename. Config-change warning:
   server returns 409 for partial user file unless client confirms.
+
+- **`svc_timetable` schema v2 → v3 (feat/umalqura-ramadan-120):**
+  `SVC_TIMETABLE_SCHEMA_VER` bumped from 2 to 3 to mark the post-Ramadan
+  timetable shape. v2 user uploads on a v3 device load silently with
+  pre-Ramadan (+90) Isha on Ramadan dates, so `needs_regen_from_config()`
+  emits a one-shot `ESP_LOGW` when a v2 file is first loaded — the
+  operator knows to re-export. User files are still **never** auto-
+  regenerated (mosque authority). Firmware-generated v2 files were
+  already regenerating on `cJSON_Compare` mismatch since Message 5d added
+  `"rw":[...]` to the `calculation` block; the version bump is not what
+  drives firmware regen, only the user-file warn path. Version history is
+  documented in `prayer-times-model.md` §5.5.
+
 - **`svc_timetable` hardening (PR 4):** internal state mutex (all public
   accessors task-safe), writer mutex shared by upload / regenerate / background
   regen, split temp files (`timetable_upload.tmp` / `timetable_regen.tmp`),
@@ -95,6 +108,39 @@ not.** Where another doc mentions a gap, this file has the detail.
   rename. Rejected uploads leave the live timetable untouched and return 400;
   a busy writer returns 503.
 - **`svc_prayer_engine_service` (PR 15, extended PR 5.1a):** runtime service that reads `svc_config` (location, method, madhab, high-latitude rule, adhan offsets, zawal buffer) and `svc_time` (local date), calls `svc_prayer_engine_calculate()`, applies per-prayer adhan offsets (`adhan_offset_min[]`), computes zawal start (`dhuhr - zawal_buffer_min`), and publishes `EVENT_PRAYER_TIMES_UPDATED`. **PR 5.1a additions:** publishes a three-tier snapshot — `astronomical_*` (astronomical calculation + timezone, no user offsets), `*_sec` (adhan = astronomical + `adhan_offset_min[]`), `jamat_sec[]` (seasonal jamat, with per-prayer rounding) — plus auxiliary times (`sunrise_sec`, `sunset_sec`, `midnight_sec`, `zawal_start_sec`, `asr_yellow_sec`), Ramadan endpoints (`sehri_end_sec`, `iftar_sec`), and `jamat_tomorrow_sec[]` for the "tomorrow changes" notification. Consumers read finished values; no offset math in the UI. Public API: `svc_prayer_engine_service_start()`, `_recalculate()`, `_get_times()`. The event is a signal only (payload truncated to 32 bytes); consumers must call `_get_times()` for the full snapshot. Recalculation is triggered by `EVENT_TIME_UPDATE` (successful NTP sync) and by `EVENT_TIME_DATE_CHANGED` (local date or UTC offset change). (PR 17) Rolls over at midnight and at DST transitions: `svc_time` publishes `EVENT_TIME_DATE_CHANGED` when the local calendar date or the effective UTC offset changes; the service subscribes, recalculates, and self-heals within 60 s if the event is dropped. Timezone offset is taken at **noon of the target date** (not at call time), so a DST-transition day's prayer times all use the same offset. **(PR 5.8)** `recalculate()` split into three files with no behavior change: `src/adhan_calculator.{c,h}` (engine call + `adhan_offset_min[]`; returns pre-merge `raw` plus offset-applied `adhan_sec[5]`) and `src/jamat_calculator.{c,h}` (pure seasonal jamat arithmetic — season, anchor, offset, rounding). `merge_adhan()`, `merge_jamat()` and `TT_TRIPWIRE` stay in the service because they consume parsed timetable input and log. Jamat anchors are fed the **effective** (post-merge, post-tripwire) adhan tier via `adhan_result_t`; passing raw engine output would have changed Fajr/Isha jamat for uploaded mosque timetables that override sunrise/midnight. Verified byte-identical on hardware (`j_fajr=21900 j_dhuhr=46800 j_asr=51900 j_maghrib=60240 j_isha=66000`, `jamat change tomorrow` lines unchanged) and by a 305,489-case host differential test against the pre-split inline algorithm. Commits `e0d0571` (adhan) and `98c5fc0` (jamat). Design intent for the whole prayer-times model is in [prayer-times-model.md](prayer-times-model.md) §8.1.
+
+- **Ramadan +120 UAQ Isha override (feat/umalqura-ramadan-120):**
+  Umm al-Qura Isha is +120 min (not the year-round +90) on Ramadan dates.
+  Four pieces ship together:
+  (1) `PrayerTimesCalculator::calculate()` and `svc_prayer_engine_calculate()`
+  gained a `bool is_ramadan` parameter. The C++ overload
+  `PrayerTimesCalculator::calculate()` defaults the flag to `false`; the
+  C wrapper `svc_prayer_engine_calculate()` requires it explicitly (every
+  in-tree caller was updated in this PR). `Method` gained
+  `isha_interval_ramadan` (only UMM_AL_QURA sets it, to 120). C++ callers
+  that omit the flag are byte-identical to pre-PR behaviour.
+  (2) `components/svc_config/src/hijri_calendar.{c,h}` holds the confirmed
+  KSA table (Ramadan 1447 AH = Feb 18 – Mar 19 2026; 1448 AH = Feb 8 –
+  Mar 8 2027), sourced from the Saudi Supreme Court announcements. Any
+  year not in the table returns `false` (safe non-Ramadan default).
+  (3) `svc_config` gained `ramadan_windows[SVC_CONFIG_RAMADAN_MAX]` (8
+  user-override slots, validated by `svc_config_ramadan_window_is_valid()`),
+  persisted to NVS as `ram_win_<N>_<field>` + `ram_win_cnt`, and a new
+  pure function `svc_config_is_ramadan(cfg, y, m, d)` whose resolution
+  order is: **user override REPLACES the confirmed table for any year it
+  touches**, else fall through to the confirmed table, else `false`.
+  (4) Both call sites that reach the engine for prayer times —
+  `adhan_calculator_run()` (today/tomorrow tier) and
+  the static `build_day_entry()` in `svc_timetable.c` (year-file regen) —
+  pass the flag through, so both paths produce +120 Isha on Ramadan dates. HTTP exposes
+  `ramadan_windows[]` on `GET/POST /api/config` (see §10.2 in
+  `prayer-times-model.md`); the browser form is a follow-up PR.
+  `SVC_TIMETABLE_SCHEMA_VER` bumped 2 → 3 so v2 user uploads warn once on
+  load (`warn-only` — user files are still honoured verbatim). Tabular
+  prediction for years beyond 1448 AH remains a follow-up: the Umm al-Qura
+  calendar is a published table, not arithmetic, and a naive approximation
+  drifts 2-3 days from the official window.
+
 - **`svc_scheduler` (PR 5.6):** prayer time scheduler. A 1 Hz task on core 0
   (`scheduler`, `tskIDLE_PRIORITY + 2`, 4 KB stack) reads
   `svc_time_get_epoch()` + `svc_prayer_engine_service_get_times()` and

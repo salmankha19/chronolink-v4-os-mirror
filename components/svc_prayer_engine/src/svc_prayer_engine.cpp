@@ -78,6 +78,7 @@ esp_err_t svc_prayer_engine_calculate(
     svc_prayer_highlat_t highlat,
     double custom_fajr_angle,
     double custom_isha_angle,
+    bool is_ramadan,
     svc_prayer_times_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
@@ -139,7 +140,7 @@ esp_err_t svc_prayer_engine_calculate(
     prayertimes::Coordinates c{ latitude, longitude };
 
     prayertimes::PrayerTimes t = prayertimes::PrayerTimesCalculator::calculate(
-        d, c, timezone_offset, m, hl);
+        d, c, timezone_offset, m, hl, is_ramadan);
 
     if (!t.valid) {
         return ESP_ERR_INVALID_STATE;

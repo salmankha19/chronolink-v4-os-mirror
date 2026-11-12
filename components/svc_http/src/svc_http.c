@@ -293,6 +293,23 @@ static esp_err_t get_config_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(season, "winter_start_month", cfg.season.winter_start_month);
     cJSON_AddNumberToObject(season, "winter_start_day",   cfg.season.winter_start_day);
 
+    // Ramadan override list. Empty array when ramadan_window_count == 0.
+    // Each entry: {start_year, start_month, start_day, end_year, end_month,
+    // end_day}. Consumers derive the count from the array length (parallel
+    // to how jamat[] works); no separate count field is exposed.
+    cJSON *rw_arr_out = cJSON_AddArrayToObject(root, "ramadan_windows");
+    for (int i = 0; i < cfg.ramadan_window_count && i < SVC_CONFIG_RAMADAN_MAX; i++) {
+        const svc_config_ramadan_window_t *w = &cfg.ramadan_windows[i];
+        cJSON *entry = cJSON_CreateObject();
+        cJSON_AddNumberToObject(entry, "start_year",  w->start_year);
+        cJSON_AddNumberToObject(entry, "start_month", w->start_month);
+        cJSON_AddNumberToObject(entry, "start_day",   w->start_day);
+        cJSON_AddNumberToObject(entry, "end_year",    w->end_year);
+        cJSON_AddNumberToObject(entry, "end_month",   w->end_month);
+        cJSON_AddNumberToObject(entry, "end_day",     w->end_day);
+        cJSON_AddItemToArray(rw_arr_out, entry);
+    }
+
     esp_err_t err = send_json(req, root);
     cJSON_Delete(root);
     return err;
@@ -571,6 +588,56 @@ static esp_err_t post_config_handler(httpd_req_t *req)
         } else if (sm || sd || wm || wd) {
             ESP_LOGW(TAG, "rejected season: not integral or out of [1,12]/[1,31]");
             if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    // Ramadan override array. Absent field -> no-op (existing overrides
+    // persist, matching the jamat pattern). Present but not an array ->
+    // silent no-op (matching jamat). Present as [] -> clears all overrides
+    // (count 0). Present with entries -> parsed into a stack array and
+    // handed to the setter, which validates Gregorian ranges + window
+    // semantics; on any invalid entry the WHOLE update is rejected and
+    // first_err is set (no partial persist, no partial clear).
+    cJSON *rw_arr_in = cJSON_GetObjectItem(root, "ramadan_windows");
+    if (cJSON_IsArray(rw_arr_in)) {
+        int n = cJSON_GetArraySize(rw_arr_in);
+        if (n > SVC_CONFIG_RAMADAN_MAX) {
+            ESP_LOGW(TAG, "rejected ramadan_windows: count %d > max %d",
+                     n, SVC_CONFIG_RAMADAN_MAX);
+            if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+        } else {
+            svc_config_ramadan_window_t local[SVC_CONFIG_RAMADAN_MAX];
+            memset(local, 0, sizeof(local));
+            bool parse_ok = true;
+            for (int i = 0; i < n && parse_ok; i++) {
+                cJSON *item = cJSON_GetArrayItem(rw_arr_in, i);
+                if (!cJSON_IsObject(item)) { parse_ok = false; break; }
+                cJSON *sy = cJSON_GetObjectItem(item, "start_year");
+                cJSON *sm = cJSON_GetObjectItem(item, "start_month");
+                cJSON *sd = cJSON_GetObjectItem(item, "start_day");
+                cJSON *ey = cJSON_GetObjectItem(item, "end_year");
+                cJSON *em = cJSON_GetObjectItem(item, "end_month");
+                cJSON *ed = cJSON_GetObjectItem(item, "end_day");
+                double v;
+                if (!json_get_uint_range(sy, 1900, 2100, &v)) { parse_ok = false; break; }
+                local[i].start_year = (uint16_t)v;
+                if (!json_get_uint_range(sm, 1, 12, &v)) { parse_ok = false; break; }
+                local[i].start_month = (uint8_t)v;
+                if (!json_get_uint_range(sd, 1, 31, &v)) { parse_ok = false; break; }
+                local[i].start_day = (uint8_t)v;
+                if (!json_get_uint_range(ey, 1900, 2100, &v)) { parse_ok = false; break; }
+                local[i].end_year = (uint16_t)v;
+                if (!json_get_uint_range(em, 1, 12, &v)) { parse_ok = false; break; }
+                local[i].end_month = (uint8_t)v;
+                if (!json_get_uint_range(ed, 1, 31, &v)) { parse_ok = false; break; }
+                local[i].end_day = (uint8_t)v;
+            }
+            if (parse_ok) {
+                APPLY(svc_config_set_ramadan_windows(local, (uint8_t)n));
+            } else {
+                ESP_LOGW(TAG, "rejected ramadan_windows: malformed entry");
+                if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+            }
         }
     }
 

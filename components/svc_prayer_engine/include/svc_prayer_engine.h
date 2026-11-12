@@ -126,6 +126,12 @@ static inline bool svc_prayer_time_resolve(uint32_t sec, uint32_t *time_of_day_s
 /*
  * Calculate prayer times for a single day.
  *
+ * is_ramadan selects the Ramadan Isha interval for methods that carry
+ * one (currently only UMM_AL_QURA, +120 min vs the base +90). Callers that
+ * do not know the Hijri date should pass false; the resulting Isha is the
+ * safe non-Ramadan value. Ramadan windows and the tabular Hijri->Gregorian
+ * conversion live above this layer; this function only consumes the flag.
+ *
  * Returns:
  *   ESP_OK                : success (out->valid is true)
  *   ESP_ERR_INVALID_ARG   : out NULL, or lat/lon/date/method/madhab out of range
@@ -143,6 +149,7 @@ esp_err_t svc_prayer_engine_calculate(
     svc_prayer_highlat_t highlat,
     double custom_fajr_angle,
     double custom_isha_angle,
+    bool is_ramadan,
     svc_prayer_times_t *out
 );
 

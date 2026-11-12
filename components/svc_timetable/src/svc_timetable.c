@@ -424,6 +424,30 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
             (unsigned)cfg->jamat[p].summer.offset_min,
             (unsigned)cfg->jamat[p].round_min);
     }
+    // Ramadan override windows, appended after the jamat block so that
+    // editing an override changes the calculation block and therefore
+    // trips svc_timetable_needs_regen_from_config() on the next
+    // recalculate. Shape is a compact array-of-arrays to stay well
+    // inside the 1024-byte buffer: each entry is [start_year,
+    // start_month, start_day, end_year, end_month, end_day]. Empty
+    // array ([]) when ramadan_window_count == 0.
+    //
+    // Order limitation: entries are serialised in array order, so two
+    // logically identical lists in different order produce different
+    // JSON and would trigger one spurious regen after a reordering.
+    // Users editing via the web UI see a stable order because the UI
+    // submits in the order it displays; manually editing the raw JSON
+    // in a different order costs exactly one extra timetable regen,
+    // not incorrect times. Canonical sorting is a follow-up if it ever
+    // matters.
+    n += snprintf(out+n, 1024-n, "],\"rw\":[");
+    for (int i = 0; i < cfg->ramadan_window_count && i < SVC_CONFIG_RAMADAN_MAX; i++) {
+        const svc_config_ramadan_window_t *w = &cfg->ramadan_windows[i];
+        n += snprintf(out+n, 1024-n, "%s[%u,%u,%u,%u,%u,%u]",
+            i?",":"",
+            (unsigned)w->start_year,  (unsigned)w->start_month, (unsigned)w->start_day,
+            (unsigned)w->end_year,    (unsigned)w->end_month,   (unsigned)w->end_day);
+    }
     snprintf(out+n, 1024-n, "]}");
 }
 
@@ -610,12 +634,30 @@ bool svc_timetable_needs_regen_from_config(void)
                      (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
             return true;
         }
+        // Version-aware warn. The version the file carries tells the
+        // operator WHICH defect to re-export from, not just that something
+        // is stale. v1 -> pre-#133 zawal_start/sehri_end rounding (unsafe
+        // direction). v2 -> pre-Ramadan +90 Isha on Ramadan dates. Any
+        // other version falls through to a generic message so future bumps
+        // do not require editing this branch again.
         static int16_t s_warned_ver = -1;
         if (s_warned_ver != (int16_t)loaded_ver) {
-            ESP_LOGW(TAG, "user timetable schema v%u < current v%u; "
-                          "zawal_start/sehri_end may be pre-#133 unsafe; "
-                          "consider re-export",
-                     (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            if (loaded_ver == 1) {
+                ESP_LOGW(TAG, "user timetable schema v1 < current v%u; "
+                              "zawal_start/sehri_end may be pre-#133 unsafe; "
+                              "consider re-export",
+                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            } else if (loaded_ver == 2) {
+                ESP_LOGW(TAG, "user timetable schema v2 < current v%u; "
+                              "Ramadan Isha may be pre-+120 (year-round +90); "
+                              "consider re-export",
+                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            } else {
+                ESP_LOGW(TAG, "user timetable schema v%u < current v%u; "
+                              "format may be stale; consider re-export",
+                         (unsigned)loaded_ver,
+                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+            }
             s_warned_ver = (int16_t)loaded_ver;
         }
         return false;
@@ -679,13 +721,21 @@ static cJSON *build_day_entry(const svc_config_t *cfg,
 {
     double tz_off = (double)tz_offset_min / 60.0;
     svc_prayer_times_t raw = {0};
+    // Per-date Ramadan resolution. Same precedence contract as the
+    // parallel call in adhan_calculator.c: user override replaces the
+    // confirmed KSA table for any year it touches; else the table is
+    // consulted; else false. Passing the flag through to the engine
+    // makes the generated year file carry +120 Isha on Ramadan days,
+    // which keeps the tripwire in svc_prayer_engine_service.c quiet
+    // on regenerated firmware files.
+    bool is_ramadan = svc_config_is_ramadan(cfg, year, month, day);
     esp_err_t err = svc_prayer_engine_calculate(
         year, month, day,
         cfg->latitude, cfg->longitude, tz_off,
         (svc_prayer_method_t)cfg->method,
         (svc_prayer_madhab_t)cfg->madhab,
         (svc_prayer_highlat_t)cfg->high_lat_rule,
-        cfg->custom_fajr_angle, cfg->custom_isha_angle, &raw);
+        cfg->custom_fajr_angle, cfg->custom_isha_angle, is_ramadan, &raw);
     if (err != ESP_OK) return NULL;
 
     /* Adhan tier: config prayer order, each with its adhan_offset_min.

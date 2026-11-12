@@ -14,6 +14,8 @@
 #include <stdio.h>     /* snprintf: composed NVS keys (jamat_*, season_*) */
 #include <string.h>
 
+#include "ramadan_window_validator.h"
+
 static const char *TAG = "svc_config";
 
 #define NVS_NAMESPACE_CONFIG   "config"
@@ -43,6 +45,13 @@ static const char *TAG = "svc_config";
 #define NVS_KEY_SEASON_SUMMER_D "season_sum_d"
 #define NVS_KEY_SEASON_WINTER_M "season_win_m"
 #define NVS_KEY_SEASON_WINTER_D "season_win_d"
+// Ramadan override list persistence: one count key plus, per slot, six
+// per-field keys composed as "<prefix><slot>_<field>". Eight slots times
+// six fields = forty-eight per-slot keys plus the count = forty-nine keys
+// total. Values are stored un-prefixed by group (see svc_config_set_
+// ramadan_windows for the write order).
+#define NVS_KEY_RAMADAN_COUNT   "ram_win_cnt"
+#define NVS_KEY_RAMADAN_PREFIX  "ram_win_"
 static const char *const k_adhan_offset_keys[SVC_CONFIG_PRAYER_COUNT] = {
     "adhan_off_0",
     "adhan_off_1",
@@ -280,6 +289,43 @@ static esp_err_t persist_erase(const char *key)
     return err;
 }
 
+// Read one Ramadan window slot from NVS. Returns true only when every one
+// of the six per-slot keys was present; on any missing key returns false
+// and leaves *w untouched (the caller memsets). The setter writes slots
+// before the count key, so a torn write (power loss between the slot keys
+// and the count) surfaces on the next load as a slot that fails this
+// function while the previous count is still in effect -- handled by the
+// caller zeroing the slot.
+static bool load_one_ramadan_window(uint8_t idx, svc_config_ramadan_window_t *w)
+{
+    if (!s_nvs_open) return false;
+
+    char key[24];
+    uint16_t sy = 0, ey = 0;
+    uint8_t sm = 0, sd = 0, em = 0, ed = 0;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sy", (unsigned)idx);
+    if (nvs_get_u16(s_nvs, key, &sy) != ESP_OK) return false;
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sm", (unsigned)idx);
+    if (nvs_get_u8(s_nvs, key, &sm) != ESP_OK) return false;
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sd", (unsigned)idx);
+    if (nvs_get_u8(s_nvs, key, &sd) != ESP_OK) return false;
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_ey", (unsigned)idx);
+    if (nvs_get_u16(s_nvs, key, &ey) != ESP_OK) return false;
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_em", (unsigned)idx);
+    if (nvs_get_u8(s_nvs, key, &em) != ESP_OK) return false;
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_ed", (unsigned)idx);
+    if (nvs_get_u8(s_nvs, key, &ed) != ESP_OK) return false;
+
+    w->start_year  = sy;
+    w->start_month = sm;
+    w->start_day   = sd;
+    w->end_year    = ey;
+    w->end_month   = em;
+    w->end_day     = ed;
+    return true;
+}
+
 /* Load all keys from NVS into s_cache. Called from svc_config_start()
    while it is still single-threaded (no lock exists yet). Non-fatal: a
    missing key keeps its set_defaults() value. A malformed value (e.g.
@@ -454,6 +500,30 @@ static void load_from_nvs_unlocked(void)
     v = 0;
     if (nvs_get_u8(s_nvs, NVS_KEY_NIGHT_LAMP, &v) == ESP_OK) {
         s_cache.night_lamp_enable = (v != 0);
+    }
+
+    // Ramadan override list. Read the count first: if the count key is
+    // absent (new device or one that has never had an override) the list
+    // stays at whatever set_defaults() left it (zero count). If the count
+    // is present but a slot's six keys are incomplete (torn write), the
+    // slot is zeroed. If the count is out of range (should not happen but
+    // does after a downgrade from a future build with a bigger
+    // SVC_CONFIG_RAMADAN_MAX), warn and use zero.
+    uint8_t rw_count = 0;
+    esp_err_t rw_err = nvs_get_u8(s_nvs, NVS_KEY_RAMADAN_COUNT, &rw_count);
+    if (rw_err == ESP_OK && rw_count <= SVC_CONFIG_RAMADAN_MAX) {
+        s_cache.ramadan_window_count = rw_count;
+        for (uint8_t i = 0; i < rw_count; i++) {
+            svc_config_ramadan_window_t *w = &s_cache.ramadan_windows[i];
+            if (!load_one_ramadan_window(i, w)) {
+                ESP_LOGW(TAG, "ramadan slot %u incomplete -- treated as zero",
+                         (unsigned)i);
+                memset(w, 0, sizeof(*w));
+            }
+        }
+    } else if (rw_err == ESP_OK && rw_count > SVC_CONFIG_RAMADAN_MAX) {
+        ESP_LOGW(TAG, "stored ramadan_window_count %u out of range -- using 0",
+                 (unsigned)rw_count);
     }
 }
 
@@ -908,5 +978,104 @@ esp_err_t svc_config_set_custom_angles(double fajr, double isha)
     lock_give();
     if (e1 != ESP_OK) return e1;
     return e2;
+}
+
+// Write one Ramadan window slot to NVS (six field keys + commit). Returns
+// the first non-OK result; a partial write leaves a torn slot which
+// load_one_ramadan_window() detects on the next boot and the loader
+// zeroes. Caller holds the lock.
+static esp_err_t persist_one_ramadan_window(uint8_t idx,
+                                            const svc_config_ramadan_window_t *w)
+{
+    if (!s_nvs_open) return ESP_ERR_NVS_NOT_INITIALIZED;
+
+    char key[24];
+    esp_err_t err = ESP_OK;
+    esp_err_t e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sy", (unsigned)idx);
+    e = nvs_set_u16(s_nvs, key, w->start_year);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sm", (unsigned)idx);
+    e = nvs_set_u8(s_nvs, key, w->start_month);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_sd", (unsigned)idx);
+    e = nvs_set_u8(s_nvs, key, w->start_day);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_ey", (unsigned)idx);
+    e = nvs_set_u16(s_nvs, key, w->end_year);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_em", (unsigned)idx);
+    e = nvs_set_u8(s_nvs, key, w->end_month);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    snprintf(key, sizeof(key), NVS_KEY_RAMADAN_PREFIX "%u_ed", (unsigned)idx);
+    e = nvs_set_u8(s_nvs, key, w->end_day);
+    if (e != ESP_OK && err == ESP_OK) err = e;
+
+    if (err == ESP_OK) err = nvs_commit(s_nvs);
+    return err;
+}
+
+esp_err_t svc_config_set_ramadan_windows(
+    const svc_config_ramadan_window_t *windows,
+    uint8_t count)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if (count > SVC_CONFIG_RAMADAN_MAX) return ESP_ERR_INVALID_ARG;
+    if (count > 0 && !windows) return ESP_ERR_INVALID_ARG;
+
+    // Validate every entry before taking the lock. Reject the whole call on
+    // the first bad window; do NOT partially update the cache. The
+    // validator is a pure function with no dependency on the cache or NVS.
+    for (uint8_t i = 0; i < count; i++) {
+        if (!svc_config_ramadan_window_is_valid(
+                windows[i].start_year, windows[i].start_month,
+                windows[i].start_day,
+                windows[i].end_year,   windows[i].end_month,
+                windows[i].end_day)) {
+            ESP_LOGW(TAG, "set_ramadan_windows: slot %u fails validation",
+                     (unsigned)i);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    // Update RAM cache. Beyond-count slots are zeroed so a subsequent call
+    // with a smaller count cannot leak the old tail into a read.
+    if (count == 0) {
+        memset(s_cache.ramadan_windows, 0, sizeof(s_cache.ramadan_windows));
+    } else {
+        memcpy(s_cache.ramadan_windows, windows,
+               count * sizeof(svc_config_ramadan_window_t));
+        if (count < SVC_CONFIG_RAMADAN_MAX) {
+            memset(&s_cache.ramadan_windows[count], 0,
+                   (SVC_CONFIG_RAMADAN_MAX - count) *
+                   sizeof(svc_config_ramadan_window_t));
+        }
+    }
+    s_cache.ramadan_window_count = count;
+
+    // Persist slots first, then the count. The count is the commit point:
+    // on next load, a slot is only read when the count says it exists. A
+    // crash between slot writes and the count write leaves the OLD count
+    // in NVS, so newly-written slots are ignored on next boot (the RAM
+    // cache already has the new state, so the caller sees it until reboot).
+    esp_err_t persist_err = ESP_OK;
+    for (uint8_t i = 0; i < count; i++) {
+        esp_err_t e = persist_one_ramadan_window(i, &windows[i]);
+        if (e != ESP_OK) { persist_err = e; break; }
+    }
+    if (persist_err == ESP_OK) {
+        persist_err = persist_u8(NVS_KEY_RAMADAN_COUNT, count);
+    }
+
+    lock_give();
+    return persist_err;
 }
 

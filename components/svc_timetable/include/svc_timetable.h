@@ -37,7 +37,7 @@ extern "C" {
    svc_timetable_generate_full_year() does not need editing. Do NOT use it in
    new code; pick UPLOAD_TMP or REGEN_TMP explicitly. */
 #define SVC_TIMETABLE_PATH_TMP    SVC_TIMETABLE_REGEN_TMP
-#define SVC_TIMETABLE_SCHEMA_VER  2   /* #135: v1 files carry pre-#133 unsafe zawal/sehri */
+#define SVC_TIMETABLE_SCHEMA_VER  3   /* v2 files carry pre-Ramadan +90 Isha on Ramadan dates */
 #define SVC_TIMETABLE_YEAR_PERMANENT (-1)
 
 typedef enum {
