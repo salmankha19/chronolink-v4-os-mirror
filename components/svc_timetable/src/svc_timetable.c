@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>   /* fsync() */
 #include <time.h>
@@ -393,10 +394,48 @@ static esp_err_t parse_file_at(const char *path, timetable_state_t *out)
     return ESP_OK;
 }
 
+/* Bounded-append helper for serialize_calc(). Uses vsnprintf so every
+   append is capped at cap, and returns the new absolute position which
+   never exceeds cap - 1 (leaving room for the eventual NUL).
+
+   This closes the #144 snprintf-return-value trap: the old code did
+   `n += snprintf(out + n, 1024 - n, ...)`, which relied on snprintf's
+   return value being the number of bytes actually written. It is not —
+   it is the number that WOULD have been written if the buffer were
+   large enough. Once n reached 1024, `1024 - n` became a huge size_t
+   and out + n was off the end of the array. The append below cannot
+   overflow: past the point of truncation, used == cap - 1 and the
+   remaining space is 1 byte, which vsnprintf writes as a bare NUL.
+
+   Idempotent at capacity: once full, every further call is a no-op
+   apart from re-terminating. Output is byte-identical to the original
+   when nothing truncates (the cJSON_Compare call in
+   svc_timetable_needs_regen_from_config() therefore sees no spurious
+   changes). */
+static int serialize_calc_append(char *out, size_t cap, int pos,
+                                 const char *fmt, ...)
+{
+    va_list ap;
+    size_t used;
+    int would;
+
+    if (pos < 0) return 0;
+    used = (size_t)pos;
+    if (used >= cap) used = cap - 1;      /* defensive: only NUL fits */
+
+    va_start(ap, fmt);
+    would = vsnprintf(out + used, cap - used, fmt, ap);
+    va_end(ap);
+
+    if (would < 0) return (int)used;      /* encoding error: no progress */
+    if ((size_t)would >= cap - used) return (int)cap - 1;  /* truncated */
+    return (int)(used + (size_t)would);   /* fits */
+}
+
 static void serialize_calc(const svc_config_t *cfg, const char *tz,
                            char out[1024])
 {
-    int n = snprintf(out, 1024,
+    int n = serialize_calc_append(out, 1024, 0,
         "{\"method\":%d,\"madhab\":%d,\"high_lat_rule\":%d,"
         "\"custom_fajr_angle\":%.3f,\"custom_isha_angle\":%.3f,"
         "\"latitude\":%.6f,\"longitude\":%.6f,\"timezone\":\"%s\","
@@ -408,14 +447,14 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
         (unsigned)cfg->zawal_buffer_min,
         (unsigned)cfg->season.summer_start_month, (unsigned)cfg->season.summer_start_day,
         (unsigned)cfg->season.winter_start_month, (unsigned)cfg->season.winter_start_day);
-    n += snprintf(out+n, 1024-n, "\"adhan_offsets\":[");
+    n = serialize_calc_append(out, 1024, n, "\"adhan_offsets\":[");
     for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
-        n += snprintf(out+n, 1024-n, "%s%u", i?",":"",
-                      (unsigned)cfg->adhan_offset_min[i]);
+        n = serialize_calc_append(out, 1024, n, "%s%u", i?",":"",
+                                  (unsigned)cfg->adhan_offset_min[i]);
     }
-    n += snprintf(out+n, 1024-n, "],\"jamat\":[");
+    n = serialize_calc_append(out, 1024, n, "],\"jamat\":[");
     for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
-        n += snprintf(out+n, 1024-n,
+        n = serialize_calc_append(out, 1024, n,
             "%s{\"wa\":%u,\"wo\":%u,\"sa\":%u,\"so\":%u,\"r\":%u}",
             p?",":"",
             (unsigned)cfg->jamat[p].winter.anchor,
@@ -440,15 +479,15 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
     // in a different order costs exactly one extra timetable regen,
     // not incorrect times. Canonical sorting is a follow-up if it ever
     // matters.
-    n += snprintf(out+n, 1024-n, "],\"rw\":[");
+    n = serialize_calc_append(out, 1024, n, "],\"rw\":[");
     for (int i = 0; i < cfg->ramadan_window_count && i < SVC_CONFIG_RAMADAN_MAX; i++) {
         const svc_config_ramadan_window_t *w = &cfg->ramadan_windows[i];
-        n += snprintf(out+n, 1024-n, "%s[%u,%u,%u,%u,%u,%u]",
+        n = serialize_calc_append(out, 1024, n, "%s[%u,%u,%u,%u,%u,%u]",
             i?",":"",
             (unsigned)w->start_year,  (unsigned)w->start_month, (unsigned)w->start_day,
             (unsigned)w->end_year,    (unsigned)w->end_month,   (unsigned)w->end_day);
     }
-    snprintf(out+n, 1024-n, "]}");
+    (void)serialize_calc_append(out, 1024, n, "]}");
 }
 
 /* Read SVC_TIMETABLE_PATH into a private temporary and install it under
