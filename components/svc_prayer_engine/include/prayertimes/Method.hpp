@@ -28,6 +28,15 @@ struct Method {
     // Dhuhr / Maghrib time (adhan-js methodAdjustments). Default 0.
     int dhuhr_adjust_min = 0;
     int maghrib_adjust_min = 0;
+
+    // Ramadan override for isha_interval. If non-zero AND
+    // PrayerTimesCalculator::calculate() is called with is_ramadan=true,
+    // this value (in minutes) replaces isha_interval for that call only.
+    // 0 means "no Ramadan-specific interval; use isha_interval as-is".
+    // Only UMM_AL_QURA sets this (120 min, per the Saudi official
+    // standard). Kept at the very end so the two adjust_min fields above
+    // keep their existing offsets.
+    int isha_interval_ramadan = 0;
 };
 
 // --- Built-in Methods ---
@@ -75,11 +84,12 @@ constexpr Method KARACHI = {
 constexpr Method UMM_AL_QURA = {
     .fajr_angle = 18.5,
     .isha_angle = 0.0,
-    .isha_interval = 90, // 90 mins after Maghrib
+    .isha_interval = 90, // 90 mins after Maghrib (non-Ramadan)
     .maghrib_angle = 0.0,
     .midnight_angle = 0.0,
     .asr_shadow_factor = 1.0,
-    .is_moonsighting = false
+    .is_moonsighting = false,
+    .isha_interval_ramadan = 120 // Saudi official: 120 min during Ramadan
 };
 
 constexpr Method JAFARIA = {

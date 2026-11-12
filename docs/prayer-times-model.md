@@ -326,21 +326,38 @@ mismatch, `schema_version` below the current `SVC_TIMETABLE_SCHEMA_VER`,
 or `calculation` block ≠ current `svc_config_t` (canonical JSON compare).
 User files never auto-regenerate (handoff dec. 7).
 
-**Schema-version regen (PR #135).** The timetable file carries a
-`schema_version` at the top level; the current version is
-`SVC_TIMETABLE_SCHEMA_VER = 2`. A firmware-generated file whose version
-is lower is treated as "needs regen" — this makes PR #133's safe-side
-zawal/sehri rounding fixes land on every device that already has a
-timetable on flash, without requiring a config change or factory reset.
-A user-uploaded file whose version is lower is **not** regenerated (the
-mosque's published times are authoritative — see the deviation policy
-above), but a one-shot `ESP_LOGW` is emitted the first time such a file
-is loaded in a boot, so the operator knows to re-export from a current
+**Schema-version regen (PR #135, extended by the Ramadan PR).** The
+timetable file carries a `schema_version` at the top level; the current
+version is `SVC_TIMETABLE_SCHEMA_VER = 3`.
+
+For **firmware-generated** files, regen is driven by the `calculation`
+block comparison described above, not by the version number. The two
+mechanisms agree in practice: every schema bump to date has also changed
+the `calculation` block (`#133` changed nothing here; the Ramadan PR
+added `"rw":[...]`), so `cJSON_Compare` already triggers regen for a v2
+firmware file on a current-firmware device. The version bump is not what
+makes firmware files regenerate — it is what makes user files warn.
+
+For **user-uploaded** files, the version number is the only signal:
+because user files are never auto-regenerated (the mosque's published
+times are authoritative — see the deviation policy above), a v2 user
+file on a v3 device loads silently with pre-Ramadan (+90 min) Isha
+values on Ramadan dates. A one-shot `ESP_LOGW` fires the first time
+such a file is loaded, so the operator knows to re-export from current
 firmware. The warn is keyed to the loaded schema version, not to file
 identity — a v1 → v2 → v1 re-upload cycle warns only on the first v1
-load, not on the second. Pre-#133 firmware wrote v1; the v1→v2 bump and
-this rule are the upgrade path, and v2 files written by current firmware
-are trusted verbatim.
+load, not on the second.
+
+Version history:
+- **v1** — pre-#133. `zawal_start` and `sehri_end` carry the unsafe
+  ceil-to-minute rounding (they round the end-of-window boundary up).
+- **v2** — post-#133. Safe-side rounding on both `zawal_start` and
+  `sehri_end`. Ramadan Isha is still the year-round +90 for UMM_AL_QURA.
+- **v3** — post-Ramadan PR. Ramadan Isha is +120 min for UMM_AL_QURA on
+  Ramadan dates (user override first, then the confirmed KSA table).
+
+Any file at the current version is trusted verbatim; any file below it
+either regenerates (firmware) or warns once (user upload).
 
 **Tripwire (firmware files only, PR #125)**: every recalculate where a
 firmware-generated file supplied today's values compares against a fresh
@@ -658,6 +675,18 @@ Adds `jamat[]` (array of five objects with `winter_anchor`,
 `winter_offset`, `summer_anchor`, `summer_offset`, `round_min`) and
 `season` object. Existing `iqamah_offsets[]` and `adhan_offsets[]`
 remain, backed by the deprecated mirror and the unchanged adhan field.
+
+Adds `ramadan_windows[]` (array of objects, each with `start_year`,
+`start_month`, `start_day`, `end_year`, `end_month`, `end_day`). Empty
+array when no overrides are configured. Consumers derive the count from
+the array length, parallel to how `jamat[]` works; no separate count
+field is exposed. `POST /api/config` accepts the same field: absent
+means "leave the stored overrides alone", `[]` means "clear all
+overrides", a non-empty array replaces the stored list if every entry
+validates (Gregorian ranges plus window semantics from
+`svc_config_ramadan_window_is_valid()`), otherwise the whole update is
+rejected with `partial_apply` (no partial persist). Web UI exposure is
+a follow-up PR; this PR ships only the JSON contract.
 
 ### 10.3 `POST /api/config/preset`
 

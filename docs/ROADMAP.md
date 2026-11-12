@@ -86,6 +86,12 @@ location and method, and does something at each.
 - Wire to the display: next prayer name and countdown on the face.
 - Phase 2 prayer-times refinement (seasonal jamat, presets, tomorrow
   notification) is specified in [prayer-times-model.md](prayer-times-model.md).
+- **Ramadan +120 UAQ Isha override** — Umm al-Qura Isha is +120 min on
+  Ramadan dates. User override first, then confirmed KSA table (1447/1448
+  AH), else the year-round +90. Shipped in feat/umalqura-ramadan-120; deferred follow-ups:
+  tabular prediction for years beyond 1448 AH, browser form for
+  `ramadan_windows[]`. See [mosque-calendars.md](mosque-calendars.md) §0
+  and [prayer-times-model.md](prayer-times-model.md) §10.2.
 
 ---
 

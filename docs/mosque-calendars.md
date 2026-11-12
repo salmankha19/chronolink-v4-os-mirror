@@ -81,13 +81,24 @@ calendar CSV within 1 min across the full non-Ramadan year
 (spot-checked Jun/Jul/Oct/Nov/Dec 2026 against the official
 published table).
 
-**Known gap — Ramadan +120 min:** The engine uses `isha_interval =
-90` year-round. The official standard switches to +120 during
-Ramadan (Hijri-based). Confirmed absent from the handler — no
-`ramadan` or `hijri` references in `svc_prayer_engine/src/`, and
-`golden.csv` Feb 2026 (Ramadan 1447) shows a 90-min Isha gap where
-+120 is expected. Backlog item filed: "Implement Hijri date support
-for Umm Al-Qura Ramadan Isha switch."
+**Ramadan +120 min (shipped, feat/umalqura-ramadan-120):** The engine now supports a runtime
+`is_ramadan` flag that switches Umm al-Qura Isha from the year-round
++90 to +120 on Ramadan dates. Resolution order:
+1. **User override** from `svc_config.ramadan_windows[]` — validated,
+   **replaces** the confirmed table for any year it touches (a narrower
+   window wins; the table is not unioned with it).
+2. **Confirmed KSA table** in `components/svc_config/src/hijri_calendar.c`
+   — 1447 AH (Feb 18 – Mar 19 2026) and 1448 AH (Feb 8 – Mar 8 2027),
+   sourced from the Saudi Supreme Court announcements.
+3. **Safe non-Ramadan default** (+90) for any other year.
+
+The web API exposes `ramadan_windows[]` on `GET/POST /api/config` (see
+§10.2 in `prayer-times-model.md`); a browser form is a follow-up.
+**Tabular prediction for years beyond 1448 AH remains a follow-up**: the
+Umm al-Qura calendar is a published table, not arithmetic, and a naive
+approximation drifts 2-3 days from the official window — so no
+approximation ships. Users who want a specific future year beyond 1448 AH
+enter a user override, which is honoured verbatim.
 
 No dedicated fixture added here — the existing `test_golden`
 already exercises the UMM_AL_QURA method path against the same
@@ -350,7 +361,7 @@ At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosqu
 | C | `summer_isha_offset_min` — fixed offset from Maghrib in peak summer | Config | Medium | Medium |
 | D | `/api/mosque-preview` — user provides calendar, system shows calculated-vs-published diff | HTTP | Large | Low |
 | E | Grow this file to 5-10 more mosques (UK, US, EU, Middle East) | Docs | Incremental | Low |
-| F | Umm Al-Qura Ramadan +120 min Isha switch — blocked on confirmed-date table (see backlog). | Config | Medium | Medium |
+| F | Umm Al-Qura Ramadan +120 min Isha switch — **shipped** (user override + confirmed KSA table 1447/1448 AH; tabular prediction beyond 1448 AH remains follow-up). | Config | Medium | Done |
 
 ---
 
