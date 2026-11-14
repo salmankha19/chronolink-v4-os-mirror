@@ -463,31 +463,10 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
             (unsigned)cfg->jamat[p].summer.offset_min,
             (unsigned)cfg->jamat[p].round_min);
     }
-    // Ramadan override windows, appended after the jamat block so that
-    // editing an override changes the calculation block and therefore
-    // trips svc_timetable_needs_regen_from_config() on the next
-    // recalculate. Shape is a compact array-of-arrays to stay well
-    // inside the 1024-byte buffer: each entry is [start_year,
-    // start_month, start_day, end_year, end_month, end_day]. Empty
-    // array ([]) when ramadan_window_count == 0.
-    //
-    // Order limitation: entries are serialised in array order, so two
-    // logically identical lists in different order produce different
-    // JSON and would trigger one spurious regen after a reordering.
-    // Users editing via the web UI see a stable order because the UI
-    // submits in the order it displays; manually editing the raw JSON
-    // in a different order costs exactly one extra timetable regen,
-    // not incorrect times. Canonical sorting is a follow-up if it ever
-    // matters.
-    n = serialize_calc_append(out, 1024, n, "],\"rw\":[");
-    for (int i = 0; i < cfg->ramadan_window_count && i < SVC_CONFIG_RAMADAN_MAX; i++) {
-        const svc_config_ramadan_window_t *w = &cfg->ramadan_windows[i];
-        n = serialize_calc_append(out, 1024, n, "%s[%u,%u,%u,%u,%u,%u]",
-            i?",":"",
-            (unsigned)w->start_year,  (unsigned)w->start_month, (unsigned)w->start_day,
-            (unsigned)w->end_year,    (unsigned)w->end_month,   (unsigned)w->end_day);
-    }
-    (void)serialize_calc_append(out, 1024, n, "]}");
+    // Hijri offset, appended after the jamat block so that changing it
+    // alters the calculation block and therefore trips
+    // svc_timetable_needs_regen_from_config() on the next recalculate.
+    (void)serialize_calc_append(out, 1024, n, "],\"hijri_offset\":%d}", (int)cfg->hijri_offset_days);
 }
 
 /* Read SVC_TIMETABLE_PATH into a private temporary and install it under
@@ -673,29 +652,13 @@ bool svc_timetable_needs_regen_from_config(void)
                      (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
             return true;
         }
-        // Version-aware warn. The version the file carries tells the
-        // operator WHICH defect to re-export from, not just that something
-        // is stale. v1 -> pre-#133 zawal_start/sehri_end rounding (unsafe
-        // direction). v2 -> pre-Ramadan +90 Isha on Ramadan dates. Any
-        // other version falls through to a generic message so future bumps
-        // do not require editing this branch again.
         static int16_t s_warned_ver = -1;
         if (s_warned_ver != (int16_t)loaded_ver) {
-            if (loaded_ver == 1) {
-                ESP_LOGW(TAG, "user timetable schema v1 < current v%u; "
-                              "zawal_start/sehri_end may be pre-#133 unsafe; "
-                              "consider re-export",
-                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
-            } else if (loaded_ver == 2) {
-                ESP_LOGW(TAG, "user timetable schema v2 < current v%u; "
-                              "Ramadan Isha may be pre-+120 (year-round +90); "
-                              "consider re-export",
-                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
-            } else {
+            if (loaded_ver < 4) {
                 ESP_LOGW(TAG, "user timetable schema v%u < current v%u; "
-                              "format may be stale; consider re-export",
-                         (unsigned)loaded_ver,
-                         (unsigned)SVC_TIMETABLE_SCHEMA_VER);
+                              "algorithmic Hijri may give different Ramadan windows; "
+                              "consider re-export",
+                         (unsigned)loaded_ver, (unsigned)SVC_TIMETABLE_SCHEMA_VER);
             }
             s_warned_ver = (int16_t)loaded_ver;
         }

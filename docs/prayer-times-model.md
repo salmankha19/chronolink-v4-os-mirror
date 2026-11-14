@@ -328,7 +328,7 @@ User files never auto-regenerate (handoff dec. 7).
 
 **Schema-version regen (PR #135, extended by the Ramadan PR).** The
 timetable file carries a `schema_version` at the top level; the current
-version is `SVC_TIMETABLE_SCHEMA_VER = 3`.
+version is `SVC_TIMETABLE_SCHEMA_VER = 4`.
 
 For **firmware-generated** files, regen is driven by the `calculation`
 block comparison described above, not by the version number. The two
@@ -358,6 +358,8 @@ Version history:
 
 Any file at the current version is trusted verbatim; any file below it
 either regenerates (firmware) or warns once (user upload).
+
+**v4 (feat/hijri-offset-days)** — Algorithmic Hijri calendar replaces `ramadan_windows[]`. The `calculation` block in the JSON now holds `"hijri_offset":N` instead of `"rw":[...]`. Firmware files auto-regen; user files warn once on load.
 
 **Tripwire (firmware files only, PR #125)**: every recalculate where a
 firmware-generated file supplied today's values compares against a fresh
@@ -676,17 +678,16 @@ Adds `jamat[]` (array of five objects with `winter_anchor`,
 `season` object. Existing `iqamah_offsets[]` and `adhan_offsets[]`
 remain, backed by the deprecated mirror and the unchanged adhan field.
 
-Adds `ramadan_windows[]` (array of objects, each with `start_year`,
-`start_month`, `start_day`, `end_year`, `end_month`, `end_day`). Empty
-array when no overrides are configured. Consumers derive the count from
-the array length, parallel to how `jamat[]` works; no separate count
-field is exposed. `POST /api/config` accepts the same field: absent
-means "leave the stored overrides alone", `[]` means "clear all
-overrides", a non-empty array replaces the stored list if every entry
-validates (Gregorian ranges plus window semantics from
-`svc_config_ramadan_window_is_valid()`), otherwise the whole update is
-rejected with `partial_apply` (no partial persist). Web UI exposure is
-a follow-up PR; this PR ships only the JSON contract.
+Adds `hijri_offset_days` (`int8_t`, -3 to +3): the day offset applied to
+the algorithmic Gregorian-to-Hijri conversion before `is_ramadan` is
+decided, so a mosque's announced Ramadan start can be matched without a
+table. `POST /api/config` accepts the same field: absent means "leave the
+stored offset alone"; present must be integral in [-3, +3] — a
+non-integral or out-of-range value is rejected, nothing is persisted for
+that field, and the request returns 400 with `partial_apply` (earlier
+fields in the same body are already applied; see the note in
+`svc_http.c`). Web UI exposure is a follow-up PR; this PR ships only the
+JSON contract.
 
 ### 10.3 `POST /api/config/preset`
 

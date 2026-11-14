@@ -81,24 +81,12 @@ calendar CSV within 1 min across the full non-Ramadan year
 (spot-checked Jun/Jul/Oct/Nov/Dec 2026 against the official
 published table).
 
-**Ramadan +120 min (shipped, feat/umalqura-ramadan-120):** The engine now supports a runtime
-`is_ramadan` flag that switches Umm al-Qura Isha from the year-round
-+90 to +120 on Ramadan dates. Resolution order:
-1. **User override** from `svc_config.ramadan_windows[]` — validated,
-   **replaces** the confirmed table for any year it touches (a narrower
-   window wins; the table is not unioned with it).
-2. **Confirmed KSA table** in `components/svc_config/src/hijri_calendar.c`
-   — 1447 AH (Feb 18 – Mar 19 2026) and 1448 AH (Feb 8 – Mar 8 2027),
-   sourced from the Saudi Supreme Court announcements.
-3. **Safe non-Ramadan default** (+90) for any other year.
-
-The web API exposes `ramadan_windows[]` on `GET/POST /api/config` (see
-§10.2 in `prayer-times-model.md`); a browser form is a follow-up.
-**Tabular prediction for years beyond 1448 AH remains a follow-up**: the
-Umm al-Qura calendar is a published table, not arithmetic, and a naive
-approximation drifts 2-3 days from the official window — so no
-approximation ships. Users who want a specific future year beyond 1448 AH
-enter a user override, which is honoured verbatim.
+**Ramadan +120 min (shipped, feat/hijri-offset-days):** The engine supports a
+runtime `is_ramadan` flag that switches Umm al-Qura Isha from +90 to +120.
+The determination of Ramadan is now purely algorithmic (Kuwaiti tabular
+calendar) with a user-configurable `hijri_offset_days` (-3 to +3) on
+`svc_config` to align the calculation with local mosque announcements. This
+replaced the previous table-based `ramadan_windows[]` approach.
 
 No dedicated fixture added here — the existing `test_golden`
 already exercises the UMM_AL_QURA method path against the same
