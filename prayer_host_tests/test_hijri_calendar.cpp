@@ -1,4 +1,4 @@
-// Host test for the algorithmic Hijri calendar (Kuwaiti algorithm).
+// Host test for the algorithmic Hijri calendar (Kuwaiti tabular + Umm al-Qura).
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -58,12 +58,32 @@ static void test_is_ramadan(void)
     CHECK(!hijri_is_ramadan(2026, 2, 18, -1), "2026-02-18 -1 not Ramadan (was 29 Sha'ban)");
 }
 
+static void test_uaq_method(void)
+{
+    // 2026-02-18 is 1 Ramadan 1447 in Umm al-Qura (KSA)
+    CHECK(hijri_is_ramadan_method(2026, 2, 18, 0, 1), "2026-02-18 +0 UAQ is Ramadan");
+    CHECK(hijri_is_ramadan_method(2026, 3, 19, 0, 1), "2026-03-19 +0 UAQ is Ramadan");
+    CHECK(!hijri_is_ramadan_method(2026, 3, 20, 0, 1), "2026-03-20 +0 UAQ not Ramadan");
+
+    // 2027-02-08 is 1 Ramadan 1448 in Umm al-Qura
+    CHECK(hijri_is_ramadan_method(2027, 2, 8, 0, 1), "2027-02-08 +0 UAQ is Ramadan");
+    CHECK(hijri_is_ramadan_method(2027, 3, 8, 0, 1), "2027-03-08 +0 UAQ is Ramadan");
+    CHECK(!hijri_is_ramadan_method(2027, 3, 9, 0, 1), "2027-03-09 +0 UAQ not Ramadan"); // 29 days in UAQ
+
+    // Verify tabular vs UAQ difference
+    // Note: Tabular and UAQ agree on 2026-02-18 (1 Ramadan 1447).
+    // The divergence happens on 2027-03-09: Tabular says 30 Ramadan,
+    // UAQ says 1 Shawwal.
+    CHECK(hijri_is_ramadan_method(2027, 3, 9, 0, 0), "2027-03-09 Tabular is Ramadan (30 days)");
+}
+
 int main()
 {
     printf("=== hijri calendar (algorithmic) ===\n");
     test_known_dates();
     test_offset();
     test_is_ramadan();
+    test_uaq_method();
     printf("=> %s\n", bad ? "FAIL" : "PASS");
     return bad ? 1 : 0;
 }

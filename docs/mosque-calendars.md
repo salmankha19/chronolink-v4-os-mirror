@@ -81,12 +81,13 @@ calendar CSV within 1 min across the full non-Ramadan year
 (spot-checked Jun/Jul/Oct/Nov/Dec 2026 against the official
 published table).
 
-**Ramadan +120 min (shipped, feat/hijri-offset-days):** The engine supports a
-runtime `is_ramadan` flag that switches Umm al-Qura Isha from +90 to +120.
-The determination of Ramadan is now purely algorithmic (Kuwaiti tabular
-calendar) with a user-configurable `hijri_offset_days` (-3 to +3) on
-`svc_config` to align the calculation with local mosque announcements. This
-replaced the previous table-based `ramadan_windows[]` approach.
+**Ramadan +120 min (shipped, feat/hijri-umalqura-option):** The engine supports a
+runtime `is_ramadan` flag that switches Umm al-Qura Isha from +90 to +120. The
+determination of Ramadan is now algorithmic, supporting both the **Kuwaiti
+tabular calendar** and the **Umm al-Qura (KSA) calendar** via a 158-year bitmask.
+A user-configurable `hijri_offset_days` (-3 to +3) aligns the calculation with
+local mosque announcements. This replaced the previous table-based
+`ramadan_windows[]` approach.
 
 No dedicated fixture added here — the existing `test_golden`
 already exercises the UMM_AL_QURA method path against the same
@@ -349,7 +350,7 @@ At 42–52°N, sun never reaches −15° or −18° in peak summer → all mosqu
 | C | `summer_isha_offset_min` — fixed offset from Maghrib in peak summer | Config | Medium | Medium |
 | D | `/api/mosque-preview` — user provides calendar, system shows calculated-vs-published diff | HTTP | Large | Low |
 | E | Grow this file to 5-10 more mosques (UK, US, EU, Middle East) | Docs | Incremental | Low |
-| F | Umm Al-Qura Ramadan +120 min Isha switch — **shipped** (user override + confirmed KSA table 1447/1448 AH; tabular prediction beyond 1448 AH remains follow-up). | Config | Medium | Done |
+| F | Umm Al-Qura Ramadan +120 min Isha switch — **shipped** (user override + confirmed KSA table 1447/1448 AH; selectable Umm al-Qura method backed by a 158-year KSA bitmask, 1343-1500 AH). | Config | Medium | Done |
 
 ---
 

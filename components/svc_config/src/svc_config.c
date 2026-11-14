@@ -46,6 +46,7 @@ static const char *TAG = "svc_config";
 #define NVS_KEY_SEASON_WINTER_M "season_win_m"
 #define NVS_KEY_SEASON_WINTER_D "season_win_d"
 #define NVS_KEY_HIJRI_OFFSET    "hijri_off"
+#define NVS_KEY_HIJRI_METHOD    "hijri_meth"
 static const char *const k_adhan_offset_keys[SVC_CONFIG_PRAYER_COUNT] = {
     "adhan_off_0",
     "adhan_off_1",
@@ -221,6 +222,7 @@ static void set_defaults(svc_config_t *c)
     }
     c->auto_brightness   = false;
     c->night_lamp_enable = false;
+    c->hijri_calc_method = 1;
     apply_preset_unlocked(c, SVC_CONFIG_PRESET_UK);
 }
 
@@ -466,6 +468,16 @@ static void load_from_nvs_unlocked(void)
             s_cache.hijri_offset_days = h_off;
         } else {
             ESP_LOGW(TAG, "stored hijri_offset_days %d out of range -- using 0", h_off);
+        }
+    }
+
+    // Hijri method
+    uint8_t h_meth = 1;
+    if (nvs_get_u8(s_nvs, NVS_KEY_HIJRI_METHOD, &h_meth) == ESP_OK) {
+        if (h_meth <= 1) {
+            s_cache.hijri_calc_method = h_meth;
+        } else {
+            ESP_LOGW(TAG, "stored hijri_calc_method %u out of range -- using 1", h_meth);
         }
     }
 }
@@ -944,11 +956,32 @@ esp_err_t svc_config_set_hijri_offset(int8_t offset_days)
     return err;
 }
 
-// Wrapper to use the new algorithmic Hijri calendar.
+esp_err_t svc_config_set_hijri_method(uint8_t method)
+{
+    if (!s_lock) return ESP_ERR_INVALID_STATE;
+    if (method > 1) return ESP_ERR_INVALID_ARG;
+
+    if (!lock_take()) return ESP_ERR_TIMEOUT;
+
+    s_cache.hijri_calc_method = method;
+
+    esp_err_t err = ESP_OK;
+    if (s_nvs_open) {
+        err = nvs_set_u8(s_nvs, NVS_KEY_HIJRI_METHOD, method);
+        if (err == ESP_OK) err = nvs_commit(s_nvs);
+    } else {
+        err = ESP_ERR_NVS_NOT_INITIALIZED;
+    }
+
+    lock_give();
+    return err;
+}
+
+// Wrapper to use the selected Hijri calendar method.
 // The actual math lives in hijri_calendar.c.
 bool svc_config_is_ramadan(const svc_config_t *cfg, int year, int month, int day)
 {
     if (!cfg) return false;
-    return hijri_is_ramadan(year, month, day, cfg->hijri_offset_days);
+    return hijri_is_ramadan_method(year, month, day, cfg->hijri_offset_days, cfg->hijri_calc_method);
 }
 

@@ -154,10 +154,15 @@ typedef struct {
     bool     auto_brightness;
     bool     night_lamp_enable;
 
-    // User offset for the algorithmic Hijri calendar, in days (-3 to +3).
-    // Applied to the tabular conversion to match local mosque announcements.
-    // Placed at the end of the struct to preserve existing field offsets.
+    // User offset for the Hijri calendar, in days (-3 to +3).
+    // Applied to the conversion to match local mosque announcements.
     int8_t   hijri_offset_days;
+
+    // Calculation method for the Hijri date.
+    // 0 = Tabular (Kuwaiti algorithm)
+    // 1 = Umm al-Qura (KSA bitmask table) [DEFAULT]
+    // Placed at the end of the struct to preserve existing field offsets.
+    uint8_t  hijri_calc_method;
 } svc_config_t;
 
 /* --------------------------------------------------------------------------
@@ -182,7 +187,8 @@ esp_err_t svc_config_start(void);
 esp_err_t svc_config_get(svc_config_t *out);
 
 // True iff (year, month, day) is inside Ramadan for cfg, using the
-// algorithmic Gregorian-to-Hijri conversion (Kuwaiti algorithm).
+// algorithmic Gregorian-to-Hijri conversion selected by
+// cfg->hijri_calc_method (0 = Kuwaiti tabular, 1 = Umm al-Qura KSA).
 //
 // The conversion applies cfg->hijri_offset_days (-3 to +3) to align
 // with local mosque announcements.
@@ -247,9 +253,13 @@ esp_err_t svc_config_set_high_lat_rule(uint8_t rule);
 esp_err_t svc_config_set_adhan_offset(svc_config_prayer_t p, uint16_t minutes);
 esp_err_t svc_config_set_zawal_buffer(uint16_t minutes);
 
-// Set the user offset for the algorithmic Hijri calendar.
+// Set the user offset for the Hijri calendar.
 // Valid range is -3 to +3 days. Persisted to NVS.
 esp_err_t svc_config_set_hijri_offset(int8_t offset_days);
+
+// Set the Hijri calendar calculation method.
+// 0 = Tabular (Kuwaiti), 1 = Umm al-Qura (KSA). Persisted to NVS.
+esp_err_t svc_config_set_hijri_method(uint8_t method);
 
 esp_err_t svc_config_set_auto_brightness(bool enabled);
 esp_err_t svc_config_set_night_lamp(bool enabled);
