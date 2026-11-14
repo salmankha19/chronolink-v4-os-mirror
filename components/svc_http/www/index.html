@@ -97,6 +97,23 @@
       <option value="4">Angle Based</option>
     </select>
 
+    <label>Hijri Calendar Method</label>
+    <select id="hijri_method">
+      <option value="1">Umm al-Qura (Saudi)</option>
+      <option value="0">Tabular (Kuwaiti)</option>
+    </select>
+
+    <label>Hijri Offset (Days)</label>
+    <select id="hijri_offset">
+      <option value="-3">-3</option>
+      <option value="-2">-2</option>
+      <option value="-1">-1</option>
+      <option value="0">0 (Default)</option>
+      <option value="1">+1</option>
+      <option value="2">+2</option>
+      <option value="3">+3</option>
+    </select>
+
     <div id="custom_angles_div" style="display:none; margin-top:15px; background:#fff3cd; padding:10px; border-radius:4px; border:1px solid #ffeeba;">
       <label style="margin-top:0;">Custom Fajr Angle (0-30°)</label>
       <input type="number" step="0.1" id="custom_fajr" value="18.0">
@@ -478,6 +495,8 @@
           document.getElementById('custom_isha').value = (data.custom_isha_angle !== null && data.custom_isha_angle !== undefined) ? data.custom_isha_angle : 18.0;
           toggleCustomAngles();
           document.getElementById('zawal').value = data.zawal_buffer_min;
+          document.getElementById('hijri_method').value = data.hijri_calc_method;
+          document.getElementById('hijri_offset').value = data.hijri_offset_days;
 
           // 5.1b: adhan safety margins (array of 5)
           const adhan_off = data.adhan_offsets || [0,0,0,0,0];
@@ -543,6 +562,8 @@
         custom_fajr_angle: parseFloat(val('custom_fajr')),
         custom_isha_angle: parseFloat(val('custom_isha')),
         zawal_buffer_min: num('zawal'),
+        hijri_calc_method: parseInt(val('hijri_method'), 10),
+        hijri_offset_days: parseInt(val('hijri_offset'), 10),
 
         // 5.1b additions
         adhan_offsets: [

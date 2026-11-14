@@ -463,10 +463,11 @@ static void serialize_calc(const svc_config_t *cfg, const char *tz,
             (unsigned)cfg->jamat[p].summer.offset_min,
             (unsigned)cfg->jamat[p].round_min);
     }
-    // Hijri offset, appended after the jamat block so that changing it
-    // alters the calculation block and therefore trips
+    // Hijri offset and method, appended after the jamat block so that
+    // changing either one alters the calculation block and therefore trips
     // svc_timetable_needs_regen_from_config() on the next recalculate.
-    (void)serialize_calc_append(out, 1024, n, "],\"hijri_offset\":%d}", (int)cfg->hijri_offset_days);
+    (void)serialize_calc_append(out, 1024, n, "],\"hijri_offset\":%d,\"hijri_method\":%d}",
+                                (int)cfg->hijri_offset_days, (int)cfg->hijri_calc_method);
 }
 
 /* Read SVC_TIMETABLE_PATH into a private temporary and install it under

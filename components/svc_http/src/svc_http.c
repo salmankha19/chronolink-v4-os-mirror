@@ -294,6 +294,7 @@ static esp_err_t get_config_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(season, "winter_start_day",   cfg.season.winter_start_day);
 
     cJSON_AddNumberToObject(root, "hijri_offset_days", cfg.hijri_offset_days);
+    cJSON_AddNumberToObject(root, "hijri_calc_method", cfg.hijri_calc_method);
 
     esp_err_t err = send_json(req, root);
     cJSON_Delete(root);
@@ -583,6 +584,17 @@ static esp_err_t post_config_handler(httpd_req_t *req)
             APPLY(svc_config_set_hijri_offset((int8_t)v));
         } else {
             ESP_LOGW(TAG, "rejected hijri_offset_days: not integral in [-3,3]");
+            if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    cJSON *hijri_meth = cJSON_GetObjectItem(root, "hijri_calc_method");
+    if (hijri_meth) {
+        double v;
+        if (json_get_uint_range(hijri_meth, 0, 1, &v)) {
+            APPLY(svc_config_set_hijri_method((uint8_t)v));
+        } else {
+            ESP_LOGW(TAG, "rejected hijri_calc_method: not integral in [0,1]");
             if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
         }
     }

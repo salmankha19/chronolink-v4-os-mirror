@@ -328,7 +328,7 @@ User files never auto-regenerate (handoff dec. 7).
 
 **Schema-version regen (PR #135, extended by the Ramadan PR).** The
 timetable file carries a `schema_version` at the top level; the current
-version is `SVC_TIMETABLE_SCHEMA_VER = 4`.
+version is `SVC_TIMETABLE_SCHEMA_VER = 5`.
 
 For **firmware-generated** files, regen is driven by the `calculation`
 block comparison described above, not by the version number. The two
@@ -360,6 +360,7 @@ Any file at the current version is trusted verbatim; any file below it
 either regenerates (firmware) or warns once (user upload).
 
 **v4 (feat/hijri-offset-days)** — Algorithmic Hijri calendar replaces `ramadan_windows[]`. The `calculation` block in the JSON now holds `"hijri_offset":N` instead of `"rw":[...]`. Firmware files auto-regen; user files warn once on load.
+**v5 (feat/hijri-umalqura-option)** — Added `hijri_calc_method` (0=Kuwaiti, 1=Umm al-Qura) to the config, allowing the user to choose the calculation method. The timetable `calculation` block now includes both `"hijri_offset":N` and `"hijri_method":N` (`SVC_TIMETABLE_SCHEMA_VER` is 5), so changing the method correctly triggers a timetable regeneration.
 
 **Tripwire (firmware files only, PR #125)**: every recalculate where a
 firmware-generated file supplied today's values compares against a fresh
@@ -686,8 +687,15 @@ stored offset alone"; present must be integral in [-3, +3] — a
 non-integral or out-of-range value is rejected, nothing is persisted for
 that field, and the request returns 400 with `partial_apply` (earlier
 fields in the same body are already applied; see the note in
-`svc_http.c`). Web UI exposure is a follow-up PR; this PR ships only the
-JSON contract.
+`svc_http.c`). The field is exposed in the web UI (`#hijri_offset`).
+
+Adds `hijri_calc_method` (`uint8_t`, 0 = Kuwaiti tabular, 1 = Umm al-Qura KSA;
+default 1, NVS key `hijri_meth`): selects which Hijri calendar `is_ramadan`
+uses. `POST /api/config` accepts the same field: absent means "leave the stored
+method alone"; present must be integral in [0, 1] — anything else is logged as
+`rejected hijri_calc_method`, nothing is persisted for that field, and the
+request returns 400 with `partial_apply`. Exposed in the web UI
+(`#hijri_method`).
 
 ### 10.3 `POST /api/config/preset`
 
