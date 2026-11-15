@@ -116,6 +116,31 @@ but the write was not confirmed. Restore it by hand with
 A run that never reaches its `finally:` block — Ctrl-C, adapter
 unplugged, board losing Wi-Fi mid-run — needs the same manual command.
 
+## Config seed for prayer-time scenarios
+
+Fire scenarios need to know what time a target prayer lands on the fake
+date. Since the CR harness-fix (Session B), scenarios declare `latitude`,
+`longitude`, and `method` class attributes, which the runner passes to
+`/debug/ntp` as extended query params:
+
+    /debug/ntp?host=<pc_ip>&lat=<float>&lon=<float>&method=<int>
+
+The firmware seeds these into `svc_config` BEFORE triggering the NTP
+sync, so both boots of a scenario use the scenario's own location.
+Scenarios that omit the three attributes keep the pre-Session-B
+behaviour: host-only injection, no config change.
+
+**All three or none.** Partial (`lat` without `lon`) returns
+`400 partial_config`. Invalid values return `400 bad_lat` / `bad_lon` /
+`bad_method`. The `400` is distinguished from the pre-existing
+`missing_host` / `bad_host` by the `reason` field, so client code can
+branch on it if needed.
+
+**The scenario's `start_utc` is coupled to its seed config.** Changing
+`latitude`, `longitude`, or `method` in a scenario shifts the target
+prayer's epoch, and `start_utc` must be recomputed to compensate. See the
+coupling comment in `scenarios/01_single_prayer_fire.py` for the pattern.
+
 ## Troubleshooting
 | Symptom | Fix |
 |---|---|

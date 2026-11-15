@@ -129,8 +129,22 @@ class DeviceController:
 
     # -- HTTP: NTP injection ----------------------------------------------
 
-    def set_ntp_host(self, host: str, timeout_s: float = 15.0) -> None:
+    def set_ntp_host(
+        self,
+        host: str,
+        timeout_s: float = 15.0,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        method: Optional[int] = None,
+    ) -> None:
         """Point the device's SNTP client at `host` via `/debug/ntp`.
+
+        Optional `lat`, `lon`, `method`: when all three are provided, the
+        firmware (Session B) seeds svc_config with them BEFORE running the
+        NTP sync, so the boot that lands here uses this location and
+        calculation method. All three must be given together; passing a
+        subset raises ValueError. Omitting all three preserves the
+        pre-Session-B host-only behaviour unchanged.
 
         timeout_s defaults to 15.0 because the handler blocks inside
         svc_time_sync_ntp_once(), which waits up to SVC_TIME_SYNC_WAIT_MS
@@ -158,7 +172,15 @@ class DeviceController:
                 "esp_ip not set. Pass esp_ip='192.168.x.x' to DeviceController()"
             )
 
-        url = f"http://{self.esp_ip}/debug/ntp?host={host}"
+        query = f"host={host}"
+        if lat is not None or lon is not None or method is not None:
+            if lat is None or lon is None or method is None:
+                raise ValueError(
+                    "set_ntp_host: lat, lon, and method must all be "
+                    "provided together (config seed is all-or-none)"
+                )
+            query += f"&lat={lat}&lon={lon}&method={method}"
+        url = f"http://{self.esp_ip}/debug/ntp?{query}"
         delays = list(NTP_404_RETRY_DELAYS_S)
         connect_retried = False
 

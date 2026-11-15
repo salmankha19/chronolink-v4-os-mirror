@@ -23,6 +23,6 @@ I (...) svc_scheduler: Dhuhr adhan due (epoch ..., now ...)
 
 | Label | Pattern | Deadline (fake s) | Min | Max |
 |---|---|---|---|---|
-| sync | `NTP sync ok` | 30 | 1 | 3 |
+| sync | `NTP sync ok \(network\): UTC 2026-10-31 11:49:\d{2}` | 30 | 1 | 3 |
 | dhuhr_fire | `svc_scheduler: Dhuhr adhan due` | 60 | 1 | 1 |
 | fajr_nofire | `svc_scheduler: Fajr adhan due` | none | 0 | 0 |

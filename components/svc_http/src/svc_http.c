@@ -1222,7 +1222,7 @@ done:
  * private to svc_time.c; anything at or above 64 is rejected by
  * svc_time_set_ntp_server() with ESP_ERR_INVALID_ARG, reported as a 500. */
 #define DEBUG_NTP_HOST_MAX   64
-#define DEBUG_NTP_QUERY_MAX  96
+#define DEBUG_NTP_QUERY_MAX  160
 
 /* GET /debug/ntp?host=<ip-or-hostname>
  *
@@ -1277,6 +1277,90 @@ static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
+    /* CR harness-fix (Session B): optional config seed via lat / lon /
+     * method query params. All three or none. When present, the seed is
+     * applied BEFORE the NTP sync below, so the prayer-times cache is
+     * rebuilt with the new location/method before /api/prayers is served
+     * to the harness. That makes the /debug/ntp contract deterministic:
+     * after a 200 response, /api/prayers reflects the freshly seeded
+     * config.
+     *
+     * The extended query is ~115 chars worst case (64-char host, ±180°
+     * lon, 1-digit method, all separators). DEBUG_NTP_QUERY_MAX is 160
+     * (bumped in 1a) which gives plenty of headroom. */
+    char param_buf[32];
+    bool have_lat    = (httpd_query_key_value(query, "lat",    param_buf, sizeof(param_buf)) == ESP_OK);
+    bool have_lon    = (httpd_query_key_value(query, "lon",    param_buf, sizeof(param_buf)) == ESP_OK);
+    bool have_method = (httpd_query_key_value(query, "method", param_buf, sizeof(param_buf)) == ESP_OK);
+    bool seed_config = false;
+    double seed_lat  = 0.0;
+    double seed_lon  = 0.0;
+    int    seed_method = 0;
+
+    if (have_lat || have_lon || have_method) {
+        if (!(have_lat && have_lon && have_method)) {
+            ESP_LOGW(TAG, "debug/ntp: partial config (lat=%d lon=%d method=%d)",
+                     (int)have_lat, (int)have_lon, (int)have_method);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"partial_config\"}");
+            return ESP_OK;
+        }
+
+        char *end = NULL;
+        (void)httpd_query_key_value(query, "lat", param_buf, sizeof(param_buf));
+        seed_lat = strtod(param_buf, &end);
+        if (end == param_buf || *end != '\0' ||
+            !(seed_lat >= -90.0 && seed_lat <= 90.0)) {
+            ESP_LOGW(TAG, "debug/ntp: rejected lat '%s'", param_buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"bad_lat\"}");
+            return ESP_OK;
+        }
+
+        end = NULL;
+        (void)httpd_query_key_value(query, "lon", param_buf, sizeof(param_buf));
+        seed_lon = strtod(param_buf, &end);
+        if (end == param_buf || *end != '\0' ||
+            !(seed_lon >= -180.0 && seed_lon <= 180.0)) {
+            ESP_LOGW(TAG, "debug/ntp: rejected lon '%s'", param_buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"bad_lon\"}");
+            return ESP_OK;
+        }
+
+        end = NULL;
+        (void)httpd_query_key_value(query, "method", param_buf, sizeof(param_buf));
+        long m = strtol(param_buf, &end, 10);
+        if (end == param_buf || *end != '\0' ||
+            m < 0 || m >= (long)SVC_CONFIG_METHOD_COUNT) {
+            ESP_LOGW(TAG, "debug/ntp: rejected method '%s'", param_buf);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"bad_method\"}");
+            return ESP_OK;
+        }
+        seed_method = (int)m;
+
+        esp_err_t loc_err  = svc_config_set_location(seed_lat, seed_lon);
+        esp_err_t meth_err = svc_config_set_method((svc_config_method_t)seed_method);
+        if (loc_err != ESP_OK && loc_err != ESP_ERR_NVS_NOT_INITIALIZED) {
+            ESP_LOGE(TAG, "debug/ntp: set_location failed: %s",
+                     esp_err_to_name(loc_err));
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"set_location_failed\"}");
+            return ESP_OK;
+        }
+        if (meth_err != ESP_OK && meth_err != ESP_ERR_NVS_NOT_INITIALIZED) {
+            ESP_LOGE(TAG, "debug/ntp: set_method failed: %s",
+                     esp_err_to_name(meth_err));
+            httpd_resp_set_status(req, "500 Internal Server Error");
+            httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"set_method_failed\"}");
+            return ESP_OK;
+        }
+        seed_config = true;
+        ESP_LOGW(TAG, "debug/ntp: TEST HOOK -- config seeded lat=%.6f lon=%.6f method=%d",
+                 seed_lat, seed_lon, seed_method);
+    }
+
     ESP_LOGW(TAG, "debug/ntp: TEST HOOK -- NTP slot 0 -> '%s'", host);
 
     err = svc_time_set_ntp_server(0, host);
@@ -1308,9 +1392,13 @@ static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
            "skipped, clock already fresh" from a real failure. */
         (void)svc_time_get_epoch(&epoch);
         ESP_LOGI(TAG, "debug/ntp: sync skipped, previous sync still fresh");
+        if (seed_config) {
+            svc_prayer_engine_service_recalculate();
+        }
         snprintf(body, sizeof(body),
-                 "{\"status\":\"skipped\",\"host\":\"%s\",\"reason\":\"fresh\",\"epoch\":%lld}",
-                 host, (long long)epoch);
+                 "{\"status\":\"skipped\",\"host\":\"%s\",\"reason\":\"fresh\",\"epoch\":%lld%s}",
+                 host, (long long)epoch,
+                 seed_config ? ",\"config_seeded\":true" : "");
         httpd_resp_set_status(req, "200 OK");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, body);
@@ -1329,9 +1417,13 @@ static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
 
     (void)svc_time_get_epoch(&epoch);
     ESP_LOGI(TAG, "debug/ntp: synced from '%s', epoch %lld", host, (long long)epoch);
+    if (seed_config) {
+        svc_prayer_engine_service_recalculate();
+    }
     snprintf(body, sizeof(body),
-             "{\"status\":\"ok\",\"host\":\"%s\",\"epoch\":%lld}",
-             host, (long long)epoch);
+             "{\"status\":\"ok\",\"host\":\"%s\",\"epoch\":%lld%s}",
+             host, (long long)epoch,
+             seed_config ? ",\"config_seeded\":true" : "");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, body);
     return ESP_OK;
