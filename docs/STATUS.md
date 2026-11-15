@@ -23,14 +23,22 @@ not.** Where another doc mentions a gap, this file has the detail.
 - **Boot:** logging, factory reset (parameter flag or
   `POST /api/factory-reset` persistent request), NVS, FATFS `/storage`,
   OTA partition logging, hand-off to kernel.
-- **App rollback (PR 4.6):** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
+- **App rollback (PR 4.6, extended 2026-11-15):** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
   `app_main()` calls `esp_ota_mark_app_valid_cancel_rollback()` at the
   end, after every service (`svc_config`, `svc_time`, `svc_timetable`,
   `svc_prayer_engine`, `svc_network`, `svc_http`, `svc_scheduler`) has
-  started. An image that crashes or resets before that point is reverted
-  to the previous slot on the next reset. (#129 R2 moved this call from
-  `boot_manager_init()`, where it ran before any service was up, so
-  crashes in service init were not caught by rollback.)
+  started. (#129 R2 moved this call from `boot_manager_init()`, where it
+  ran before any service was up.) An image that crashes or resets before
+  that point is reverted to the previous slot on the next reset.
+  **(CR #3, 2026-11-15)** Further gate: if `svc_http_start()` fails,
+  `app_main()` calls `esp_ota_mark_app_invalid_rollback_and_reboot()`
+  instead of mark-valid, because a firmware with no HTTP server has no
+  recovery path (no config UI, no OTA endpoint, no reboot endpoint). The
+  other services stay non-fatal: svc_time/svc_network/svc_scheduler
+  failures leave the clock running and the device recoverable on the
+  next flash. A "stability delay" (mark valid after N seconds of clean
+  run) is deliberately not added — it would delay every healthy boot
+  for no failure mode it would actually catch.
 - **OTA over HTTP (PR 4.7):** `POST /api/ota` in `svc_http` streams a
   raw firmware image (`application/octet-stream`) to the inactive OTA
   slot via `esp_ota_begin` / `esp_ota_write` / `esp_ota_end` /
@@ -550,7 +558,7 @@ readers.
 |---|---|---|
 | `BOOT_FLAG_FACTORY_RESET` → `do_factory_reset()` | Wipe NVS + erase `/storage` partition (reformatted on next boot), reboot. **Not an image reset.** | Exists in `boot_manager.c`; producers: caller-supplied flag, `POST /api/factory-reset` (PR 4.5). #129 (R3): erase via `esp_partition_erase_range()` so a cleanly-mountable FS is still wiped |
 | `factory` partition | Known-good golden image slot | Not present, **not planned** |
-| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | **Enabled** (PR 4.6); `main.c` calls `esp_ota_mark_app_valid_cancel_rollback()` at the end of `app_main()`, after all services start (#129 R2) |
+| `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` | Auto-revert a bad OTA to the previous slot | **Enabled** (PR 4.6, extended 2026-11-15); `main.c` calls `esp_ota_mark_app_valid_cancel_rollback()` at the end of `app_main()`, after all services start (#129 R2). **(CR #3, 2026-11-15)** Gated on `svc_http_start()`: if it fails, `esp_ota_mark_app_invalid_rollback_and_reboot()` runs instead, since a firmware with no HTTP server has no recovery path |
 | USB reflash | Manual recovery via `esptool.py` | Always available |
 
 ### Other planned boot work

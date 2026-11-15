@@ -116,7 +116,17 @@ The mechanism:
    This transitions the image to **valid** and cancels the rollback
    timer. (#129 R2 moved this call from `boot_manager_init()`, where
    it ran before any service was up, so crashes in service init were
-   not caught by rollback.)
+   not caught by rollback.) **(CR #3, 2026-11-15)** The call is gated
+   on `svc_http_start()` succeeding: a firmware with no HTTP server
+   has no recovery path (no config UI, no OTA endpoint, no reboot
+   endpoint). If `svc_http_start()` fails, `app_main()` calls
+   `esp_ota_mark_app_invalid_rollback_and_reboot()` instead and parks
+   in a safe loop; the image is never marked valid. The other services
+   remain non-fatal — the clock still runs, adhans are skipped, and
+   offline behaviour degrades gracefully. A "stability delay" (mark
+   valid after N seconds of clean run) is deliberately not added: it
+   would delay every healthy boot for no failure mode it would
+   actually catch.
 3. If the new image crashes, hangs, or fails any earlier init step
    (`HAL_Init()`, `core_os_init()`, `core_os_start()`) and resets before
    reaching that call, the bootloader reverts to the previous slot on
