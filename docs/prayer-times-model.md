@@ -675,13 +675,36 @@ computation failed for that date).
 
 **Hijri date** (`hijri`): the Islamic calendar date for the target day,
 computed from `hijri_offset_days` and `hijri_calc_method` in `svc_config`.
-`month_name` is the full English name. The clock face uses the short form
-(`Jumada I`, `Dhul Hijjah`) via `hijri_month_name_short`; the web UI uses
-the full form + " AH". Not present when `valid` is false. During Ramadan
+`month_name` is the full English name. The clock face uses numeric
+`DD/MM/YYYY` (`18/05/1447`) — uniform 10 characters, language-agnostic,
+Latin digits; the web UI uses the full English form + " AH"
+(`18 Jumada al-Ula 1447 AH`) from the API's `month_name`. Not present when
+`valid` is false. During Ramadan
 (`hijri.month == 9`), the entry is the natural Ramadan day counter — the
 UI reads `hijri.day` directly. `svc_config_get_hijri_date()` is the public
 wrapper; `hijri_calendar.{c,h}` stays private to `svc_config` so the table
 and the arithmetic are not duplicated.
+
+**Format specification:**
+
+| Consumer | Format | Example | Rationale |
+|---|---|---|---|
+| Clock face (panel) | `DD/MM/YYYY` — day-first, zero-padded, Latin digits (`U+0030..U+0039`) | `18/05/1447` | Uniform 10 chars; language-agnostic; no non-English month bitmaps needed |
+| Web UI | `<day> <full-month-name> <year> AH` | `18 Jumada al-Ula 1447 AH` | Natural for reading; browser font stack shapes Arabic/Urdu correctly |
+
+The two forms derive from the **same three numeric fields** (`hijri_day`,
+`hijri_month`, `hijri_year`) — the numeric is canonical, the string is
+derivable. When a `ui_language` config field is added (EN/AR/UR), the
+panel's numeric format is **invariant** (`18/05/1447` reads the same in
+every script and every locale; Latin digits are the international
+convention even in Arabic-speaking countries — passports, flight tickets,
+bank statements all use them). Only the web UI switches languages, using
+the browser's own locale-aware formatting against the `hijri_month`
+numeric. The `hijri_month_name` / `hijri_month_name_short` fields in
+`svc_prayer_engine_times_t` are the English default views, populated for
+the web UI and available as the source for an alternate word-form panel
+mode if ever needed (which would require pre-rendered non-English month
+bitmaps — a deferred, ~50 KB-per-language concern documented in §11).
 
 ### 10.2 `GET /api/config`
 
@@ -731,6 +754,7 @@ Each is straightforward to add later without changing 5.1a's schema
 | **Hysteresis** (distinct from rounding) | Small-medium | Needs persistent state; rounding mechanism usually suffices |
 | **Multi-day lookahead** (2+ days) | Small | One more `svc_prayer_engine_calculate()` per day; recompute cost grows |
 | **Third season** (Ramadan as a season) | Medium | Season becomes array; NVS migration |
+| **Non-English text on the physical panel** (Arabic/Urdu month names, UI labels) | Medium (deferred) | Numeric `18/05/1447` is language-agnostic and needs no bitmaps; a word-form panel in Arabic/Urdu needs ~50 KB per language of pre-rendered month bitmaps plus RTL layout. The web UI doesn't need this — the browser shapes correctly. |
 
 None of these are in 5.1a. Each has an entry here so a future PR can
 reference this document rather than re-deriving the model.

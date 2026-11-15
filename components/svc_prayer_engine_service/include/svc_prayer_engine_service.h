@@ -96,7 +96,10 @@ typedef struct {
     /* Hijri date (Islamic calendar) for date_yyyymmdd. Populated from
        cfg's hijri_offset_days + hijri_calc_method. hijri_month_name is
        the full English form (e.g. "Jumada al-Ula") for the web UI;
-       hijri_month_name_short is "Jumada I" for the clock face. All
+       hijri_month_name_short is "Jumada I". As of the numeric-format
+       change the clock face draws DD/MM/YYYY from hijri_day/month/year
+       and no longer reads hijri_month_name_short; it is still populated
+       so a future ui_language PR can repopulate it per language. All
        fields are zero when the date cannot be computed. During Ramadan
        (hijri_month == 9), these fields are the natural Ramadan day
        counter — no separate field is needed. */
