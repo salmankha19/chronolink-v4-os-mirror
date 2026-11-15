@@ -685,6 +685,12 @@ UI reads `hijri.day` directly. `svc_config_get_hijri_date()` is the public
 wrapper; `hijri_calendar.{c,h}` stays private to `svc_config` so the table
 and the arithmetic are not duplicated.
 
+**Hijri date boundary:** the `hijri` object maps the *civil Gregorian date*
+to Hijri — it advances at local midnight, not at Maghrib. This matches the
+convention used by IslamicFinder, Muslim Pro, Google Calendar, and printed
+calendar converters. The Islamic theological day begins at Maghrib; a
+sunset-adjusted display is a documented future option (see §11).
+
 **Format specification:**
 
 | Consumer | Format | Example | Rationale |
@@ -755,6 +761,7 @@ Each is straightforward to add later without changing 5.1a's schema
 | **Multi-day lookahead** (2+ days) | Small | One more `svc_prayer_engine_calculate()` per day; recompute cost grows |
 | **Third season** (Ramadan as a season) | Medium | Season becomes array; NVS migration |
 | **Non-English text on the physical panel** (Arabic/Urdu month names, UI labels) | Medium (deferred) | Numeric `18/05/1447` is language-agnostic and needs no bitmaps; a word-form panel in Arabic/Urdu needs ~50 KB per language of pre-rendered month bitmaps plus RTL layout. The web UI doesn't need this — the browser shapes correctly. |
+| **Sunset-adjusted Hijri date** (Islamic day boundary at Maghrib instead of civil midnight) | Small-medium (deferred) | Display-only variant: advance the Hijri string at Maghrib via `EVENT_PRAYER_TIME_REACHED` with `prayer_id == 3` (~30 lines). Full variant also switches `is_ramadan` per-prayer so Isha on the eve of Ramadan uses the +120 interval (~100 lines + test changes on 2 days/year). Not needed while civil-date mapping matches what users see on their phones; revisit if a masjid specifically requires the display to advance at Maghrib. |
 
 None of these are in 5.1a. Each has an entry here so a future PR can
 reference this document rather than re-deriving the model.

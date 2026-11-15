@@ -105,7 +105,14 @@ int scheduler_evaluate(int64_t now_utc_epoch,
         /* Skip prayers more than SCHEDULER_MAX_LATENESS_S in the past --
            treat as missed rather than firing a burst. */
         if (now_utc_epoch - epoch > SCHEDULER_MAX_LATENESS_S) {
-            state->last_fired_epoch[p] = epoch;   /* mark fired to avoid retry */
+            /* Marker advances only. If a config change moved this prayer
+               earlier and then back within 2 minutes, and both rearm
+               events were dropped (bus full), a naive `= epoch` here
+               would regress the marker and let the prayer double-fire.
+               Treat the marker as monotonic. */
+            if (epoch > state->last_fired_epoch[p]) {
+                state->last_fired_epoch[p] = epoch;
+            }
             continue;
         }
 

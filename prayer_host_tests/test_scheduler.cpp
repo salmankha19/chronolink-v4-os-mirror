@@ -282,6 +282,35 @@ static void test_midnight_prayer(void)
           "midnight fajr does not re-fire on the next tick");
 }
 
+static void test_marker_never_regresses(void)
+{
+    /* CR #6: a dropped rearm event plus a config change that moves a
+       prayer earlier and then back can reach the "too late" branch with
+       an epoch lower than the current marker. The marker must not
+       regress — otherwise the earlier epoch can fire as if new. */
+    scheduler_state_t st;
+    uint8_t fired[5];
+    memset(&st, 0, sizeof st);
+    st.last_fired_epoch[0] = at(10, 0);       /* fired at 10:00 */
+    scheduler_day_t today = make_day(0, true, 36000, 43200, 54000, 64800, 72000);
+
+    /* Evaluate far past the lateness cap with an EARLIER epoch (Fajr
+       moved 30 min earlier, rearm dropped). */
+    today.sec[0] = 36000u - 1800u;
+    int n = scheduler_evaluate(at(23, 0), &today, &st, fired);
+    CHECK(n == 0, "marker regression: nothing fires");
+    CHECK(st.last_fired_epoch[0] == at(10, 0),
+          "marker regression: earlier epoch does not lower the marker");
+
+    /* Non-regression: unchanged marker still fires normally when the
+       epoch legitimately advances. */
+    memset(&st, 0, sizeof st);
+    today.sec[0] = 36000u;
+    n = scheduler_evaluate(at(10, 0), &today, &st, fired);
+    CHECK(n == 1 && fired[0] == 0, "marker advances normally");
+    CHECK(st.last_fired_epoch[0] == at(10, 0), "marker records new epoch");
+}
+
 static void test_premark_grace(void)
 {
     scheduler_day_t today = make_day(0, true, 36000, 43200, 54000, 64800, 72000);
@@ -459,6 +488,7 @@ int main(void)
     test_config_reset();
     test_unscheduled_and_invalid();
     test_midnight_prayer();
+    test_marker_never_regresses();
     test_premark_grace();
     test_lateness_limit();
     test_isha_rollover();
