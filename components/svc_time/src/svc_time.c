@@ -132,6 +132,12 @@ static char                s_servers[SVC_TIME_NTP_SLOTS][SVC_TIME_NTP_HOST_MAX];
    deinitialised. */
 static char                s_lwip_servers[SVC_TIME_NTP_SLOTS][SVC_TIME_NTP_HOST_MAX];
 
+/* CR #5: set when the last RTC write could not be verified by reading it
+   back. tick_snapshot() and run_hourly_rtc_correction() skip RTC when
+   this is true, so a broken RTC write cannot overwrite fresh NTP time.
+   Cleared on any successful verified write. Guarded by s_state_lock. */
+static bool                s_rtc_write_failed = false;
+
 static size_t              s_backoff_idx      = 0;
 static int64_t             s_last_sync_us     = 0;
 static time_t              s_last_sync_time   = 0;   /* UTC epoch of last successful sync */
@@ -232,6 +238,20 @@ static bool utc_to_local(rtc_time_t *out, const rtc_time_t *utc)
     }
     *out = tm_to_rtc(&tm_local);
     return true;
+}
+
+/* Seconds-tolerant comparison for RTC write verification. A BCD write
+   completes in a few ms; a same-second readback may straddle a rollover
+   from :59 to :00, so allow 1 second of drift. Anything else is a real
+   mismatch. */
+static bool rtc_roughly_equal(const rtc_time_t *a, const rtc_time_t *b)
+{
+    if (!a || !b) return false;
+    if (a->year != b->year || a->month != b->month || a->day != b->day ||
+        a->hours != b->hours || a->minutes != b->minutes) return false;
+    int diff = (int)a->seconds - (int)b->seconds;
+    if (diff < 0) diff = -diff;
+    return diff <= 1;
 }
 
 static void apply_timezone(void)
@@ -539,11 +559,24 @@ static esp_err_t do_ntp_sync(const char *why, bool is_daily_sync)
        The oscillator-stop flag is cleared only once a trustworthy time has
        arrived, and never before. */
     if (hil_rtc_set_time(&utc)) {
-        if (!hil_rtc_clear_lost_power_flag()) {
-            ESP_LOGW(TAG, "hil_rtc_clear_lost_power_flag() failed -- OSF may keep tripping");
+        /* CR #5: verify by reading back. A successful-looking write that
+           does not read back correctly means tick_snapshot() would
+           overwrite the fresh NTP time with the stale RTC on the next
+           tick, silently reverting the clock. Treat as failed. */
+        rtc_time_t verify = {0};
+        if (!hil_rtc_get_time(&verify) || !rtc_roughly_equal(&utc, &verify)) {
+            ESP_LOGW(TAG, "RTC write verification failed -- "
+                          "NTP time kept in RAM only");
+            s_rtc_write_failed = true;
+        } else {
+            s_rtc_write_failed = false;
+            if (!hil_rtc_clear_lost_power_flag()) {
+                ESP_LOGW(TAG, "hil_rtc_clear_lost_power_flag() failed -- OSF may keep tripping");
+            }
         }
     } else {
         ESP_LOGW(TAG, "hil_rtc_set_time() failed (no RTC?) -- UTC kept in RAM only");
+        s_rtc_write_failed = true;
     }
     snapshot_store_locked(&utc, SVC_TIME_STATE_NTP_SYNCED);
     s_snapshot.rtc_untrusted = false; /* NTP overrides RTC */
@@ -657,7 +690,8 @@ static const char *tick_snapshot(void)
         state_unlock();
         return NULL;
     }
-    if (hil_rtc_get_time(&rtc_now) && utc_to_epoch(&rtc_now, &epoch)) {
+    if (!s_rtc_write_failed &&
+        hil_rtc_get_time(&rtc_now) && utc_to_epoch(&rtc_now, &epoch)) {
         source = "RTC";
     } else if (s_snapshot.state == SVC_TIME_STATE_NTP_SYNCED) {
         epoch = time(NULL);
@@ -757,6 +791,14 @@ static void run_hourly_rtc_correction(void)
     time_t     sys_epoch;
     long long  drift;
     struct timeval tv;
+
+    /* CR #5: if the last RTC write failed verification, the RTC is not
+       authoritative — snapping the system clock to it would undo a good
+       NTP sync. Skip until a future verified write clears the flag. */
+    if (s_rtc_write_failed) {
+        ESP_LOGD(TAG, "hourly correction: RTC write failed since last NTP, skipping");
+        return;
+    }
 
     if (!hil_rtc_get_time(&rtc_utc)) {
         ESP_LOGD(TAG, "hourly correction: RTC read failed, skipping");
