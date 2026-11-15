@@ -71,7 +71,7 @@ static bool cache_get_key(uint32_t *date, int16_t *offset)
     return ok;
 }
 
-/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 120 bytes,
+/* The event is a SIGNAL ONLY -- svc_prayer_engine_times_t is 156 bytes,
    event_t.data is 32 bytes. Consumers must call
    svc_prayer_engine_service_get_times() to read the full snapshot. */
 static void publish_times_updated(const svc_prayer_engine_times_t *t)
@@ -429,6 +429,37 @@ esp_err_t svc_prayer_engine_service_recalculate(void)
 
     /* Source tag. */
     result.source = (uint8_t)svc_timetable_get_source();
+
+    /* Hijri date (Islamic calendar) for today. Populates the
+       hijri_{year,month,day} fields plus full and short month names.
+       Zero when the date cannot be computed (out of supported range). */
+    {
+        int h_year = 0, h_month = 0, h_day = 0;
+        char h_full[16]  = {0};
+        char h_short[16] = {0};
+        if (svc_config_get_hijri_date(&cfg,
+                                      (int)snap.local.year,
+                                      (int)snap.local.month,
+                                      (int)snap.local.day,
+                                      &h_year, &h_month, &h_day,
+                                      h_full, h_short)) {
+            result.hijri_year  = (uint16_t)h_year;
+            result.hijri_month = (uint8_t)h_month;
+            result.hijri_day   = (uint8_t)h_day;
+            /* strncpy(dst, src, sizeof(dst)-1) does not NUL-terminate
+               when the source length is >= sizeof(dst)-1. Month 6
+               ("Jumada al-Thani", 15 chars) hits that boundary every
+               year. The explicit NUL below is defence-in-depth against a
+               future edit that removes the result = {0} initialiser, and
+               silences -Wstringop-truncation in LTO builds. */
+            strncpy(result.hijri_month_name,       h_full,
+                    sizeof(result.hijri_month_name) - 1);
+            result.hijri_month_name[sizeof(result.hijri_month_name) - 1] = '\0';
+            strncpy(result.hijri_month_name_short, h_short,
+                    sizeof(result.hijri_month_name_short) - 1);
+            result.hijri_month_name_short[sizeof(result.hijri_month_name_short) - 1] = '\0';
+        }
+    }
 
     /* Tripwire: fires only on firmware-generated files, whose values are
        deterministic and should match the fresh calculation exactly (a >60 s

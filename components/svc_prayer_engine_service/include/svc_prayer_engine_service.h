@@ -8,7 +8,7 @@
  *
  * Consumers subscribe to EVENT_PRAYER_TIMES_UPDATED on the event bus.
  * IMPORTANT: that event is a SIGNAL ONLY -- the payload is truncated
- * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 120). Do NOT
+ * (event_t.data is 32 bytes, svc_prayer_engine_times_t is 156). Do NOT
  * memcpy the payload. On receiving the event, call
  * svc_prayer_engine_service_get_times() to read the full snapshot.
  *
@@ -92,6 +92,19 @@ typedef struct {
      * ----------------------------------------------------------------- */
     uint32_t sehri_end_sec;
     uint32_t iftar_sec;
+
+    /* Hijri date (Islamic calendar) for date_yyyymmdd. Populated from
+       cfg's hijri_offset_days + hijri_calc_method. hijri_month_name is
+       the full English form (e.g. "Jumada al-Ula") for the web UI;
+       hijri_month_name_short is "Jumada I" for the clock face. All
+       fields are zero when the date cannot be computed. During Ramadan
+       (hijri_month == 9), these fields are the natural Ramadan day
+       counter — no separate field is needed. */
+    uint16_t hijri_year;
+    uint8_t  hijri_month;
+    uint8_t  hijri_day;
+    char     hijri_month_name[16];
+    char     hijri_month_name_short[16];
 } svc_prayer_engine_times_t;
 
 /*

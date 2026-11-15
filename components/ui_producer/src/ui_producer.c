@@ -40,6 +40,7 @@
 #include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "font_ui_sans.h"
 
@@ -59,7 +60,7 @@ static const char *TAG = "ui_producer";
 #define UI_COLOR_WHITE HAL_GFX_ColorFromRGB(0xFF, 0xFF, 0xFF)
 
 static TaskHandle_t s_producer_task = NULL;
-static char s_last_text[64] = {0};
+static char s_last_text[128] = {0};   /* matches draw_key[128]; see 5e */
 
 /* --------------------------------------------------------------------------
  * Producer task (core 0)
@@ -154,9 +155,36 @@ static void ui_producer_task(void *arg)
                      sync, regen ? " *upd" : "");
         }
 
-        /* Unique hash including banner state forces redraws on transitions. */
-        char draw_key[64];
-        snprintf(draw_key, sizeof(draw_key), "%s|%d", buf, (int)show_banner);
+        /* Gregorian and Hijri date strings for the two lines below the
+           clock. Both empty when untrusted — the red banner covers that
+           state. */
+        char greg_date[24]  = {0};
+        char hijri_date[32] = {0};
+        if (!untrusted) {
+            time_t epoch = 0;
+            struct tm tm_local;
+            if (svc_time_get_epoch(&epoch) == ESP_OK &&
+                localtime_r(&epoch, &tm_local) != NULL) {
+                strftime(greg_date, sizeof(greg_date), "%a %d %b %Y", &tm_local);
+            }
+            svc_prayer_engine_times_t times;
+            if (svc_prayer_engine_service_get_times(&times) == ESP_OK &&
+                times.hijri_year != 0) {
+                snprintf(hijri_date, sizeof(hijri_date), "%u %s %u",
+                         (unsigned)times.hijri_day,
+                         times.hijri_month_name_short,
+                         (unsigned)times.hijri_year);
+            }
+        }
+
+        /* Unique hash including dates and banner state forces redraws on
+           transitions (midnight, RTC trust change, banner show/hide).
+           128 bytes covers the type-level worst case: buf[48] +
+           greg_date[24] + hijri_date[32] + separators + %d + NUL = 106,
+           plus headroom for future growth. */
+        char draw_key[128];
+        snprintf(draw_key, sizeof(draw_key), "%s|%s|%s|%d",
+                 buf, greg_date, hijri_date, (int)show_banner);
 
         if (strcmp(draw_key, s_last_text) == 0) {
             continue;
@@ -199,6 +227,30 @@ static void ui_producer_task(void *arg)
 
         dm_cmd_draw_text_scaled(&frame.cmds[n++], x0, y0,
                                 /* font_id */ 1, target_h, buf);
+
+        /* Two lines below the clock: Gregorian, then Hijri. Both at h=22,
+           centred. 14 px/glyph at h=22 matches the 2:3 aspect used for
+           the clock. Skipped entirely when untrusted — the banner covers
+           that state. */
+        if (greg_date[0] || hijri_date[0]) {
+            const uint16_t small_h  = 22;
+            const int16_t  small_gw = 14;
+            int16_t y_dates = y0 + (int16_t)target_h + 8;
+
+            if (greg_date[0]) {
+                int16_t g_w = (int16_t)(strlen(greg_date) * small_gw);
+                int16_t g_x = (int16_t)((W - g_w) / 2);
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], g_x, y_dates,
+                                        /* font_id */ 1, small_h, greg_date);
+                y_dates += 26;
+            }
+            if (hijri_date[0]) {
+                int16_t h_w = (int16_t)(strlen(hijri_date) * small_gw);
+                int16_t h_x = (int16_t)((W - h_w) / 2);
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], h_x, y_dates,
+                                        /* font_id */ 1, small_h, hijri_date);
+            }
+        }
 
         if (show_banner) {
             /* Two-line red banner at the bottom. */

@@ -659,6 +659,7 @@ Nested three-tier shape plus flat aliases for backward compatibility:
     "asr_yellow_sec": 63000
   },
   "ramadan": { "sehri_end_sec": 19920, "iftar_sec": 63900 },
+  "hijri": { "year": 1447, "month": 5, "day": 18, "month_name": "Jumada al-Ula" },
 
   // flat aliases (pre-5.1a compatibility):
   "fajr_sec": 19920, "dhuhr_sec": 47100, "asr_sec": 58200,
@@ -671,6 +672,16 @@ Nested three-tier shape plus flat aliases for backward compatibility:
 All times are seconds since local midnight of the target date. Sentinel
 `null` in any jamat entry means "no jamat" (anchor `DISABLED` or
 computation failed for that date).
+
+**Hijri date** (`hijri`): the Islamic calendar date for the target day,
+computed from `hijri_offset_days` and `hijri_calc_method` in `svc_config`.
+`month_name` is the full English name. The clock face uses the short form
+(`Jumada I`, `Dhul Hijjah`) via `hijri_month_name_short`; the web UI uses
+the full form + " AH". Not present when `valid` is false. During Ramadan
+(`hijri.month == 9`), the entry is the natural Ramadan day counter — the
+UI reads `hijri.day` directly. `svc_config_get_hijri_date()` is the public
+wrapper; `hijri_calendar.{c,h}` stays private to `svc_config` so the table
+and the arithmetic are not duplicated.
 
 ### 10.2 `GET /api/config`
 

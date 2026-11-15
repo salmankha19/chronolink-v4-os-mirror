@@ -87,8 +87,10 @@ location and method, and does something at each.
 - Phase 2 prayer-times refinement (seasonal jamat, presets, tomorrow
   notification) is specified in [prayer-times-model.md](prayer-times-model.md).
 - **Ramadan +120 UAQ Isha override** — Umm al-Qura Isha is +120 min on
-  Ramadan dates. Shipped in PR #145 using a purely algorithmic Hijri
-  conversion with a user offset.
+  Ramadan dates. Shipped in #146 (algorithmic Kuwaiti-tabular offset via
+  `hijri_offset_days`) and #147 (Umm al-Qura KSA bitmask via
+  `hijri_calc_method`, with confirmed 1447/1448 AH windows and tabular
+  fallback beyond 2076 CE). Covered by `test_hijri_calendar.cpp`.
 
 ---
 
