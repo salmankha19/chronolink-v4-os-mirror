@@ -173,6 +173,28 @@ void app_main(void)
        A "stable-run check" (delay N seconds before marking valid) is
        deliberately not added here; see PR #129 description. */
     {
+        /* CR #3: #129 (R2) gates on "all services started", which is too
+           weak — svc_time, svc_network, svc_scheduler failures are all
+           documented non-fatal (the clock still runs, adhans are just
+           skipped, offline behaviour degrades gracefully). But svc_http
+           failure means no recovery path: no config UI, no OTA endpoint,
+           no reboot endpoint. That is a genuinely bad image and the
+           bootloader should revert on next reset. Gate mark-valid on
+           http_err specifically; leave the other services non-fatal. */
+        if (http_err != ESP_OK) {
+            ESP_LOGE(TAG, "svc_http_start failed (%s) - NOT marking image valid, "
+                          "requesting rollback", esp_err_to_name(http_err));
+            esp_err_t rb_err = esp_ota_mark_app_invalid_rollback_and_reboot();
+            /* If not in OTA-verify state (fresh flash, or image already
+               valid), the call returns an error and does NOT reboot —
+               fall through to a safe loop. */
+            ESP_LOGE(TAG, "esp_ota_mark_app_invalid_rollback_and_reboot returned %s",
+                     esp_err_to_name(rb_err));
+            while (1) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        }
+
         esp_err_t ota_err = esp_ota_mark_app_valid_cancel_rollback();
         if (ota_err == ESP_OK) {
             ESP_LOGI(TAG, "OTA image marked valid (rollback cancelled)");
