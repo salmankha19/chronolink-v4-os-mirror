@@ -944,6 +944,12 @@ static esp_err_t get_prayers_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(ram, "sehri_end_sec", times.sehri_end_sec);
         cJSON_AddNumberToObject(ram, "iftar_sec",     times.iftar_sec);
 
+        cJSON *hijri = cJSON_AddObjectToObject(root, "hijri");
+        cJSON_AddNumberToObject(hijri, "year",       times.hijri_year);
+        cJSON_AddNumberToObject(hijri, "month",      times.hijri_month);
+        cJSON_AddNumberToObject(hijri, "day",        times.hijri_day);
+        cJSON_AddStringToObject(hijri, "month_name", times.hijri_month_name);
+
         /* Flat aliases for backward compatibility with pre-5.1a
            consumers. */
         cJSON_AddNumberToObject(root, "fajr_sec",         times.fajr_sec);

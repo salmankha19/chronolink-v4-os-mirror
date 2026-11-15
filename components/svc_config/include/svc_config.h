@@ -199,6 +199,18 @@ esp_err_t svc_config_get(svc_config_t *out);
 // already has a cfg snapshot.
 bool svc_config_is_ramadan(const svc_config_t *cfg, int year, int month, int day);
 
+// Hijri date for (year, month, day), using cfg's hijri_offset_days and
+// hijri_calc_method. Returns true on success; false on any error (NULL
+// cfg or output pointer, year outside [1900, 2100], month outside [1,12],
+// day outside [1,31]). Fills all output pointers only on success. Both
+// month-name buffers must be at least 16 bytes; they receive the full
+// form ("Jumada al-Ula") and the short form ("Jumada I") respectively,
+// NUL-terminated.
+bool svc_config_get_hijri_date(const svc_config_t *cfg, int year, int month, int day,
+                               int *out_year, int *out_month, int *out_day,
+                               char *out_month_name_full,
+                               char *out_month_name_short);
+
 esp_err_t svc_config_set_location_name(const char *name);
 esp_err_t svc_config_set_location(double lat, double lon);
 esp_err_t svc_config_clear_location(void);

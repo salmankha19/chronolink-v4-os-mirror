@@ -329,6 +329,7 @@
     <h2>Today's Prayer Times</h2>
     <p style="font-size:0.9em; color:#666;">
       Season: <b id="p_season">--</b> &middot;
+      Hijri: <b id="p_hijri">--</b> &middot;
       Sehri ends: <b id="p_sehri">--:--</b> &middot;
       Iftar: <b id="p_iftar">--:--</b>
     </p>
@@ -796,6 +797,12 @@
           };
 
           document.getElementById('p_season').innerText = data.season ? 'Summer' : 'Winter';
+          if (data.hijri && data.hijri.year) {
+            document.getElementById('p_hijri').innerText =
+              data.hijri.day + ' ' + data.hijri.month_name + ' ' + data.hijri.year + ' AH';
+          } else {
+            document.getElementById('p_hijri').innerText = '—';
+          }
           document.getElementById('p_sehri').innerText  = fmt(data.ramadan.sehri_end_sec);
           document.getElementById('p_iftar').innerText  = fmt(data.ramadan.iftar_sec);
 

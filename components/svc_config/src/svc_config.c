@@ -985,3 +985,34 @@ bool svc_config_is_ramadan(const svc_config_t *cfg, int year, int month, int day
     return hijri_is_ramadan_method(year, month, day, cfg->hijri_offset_days, cfg->hijri_calc_method);
 }
 
+bool svc_config_get_hijri_date(const svc_config_t *cfg, int year, int month, int day,
+                               int *out_year, int *out_month, int *out_day,
+                               char *out_month_name_full,
+                               char *out_month_name_short)
+{
+    if (!cfg || !out_year || !out_month || !out_day ||
+        !out_month_name_full || !out_month_name_short) {
+        return false;
+    }
+    if (year < 1900 || year > 2100) return false;
+    if (month < 1 || month > 12) return false;
+    if (day < 1 || day > 31) return false;
+
+    hijri_date_t h = gregorian_to_hijri_method(
+        year, month, day, cfg->hijri_offset_days, cfg->hijri_calc_method);
+
+    const char *full   = hijri_month_name((uint8_t)h.month);
+    const char *shortf = hijri_month_name_short((uint8_t)h.month);
+    if (!full || !shortf) return false;
+
+    strncpy(out_month_name_full, full, 15);
+    out_month_name_full[15] = '\0';
+    strncpy(out_month_name_short, shortf, 15);
+    out_month_name_short[15] = '\0';
+
+    *out_year  = h.year;
+    *out_month = h.month;
+    *out_day   = h.day;
+    return true;
+}
+

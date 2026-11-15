@@ -36,6 +36,20 @@ bool hijri_is_ramadan(int g_year, int g_month, int g_day, int8_t offset_days);
 // Router function: 0 = Tabular (Kuwaiti), 1 = Umm al-Qura (KSA).
 bool hijri_is_ramadan_method(int g_year, int g_month, int g_day, int8_t offset_days, uint8_t method);
 
+// Convert Gregorian to Hijri using the specified method (0=Tabular,
+// 1=Umm al-Qura), applying offset_days (-3..+3) before conversion.
+// Mirrors hijri_is_ramadan_method()'s date maths exactly.
+hijri_date_t gregorian_to_hijri_method(int g_year, int g_month, int g_day,
+                                       int8_t offset_days, uint8_t method);
+
+// Full English month name (e.g. "Jumada al-Ula", "Dhu al-Hijjah").
+// Returns NULL for month outside [1, 12].
+const char *hijri_month_name(uint8_t month);
+
+// Short English month name (e.g. "Jumada I", "Dhul Hijjah") for narrow
+// displays. Returns NULL for month outside [1, 12].
+const char *hijri_month_name_short(uint8_t month);
+
 #ifdef __cplusplus
 }
 #endif
