@@ -22,6 +22,32 @@ class SinglePrayerFire(Scenario):
     quick = True
     total_timeout_s = 90.0
 
+    # CONFIG COUPLING -- READ BEFORE EDITING:
+    #
+    # start_utc is chosen so that Dhuhr = 11:50:00 for THIS specific config.
+    # Coordinates are Crawley, UK; method is Moonsighting Committee (6).
+    # Empirical hardware verification (Session B, dev board, boot 2 log)
+    # confirmed that this config produces dhuhr_sec = 42600 = 11:50:00 on
+    # 31 Oct 2026. The scenario boots 30 s before, so Dhuhr is exactly
+    # 30 s in the future -- outside scheduler_premark_past()'s grace
+    # window, so it is not pre-marked as "already fired" and the 1 Hz
+    # scheduler fires it live at fake 11:50:00.
+    #
+    # If you change any of latitude, longitude, or method, you MUST
+    # recompute start_utc so Dhuhr is still 30 s after boot. Otherwise
+    # the device's premark_past() will mark Dhuhr as already-fired and
+    # the test will fail with "dhuhr_fire count=0" while the scheduler
+    # is doing exactly the right thing. See the CR's harness diagnosis
+    # (Session B) for the full failure mode.
+    #
+    # Session B's /debug/ntp extension seeds these values into svc_config
+    # BEFORE the boot-2 NTP sync runs, so boot 2 calculates prayer times
+    # from the scenario's own config and (with the seed below) lands at
+    # the correct Dhuhr epoch.
+    latitude = 51.13115396014885
+    longitude = -0.1864782309679473
+    method = 6  # SVC_CONFIG_METHOD_MOONSIGHTING
+
     description = (
         "Boot at fake 11:49:30 (30 s before Dhuhr at 11:50). Mock NTP "
         "serves 1x real-time. Expect: NTP sync, exactly ONE Dhuhr fire "

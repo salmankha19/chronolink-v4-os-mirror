@@ -300,7 +300,20 @@ class ScenarioRunner:
                 # blocks on the follow-up sync), and that path must still be
                 # restored. Restoring an already-correct slot 0 is a no-op.
                 ntp_host_set = True
-                controller.set_ntp_host(ntp_host)
+                # Seed the device's location/method alongside the NTP host
+                # so the boot-2 sync runs with the scenario's own config.
+                # Scenarios that omit these attributes fall back to the
+                # pre-Session-B host-only behaviour (no config change);
+                # getattr with a None default handles both shapes without
+                # needing Scenario to declare them. set_ntp_host raises on
+                # partial (e.g. lat but no lon) so a misconfigured scenario
+                # fails loudly.
+                controller.set_ntp_host(
+                    ntp_host,
+                    lat=getattr(scenario, "latitude", None),
+                    lon=getattr(scenario, "longitude", None),
+                    method=getattr(scenario, "method", None),
+                )
                 self._log("device NTP host set to %s" % ntp_host)
 
                 # -- Boot 2: the boot sync now comes from the mock ------------
@@ -563,20 +576,30 @@ class ScenarioRunner:
 
         if status == "PENDING":
             # read_lines() ran out of wall clock: the scenario never reached
-            # a verdict, which is a failure of the scenario, not of the rig.
+            # a verdict. Re-evaluate one final time before declaring FAIL.
+            # The for-loop above only calls evaluate() when a line arrives,
+            # so a device that goes quiet after the last expected event
+            # (Dhuhr fires, nothing more logged) never triggers the PASS
+            # check even when all assertions are satisfied and the elapsed
+            # fake time has passed max(deadlines). If evaluate() returns
+            # PASS here, honour it; a genuine timeout still resolves to
+            # PENDING -> FAIL with the original message.
             fake_now = start_fake + (time.monotonic() - loop_start) * scenario.speed
-            status = "FAIL"
-            reasons = [
-                "timeout after %.0fs wall clock (fake +%.0fs); %s"
-                % (
-                    scenario.total_timeout_s,
-                    fake_now - start_fake,
-                    ", ".join(
-                        "%s=%d" % (spec.label, state.count)
-                        for spec, state in zip(specs, states)
-                    ),
-                )
-            ]
+            status, reasons = evaluate(specs, states, fake_now, start_fake,
+                                       verbose=self.verbose)
+            if status == "PENDING":
+                status = "FAIL"
+                reasons = [
+                    "timeout after %.0fs wall clock (fake +%.0fs); %s"
+                    % (
+                        scenario.total_timeout_s,
+                        fake_now - start_fake,
+                        ", ".join(
+                            "%s=%d" % (spec.label, state.count)
+                            for spec, state in zip(specs, states)
+                        ),
+                    )
+                ]
 
         return status, reasons, fake_now
 
