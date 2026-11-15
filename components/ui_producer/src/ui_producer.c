@@ -170,9 +170,14 @@ static void ui_producer_task(void *arg)
             svc_prayer_engine_times_t times;
             if (svc_prayer_engine_service_get_times(&times) == ESP_OK &&
                 times.hijri_year != 0) {
-                snprintf(hijri_date, sizeof(hijri_date), "%u %s %u",
+                /* Numeric DD/MM/YYYY, all digits. Uniform 10 chars
+                   regardless of month name; language-agnostic (05 is 05
+                   in every script); keeps the panel's date line the
+                   same width every month. Web UI keeps the word form
+                   from the API's full `month_name` field. */
+                snprintf(hijri_date, sizeof(hijri_date), "%02u/%02u/%u",
                          (unsigned)times.hijri_day,
-                         times.hijri_month_name_short,
+                         (unsigned)times.hijri_month,
                          (unsigned)times.hijri_year);
             }
         }

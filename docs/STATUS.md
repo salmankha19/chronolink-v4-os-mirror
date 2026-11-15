@@ -72,12 +72,14 @@ not.** Where another doc mentions a gap, this file has the detail.
   `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. `svc_time` is the first
   subscriber (PR 5b-2): it registers for `EVENT_NETWORK_CONNECTED`.
 - **Services:** `svc_network` (WiFi station), `state_manager`, `svc_config` (NVS-backed installation config: location, method, madhab, iqamah offsets, adhan mode, display preferences, high-latitude rule, adhan offsets, zawal buffer — storage + accessors only, no calculation or hardware). **PR 5.1a additions:** seasonal jamat config (`jamat[5]` with per-prayer winter/summer anchor+offset and shared rounding, plus a `season` struct with fixed summer/winter transition dates) and named presets (`SVC_CONFIG_PRESET_UK` default, `SVC_CONFIG_PRESET_PAKISTAN`). Legacy `iqamah_offset_min[]` retained as deprecated mirror of `jamat[i].winter.offset_min` for backward compatibility (removal in 5.1c; `refactor(config): drop iqamah mirror`). **PR #146/#147 additions:** `hijri_offset_days` (`int8_t`, -3 to +3) and `hijri_calc_method` (`uint8_t`, 0=Kuwaiti, 1=Umm al-Qura) replace the old `ramadan_windows[]` table. Uses an algorithmic Gregorian-to-Hijri conversion (with a 158-year KSA bitmask) to compute `is_ramadan`.
-- **Hijri date display (2026-11-15):** `svc_config_get_hijri_date()`
+- **Hijri date display (2026-11-15, numeric format):** `svc_config_get_hijri_date()`
   exposes the Islamic calendar to other layers; `svc_prayer_engine_service`
   populates `svc_prayer_engine_times_t.hijri_{year,month,day}` plus full
   and short month-name strings; `GET /api/prayers` gains a `hijri` object;
   the web UI shows `18 Jumada al-Ula 1447 AH`; the clock face draws
-  `Sun 15 Nov 2026` and `18 Jumada I 1447` below `H:MM AM/PM`. Both date
+  `Sun 15 Nov 2026` and `18/05/1447` below `H:MM AM/PM` (numeric form —
+  uniform width, language-agnostic, Latin digits; no non-English month
+  bitmaps needed). Both date
   lines are hidden when the RTC is untrusted. During Ramadan, the Hijri
   line naturally reads `7 Ramadan 1447` — no separate day counter. Fixed
   `jdn_to_hijri_uaq()` pre-1924 fallback (was `jd-1`, now `jd`) and
@@ -576,6 +578,15 @@ announced Ramadan start can be matched from the browser.
   erase + reboot; #129 R3 erases the raw partition so a cleanly-mountable
   FS is still wiped). The caller-supplied `BOOT_FLAG_FACTORY_RESET` parameter path is kept for devices with unreadable NVS.
 - **Firmware update over HTTP (PR 4.7):** `POST /api/ota` accepts a raw firmware image (`application/octet-stream`), requires the `X-OTA-Token` header, streams it in 4 KB chunks to the inactive OTA slot, and reboots into it on success. Compile-time gate: `#error` if `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` is not set. Failure at any stage calls `esp_ota_abort()` and leaves the running image untouched.
+- **Multi-language display (planned):** the numeric panel format
+  (`18/05/1447`) is language-agnostic and does not require non-English
+  month bitmaps. Multi-language support (EN/AR/UR) will add a
+  `svc_config.ui_language` field, a `POST /api/config` field, and a web
+  UI language selector; the web UI switches languages via browser-side
+  locale-aware formatting of the existing `hijri.month` numeric. Panel
+  display stays numeric in every language. Design contract documented in
+  `prayer-times-model.md` §10.1 (format specification) and §11
+  (out-of-scope table).
 
 ---
 
