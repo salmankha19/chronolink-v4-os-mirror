@@ -95,6 +95,14 @@ engine. This section is the documented reference for that coverage.
 
 ---
 
+> **Note on Crawley Islamic Centre:** removed as a fixture in PR #142
+> because its published times are not reproducible by any single config
+> (implied Isha angle drifts non-monotonically across months). The
+> coordinate 51.13°N / -0.18°W occasionally appears in review documents
+> as a *calculation example only* — the firmware contains no Crawley-specific
+> code or test fixture. Harness scenarios use neutral reference coordinates
+> (e.g. London 51.5074, -0.1278), not mosque fixtures.
+
 ## 1. Masjid Quba — 🇬🇧 United Kingdom, London
 
 - **Country:** United Kingdom

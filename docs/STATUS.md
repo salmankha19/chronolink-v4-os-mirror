@@ -488,6 +488,8 @@ Verify each against hardware or datasheet before fixing.
 
 - **DST Rollover Verified on Hardware (Oct 25, 2026):** The POSIX TZ string (`GMT0BST,M3.5.0/1,M10.5.0`) correctly triggered the clock to fall back from `01:59:59` (BST) to `01:00:00` (GMT). The prayer engine correctly pre-calculated for the offset change at midnight, preventing any mid-day time jumps. OTA rollback was also verified on hardware.
 
+- **Scheduler marker could regress on dropped rearm (CR #6, 2026-11-15):** the "too late" branch in `scheduler_evaluate()` set `last_fired_epoch[p] = epoch` unconditionally. If a config change moved a prayer earlier and then back within 2 minutes, and BOTH `EVENT_PRAYER_TIMES_UPDATED` events were dropped (bus full), the marker could regress and the prayer could double-fire on the next legitimate fire. Fixed: the marker only ever advances. Regression test in `test_scheduler::test_marker_never_regresses`.
+
 ---
 
 ## Known issues (architecture)
