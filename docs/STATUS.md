@@ -179,6 +179,21 @@ not.** Where another doc mentions a gap, this file has the detail.
   `test_scheduler::test_isha_rollover`. No change to
   `svc_prayer_engine_times_t` — the adapter recovers the deferred epoch
   from the previous `scheduler_day_t`.
+  **Publish reliability (CR #1, 2026-11-17):** `scheduler_tick()` publishes
+  via `event_bus_publish_checked()`. It snapshots `pending_isha_epoch` and
+  `last_fired_epoch[]` before `scheduler_evaluate()` (which commits both
+  before returning). On a failed publish -- bus full after the evict-oldest
+  retry, or no queue -- it rolls the affected `last_fired_epoch[id]` back to
+  its pre-evaluate value so the next 1 Hz tick re-fires, bounded by
+  `SCHEDULER_MAX_LATENESS_S` (120 s; beyond that the prayer is missed, same
+  as any other stall). For a failed pending Isha (id 4) it also restores
+  `pending_isha_epoch`: resetting `last_fired_epoch[4]` alone would not
+  retry, because `scheduler_evaluate()` had already consumed the pending
+  epoch and today's Isha may still be in the future. Every other
+  `event_bus_publish()` caller keeps the void wrapper (boot, network, time,
+  prayer-engine snapshot) -- those signals self-heal on the next cycle.
+  `scheduler_logic.c` and its host tests are unchanged. The retry path fires
+  only on a full bus, so it is CI build-verified only, not host-tested.
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).
@@ -499,6 +514,22 @@ Verify each against hardware or datasheet before fixing.
 - **Scheduler marker could regress on dropped rearm (CR #6, 2026-11-15):** the "too late" branch in `scheduler_evaluate()` set `last_fired_epoch[p] = epoch` unconditionally. If a config change moved a prayer earlier and then back within 2 minutes, and BOTH `EVENT_PRAYER_TIMES_UPDATED` events were dropped (bus full), the marker could regress and the prayer could double-fire on the next legitimate fire. Fixed: the marker only ever advances. Regression test in `test_scheduler::test_marker_never_regresses`.
 
 - **Failed RTC write could revert NTP time (CR #5, 2026-11-15):** if `hil_rtc_set_time()` reported success but the write did not land (I2C glitch, partial BCD write, misbehaving RTC), `tick_snapshot()` would then prefer the stale RTC over the fresh NTP snapshot within one second, silently reverting the clock. The hourly RTC correction would then push the system clock back too. Fixed: the RTC write is now verified by reading it back; a `s_rtc_write_failed` file-scope flag is set on any write that does not read back correctly, and both `tick_snapshot()` and `run_hourly_rtc_correction()` skip RTC while it is set. Cleared only on a verified successful write. `rtc_roughly_equal()` tolerates 1 s drift to allow for the second boundary rolling during write+readback. Note: the flag's declaration comment says "Guarded by `s_state_lock`"; writers (in `do_ntp_sync`) and the `tick_snapshot` reader are under the lock, but the `run_hourly_rtc_correction` read is not. On Xtensa single-byte access is atomic, so the race is benign (worst case: one hour-key check reads the pre-sync value). Flagged for a future comment correction or wrap-in-lock fix.
+
+- **Silent missed adhan on a full event bus (CR #1, 2026-11-17):**
+  `svc_scheduler.c` recorded the prayer as fired (inside
+  `scheduler_evaluate()`) before `event_bus_publish()`, and that function
+  returned void. If the 32-slot bus was full, the evict-oldest path could
+  discard the `EVENT_PRAYER_TIME_REACHED` and there was no retry -- the
+  adhan silently never played. Fixed: `event_bus_publish_checked()` returns
+  `bool` (existing `event_bus_publish()` is now a `(void)` wrapper, so all
+  other callers are unchanged). `scheduler_tick()` snapshots
+  `last_fired_epoch[]` and `pending_isha_epoch` before `scheduler_evaluate()`
+  and, on a failed publish, rolls back the affected marker so the next 1 Hz
+  tick retries. A failed pending Isha also has `pending_isha_epoch`
+  restored, since `scheduler_evaluate()` had already consumed it. Bounded
+  by `SCHEDULER_MAX_LATENESS_S` (120 s); beyond that the prayer is missed,
+  as with any stall. Compile-verified only (the path fires only when the bus
+  fills); `scheduler_logic.c` and its host tests are unchanged.
 
 ---
 

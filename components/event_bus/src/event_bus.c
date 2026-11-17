@@ -40,19 +40,19 @@ void event_bus_init(QueueHandle_t queue)
  * Old version waited up to 10 ms for space, which stalled the FreeRTOS
  * timer service task once the 32-slot queue filled (~32 s at 1 Hz).
  * New policy: zero-timeout send; on full, evict oldest and retry once. */
-void event_bus_publish(const event_t *evt)
+bool event_bus_publish_checked(const event_t *evt)
 {
-    if (!evt) return;
+    if (!evt) return false;
 
     if (!g_event_queue) {
         ESP_LOGW(TAG, "event_bus_publish: no queue available, event dropped");
-        return;
+        return false;
     }
 
     static uint32_t s_drop_count = 0;
 
     if (xQueueSend(g_event_queue, evt, 0) == pdPASS) {
-        return;
+        return true;
     }
 
     event_t discarded;
@@ -64,7 +64,7 @@ void event_bus_publish(const event_t *evt)
                      (unsigned long)s_drop_count, (int)discarded.type);
         }
         if (xQueueSend(g_event_queue, evt, 0) == pdPASS) {
-            return;
+            return true;
         }
     }
 
@@ -73,6 +73,12 @@ void event_bus_publish(const event_t *evt)
         ESP_LOGD(TAG, "event_bus_publish: queue full, event dropped "
                       "(total dropped=%lu)", (unsigned long)s_drop_count);
     }
+    return false;
+}
+
+void event_bus_publish(const event_t *evt)
+{
+    (void)event_bus_publish_checked(evt);
 }
 
 bool event_bus_receive(event_t *evt, TickType_t timeout)
