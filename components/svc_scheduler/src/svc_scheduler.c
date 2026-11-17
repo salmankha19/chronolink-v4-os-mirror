@@ -170,6 +170,14 @@ static void scheduler_tick(void)
 
     adapt_times(&times, &day);
 
+    /* CR #1: scheduler_evaluate() commits last_fired_epoch[] and consumes
+       pending_isha_epoch BEFORE returning, so a failed publish must roll
+       the affected entry back or the adhan is lost with no retry. Snapshot
+       the pre-evaluate state: 48 B on this task's 4 KB stack. */
+    int64_t pending_before = s_state.pending_isha_epoch;
+    int64_t marker_before[SCHEDULER_PRAYER_COUNT];
+    memcpy(marker_before, s_state.last_fired_epoch, sizeof(marker_before));
+
     int n = scheduler_evaluate((int64_t)now, &day, &s_state, fired);
     for (int i = 0; i < n; i++) {
         uint8_t id = fired[i];
@@ -187,7 +195,30 @@ static void scheduler_tick(void)
 
         memset(&out, 0, sizeof(out));
         event_init_payload(&out, EVENT_PRAYER_TIME_REACHED, &ev, sizeof(ev));
-        event_bus_publish(&out);   /* void: a full bus drops the copy */
+
+        if (!event_bus_publish_checked(&out)) {
+            /* Bus full and the evict-oldest retry failed: undo this
+               prayer's marker so the next tick re-evaluates it. Bounded
+               by SCHEDULER_MAX_LATENESS_S (120 s); beyond that the prayer
+               is treated as missed, exactly like any other stall. */
+            s_state.last_fired_epoch[id] = marker_before[id];
+
+            /* Pending Isha: scheduler_evaluate() cleared
+               pending_isha_epoch when it consumed yesterday's past-
+               midnight Isha. Resetting last_fired_epoch[4] alone would
+               NOT retry it (today's Isha may still be in the future).
+               Restore pending only when THIS event was the pending Isha,
+               identified by the payload epoch matching pending_before.
+               Today's Isha has a later epoch and is retried via slot 4. */
+            if (id == 4 && pending_before > 0 &&
+                ev.scheduled_epoch == pending_before) {
+                s_state.pending_isha_epoch = pending_before;
+            }
+
+            ESP_LOGW(TAG, "%s adhan publish failed -- retry next tick",
+                     kPrayerNames[id]);
+            continue;
+        }
 
         ESP_LOGI(TAG, "%s adhan due (epoch %lld, now %lld)",
                  kPrayerNames[id], (long long)ev.scheduled_epoch,

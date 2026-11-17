@@ -59,6 +59,19 @@ _Static_assert(sizeof(((event_t*)0)->data) >= sizeof(boot_event_payload_u),
 
 void event_bus_init(QueueHandle_t queue);
 void event_bus_publish(const event_t *evt);
+
+/* Checked variant of event_bus_publish() (CR #1).
+ *
+ * Returns true when the event was accepted into the kernel event queue
+ * (including the "queue full -> evict oldest -> retry once" path), and
+ * false when it was NOT enqueued: evt == NULL, no queue registered, or
+ * the retry after eviction also failed. Callers that must not lose the
+ * event (svc_scheduler's EVENT_PRAYER_TIME_REACHED) use this and retry
+ * on false. All other callers keep using the void wrapper below.
+ *
+ * event_bus_publish() is now exactly (void)event_bus_publish_checked(). */
+bool event_bus_publish_checked(const event_t *evt);
+
 bool event_bus_receive(event_t *evt, TickType_t timeout);
 
 /* Subscriber fan-out (PR 5b-1).
