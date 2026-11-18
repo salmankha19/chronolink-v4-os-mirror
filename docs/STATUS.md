@@ -469,6 +469,13 @@ Verify each against hardware or datasheet before fixing.
     queue and "8 slots x 512 bytes"; the code has a submit mutex and
     `DM_FRAME_QUEUE_DEPTH` 3 slots of `sizeof(dm_frame_t)`. Corrected in
     PR 6.
+19. **S1 ❌ WON'T FIX** -- `parse_file_at()`
+    (`components/svc_timetable/src/svc_timetable.c:222`) uses an
+    unbounded `strstr(buf, "\"days\"")` to find the day array. It is
+    theoretically fragile (a `"days"` literal inside an earlier value
+    could match first) but has no demonstrated real-world failure path:
+    a wrong match makes the bracket lookup fail and returns
+    `ESP_ERR_INVALID_RESPONSE`, rejecting the upload. No code change.
 
 **Resolved**
 
