@@ -388,7 +388,6 @@ contract.
 | `display_set_brightness` | always returns `false` |
 | `audio_play_mp3` | always returns `false` |
 | ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
-| `src/app/*`, `src/svc/*` | empty placeholders; **not built** (`platformio.ini` sets `src_dir = main`) |
 | Theme registry, web config | do not exist (the prayer scheduler landed in PR 5.6 -- see above) |
 | SD card | pin defined, no driver |
 | Boot manifest, `hw_profile.json`, signature checks | not implemented |
@@ -530,6 +529,16 @@ Verify each against hardware or datasheet before fixing.
   by `SCHEDULER_MAX_LATENESS_S` (120 s); beyond that the prayer is missed,
   as with any stall. Compile-verified only (the path fires only when the bus
   fills); `scheduler_logic.c` and its host tests are unchanged.
+
+- **Dead `src/` scaffold deleted (CR S2, 2026-11-18):** the repo-root
+  `src/` tree held unused placeholders (`src/app/*`, `src/svc/*`) plus a
+  stray `void app_main() {}`. It was never built: `platformio.ini` sets
+  `src_dir = main`, nothing registers `src/` as a component, there is no
+  `src/` entry in `.pio/build/single_mcu/build.ninja`, and
+  `EXTRA_COMPONENT_DIRS` is empty -- so `src/CMakeLists.txt` and its
+  `src/*.*` glob were never evaluated. The `src/svc/svc_scheduler.c`
+  deletion in PR 5.6 removed one file from the same dead tree; this
+  removes the rest.
 
 ---
 

@@ -189,12 +189,15 @@ Not scheduled; listed for completeness.
   layer above).
 - HIL graphics adapter, so the application band stops calling `hal_gfx`
   directly (Constitution §11).
-- Deferred `src/` cleanup: `src/svc/svc_scheduler.c` (a 7-line
-  placeholder that no build ever referenced) was deleted in the
-  scheduler PR (5.6). The rest of `src/app/*` and `src/svc/*` are empty
-  placeholders that are not built (`platformio.ini` sets
-  `src_dir = main`); removing the directory itself needs a separate
-  change because `src/CMakeLists.txt` still globs it.
+- Done -- `src/` legacy scaffold deleted (2026-11-18, CR S2). The folder
+  held unused placeholders (`src/app/*`, `src/svc/*`) plus a stray
+  `void app_main() {}`. `platformio.ini` explicitly sets `src_dir = main`
+  and nothing registered `src/` as a component, so the build never
+  evaluated it: there is no `src/` entry in
+  `.pio/build/single_mcu/build.ninja` and `EXTRA_COMPONENT_DIRS` is
+  empty, which is why `src/CMakeLists.txt` was never processed. It did
+  not need a separate change from the earlier `src/svc/svc_scheduler.c`
+  deletion (scheduler PR 5.6) -- both were the same dead tree.
 - CI hardening: bump `actions/*` to v5, pin `ubuntu-24.04`.
 - ✅ Test harness v1 (mock NTP + scenario runner + reference scenario, 2026-10-31)
 

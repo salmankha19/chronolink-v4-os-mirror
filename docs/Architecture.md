@@ -19,7 +19,7 @@ it, through their public headers.
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
 | 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
-| 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/`, future `src/app/*` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
+| 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
 runs once, before the kernel's tasks exist. See [boot.md](boot.md).
@@ -28,9 +28,11 @@ PDL is not a separate component today: its headers and one `.c` file
 live in `chronolink_hal` and are logically the bottom of that
 component.
 
-`src/app/*` and `src/svc/*` contain placeholder stubs. They are **not
-compiled**: `platformio.ini` sets `src_dir = main`. Treat them as
-reserved for future work, not as active code.
+The legacy `src/app/*` and `src/svc/*` placeholder tree was **removed**
+(CR S2, 2026-11-18). It was never compiled: `platformio.ini` sets
+`src_dir = main` and nothing registered `src/` as a component, so its
+removal changes no binary. Application code lives in `main/` and in the
+app-band components listed above.
 
 Service components use the `svc_` prefix. The current
 component-to-layer mapping is listed in `components/README.md`.
