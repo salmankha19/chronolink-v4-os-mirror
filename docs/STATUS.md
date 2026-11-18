@@ -574,6 +574,20 @@ Verify each against hardware or datasheet before fixing.
   Compile-verified only: the helper is `static` and no public-API input
   produces NaN, so a host test would require exporting it -- not done.
 
+- **`event_init_payload()` skipped `type` on an empty payload (CR S5,
+  2026-11-18):** the early return ran before `evt->type = type`, so a
+  caller passing `payload = NULL` / `payload_len = 0` published an event
+  whose type was whatever the stack held. Fixed: the `evt == NULL` guard
+  stays first, `type` is assigned next, and only a real payload is
+  copied; the payload region is zeroed before the copy so bytes beyond
+  `payload_len` are not stale stack contents forwarded to subscribers.
+  No current caller passes NULL/0 (`boot_manager` x2, `core_os` and
+  `svc_scheduler` each pass a full struct; `svc_network` sets the type
+  itself and its workaround comment was updated), so this is
+  latent-bug hardening. Build-verified only -- adding FreeRTOS stub
+  headers to `prayer_host_tests` for a `static inline` in a header was
+  judged not worth it.
+
 ---
 
 ## Known issues (architecture)

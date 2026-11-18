@@ -70,8 +70,9 @@ static char                         s_ip_str[16]   = {0};
 /* ------------------------------------------------------------------ */
 
 /* Set type explicitly before copying payload. event_init_payload() in
-   event_bus.h does not set evt.type when payload is NULL, so we do
-   not rely on it for the NULL-payload case. */
+   event_bus.h now sets evt.type even for a NULL/empty payload (CR S5),
+   but this helper keeps the explicit memset + assignment so the
+   NULL-payload case is readable without cross-referencing that header. */
 static void publish_network_event(event_type_t type,
                                   const void *payload,
                                   size_t payload_len)
