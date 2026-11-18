@@ -99,11 +99,24 @@ static inline void event_init_payload(event_t *evt, event_type_t type,
 {
     size_t copy_len;
 
-    if (!evt || !payload || payload_len == 0) {
+    if (!evt) {
         return;
     }
 
+    /* CR S5: set the type before the payload guard. An event with no
+       payload is still a valid event and needs its type; the old order
+       returned first and left whatever the caller's stack held. */
     evt->type = type;
+
+    if (!payload || payload_len == 0) {
+        return;
+    }
+
+    /* Clear the tail first so bytes beyond payload_len are zeroes, not
+       stale stack contents forwarded to subscribers. Never writes past
+       sizeof(evt->data). */
+    memset(evt->data, 0, sizeof(evt->data));
+
     copy_len = payload_len > sizeof(evt->data) ? sizeof(evt->data) : payload_len;
     memcpy(evt->data, payload, copy_len);
 }

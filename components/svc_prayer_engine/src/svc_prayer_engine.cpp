@@ -25,7 +25,16 @@ static uint32_t hours_to_sec_common(double h, bool round_up)
     // Use isnan() not isfinite(): on this picolibc build, isfinite(NaN)
     // returns true, so !isfinite() would miss NaN and hit the UB cast
     // (uint32_t)NaN below. isnan() is proven working (PR 16).
-    if (isnan(h)) return 0;
+    //
+    // CR S4: return the "unavailable" sentinel, not 0. 0 is a real time
+    // (00:00:00), so a NaN used to be indistinguishable from midnight.
+    // UINT32_MAX is the sentinel this contract already uses
+    // (asr_yellow_sec, and the jamat tier's DISABLED value), which
+    // svc_http renders as JSON null. Reachability is unchanged: the six
+    // primary values are rejected upstream by PrayerTimes::valid before
+    // this function is called, and sunset/zawal/midnight are derived
+    // from those non-NaN values -- see the V6 audit in docs/STATUS.md.
+    if (isnan(h)) return UINT32_MAX;
 
     // Do not wrap to 24h. Isha and Midnight can exceed 86400.
     // Clamp at 2 days (172799) just as a safety net.

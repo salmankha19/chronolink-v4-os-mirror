@@ -388,7 +388,6 @@ contract.
 | `display_set_brightness` | always returns `false` |
 | `audio_play_mp3` | always returns `false` |
 | ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
-| `src/app/*`, `src/svc/*` | empty placeholders; **not built** (`platformio.ini` sets `src_dir = main`) |
 | Theme registry, web config | do not exist (the prayer scheduler landed in PR 5.6 -- see above) |
 | SD card | pin defined, no driver |
 | Boot manifest, `hw_profile.json`, signature checks | not implemented |
@@ -470,6 +469,13 @@ Verify each against hardware or datasheet before fixing.
     queue and "8 slots x 512 bytes"; the code has a submit mutex and
     `DM_FRAME_QUEUE_DEPTH` 3 slots of `sizeof(dm_frame_t)`. Corrected in
     PR 6.
+19. **S1 ❌ WON'T FIX** -- `parse_file_at()`
+    (`components/svc_timetable/src/svc_timetable.c:222`) uses an
+    unbounded `strstr(buf, "\"days\"")` to find the day array. It is
+    theoretically fragile (a `"days"` literal inside an earlier value
+    could match first) but has no demonstrated real-world failure path:
+    a wrong match makes the bracket lookup fail and returns
+    `ESP_ERR_INVALID_RESPONSE`, rejecting the upload. No code change.
 
 **Resolved**
 
@@ -530,6 +536,64 @@ Verify each against hardware or datasheet before fixing.
   by `SCHEDULER_MAX_LATENESS_S` (120 s); beyond that the prayer is missed,
   as with any stall. Compile-verified only (the path fires only when the bus
   fills); `scheduler_logic.c` and its host tests are unchanged.
+
+- **Dead `src/` scaffold deleted (CR S2, 2026-11-18):** the repo-root
+  `src/` tree held unused placeholders (`src/app/*`, `src/svc/*`) plus a
+  stray `void app_main() {}`. It was never built: `platformio.ini` sets
+  `src_dir = main`, nothing registers `src/` as a component, there is no
+  `src/` entry in `.pio/build/single_mcu/build.ninja`, and
+  `EXTRA_COMPONENT_DIRS` is empty -- so `src/CMakeLists.txt` and its
+  `src/*.*` glob were never evaluated. The `src/svc/svc_scheduler.c`
+  deletion in PR 5.6 removed one file from the same dead tree; this
+  removes the rest.
+
+- **Safe mode runs a heartbeat with no dispatcher (CR S3, 2026-11-18):**
+  documented as **unreachable dead code; no firmware change required**.
+  Nothing sets `BOOT_FLAG_SAFE_MODE`: `main.c` passes 0,
+  `read_pending_boot_request()` can only return
+  `BOOT_FLAG_FACTORY_RESET`, and `app_main()` starts every service
+  regardless. If the path were ever entered, `core_os_init()` has already
+  started the 1 Hz `EVENT_BOOT_HEALTH` timer before the safe-mode check
+  and `core_os_start()` returns before `event_dispatch_task` exists, so
+  the 32-slot bus fills and evicts oldest (the CR #1 class); `core1_task`
+  is also skipped, so submitted frames never render. Wiring it up is a
+  separate design item -- if done, start the dispatcher before the
+  safe-mode early return.
+
+- **`hours_to_sec_common()` returned 0 (= midnight) for NaN (CR S4,
+  2026-11-18):** the helper converted a NaN hour to `0`, which reads as a
+  legitimate 00:00:00 -- a failed high-latitude computation would have
+  been displayed as midnight rather than "unavailable". Fixed: NaN now
+  returns `UINT32_MAX`, the sentinel `asr_yellow_sec` already used and
+  which the jamat tier treats as DISABLED (`svc_http` emits JSON `null`).
+  **V6 re-verdict: still unreachable.** All 11 call sites receive a
+  `PrayerTimes::calculate()` result that passed the validity gate
+  (`PrayerTimes.cpp:415-418`; otherwise `ESP_ERR_INVALID_STATE` at
+  `svc_prayer_engine.cpp:145-147`), so fajr/sunrise/dhuhr/asr/maghrib/
+  isha are never NaN; `sunset` is covered by the polar bail at
+  `PrayerTimes.cpp:264`; `zawal` is pure transit arithmetic and
+  `midnight` (lines 385-391) is built only from sunset/sunrise/fajr,
+  all non-NaN; `asr_yellowing` was already sentinel-mapped explicitly at
+  `svc_prayer_engine.cpp:156-158`. No field besides `asr_yellow_sec` can
+  therefore carry the sentinel, and the only unchecked arithmetic in
+  `jamat_calculator.c` (`ADHAN_PLUS`, line 54) takes an anchor derived
+  from the NaN-gated fields, so it cannot wrap. No caller guard added.
+  Compile-verified only: the helper is `static` and no public-API input
+  produces NaN, so a host test would require exporting it -- not done.
+
+- **`event_init_payload()` skipped `type` on an empty payload (CR S5,
+  2026-11-18):** the early return ran before `evt->type = type`, so a
+  caller passing `payload = NULL` / `payload_len = 0` published an event
+  whose type was whatever the stack held. Fixed: the `evt == NULL` guard
+  stays first, `type` is assigned next, and only a real payload is
+  copied; the payload region is zeroed before the copy so bytes beyond
+  `payload_len` are not stale stack contents forwarded to subscribers.
+  No current caller passes NULL/0 (`boot_manager` x2, `core_os` and
+  `svc_scheduler` each pass a full struct; `svc_network` sets the type
+  itself and its workaround comment was updated), so this is
+  latent-bug hardening. Build-verified only -- adding FreeRTOS stub
+  headers to `prayer_host_tests` for a `static inline` in a header was
+  judged not worth it.
 
 ---
 
