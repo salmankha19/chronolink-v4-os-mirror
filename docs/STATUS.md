@@ -553,6 +553,27 @@ Verify each against hardware or datasheet before fixing.
   separate design item -- if done, start the dispatcher before the
   safe-mode early return.
 
+- **`hours_to_sec_common()` returned 0 (= midnight) for NaN (CR S4,
+  2026-11-18):** the helper converted a NaN hour to `0`, which reads as a
+  legitimate 00:00:00 -- a failed high-latitude computation would have
+  been displayed as midnight rather than "unavailable". Fixed: NaN now
+  returns `UINT32_MAX`, the sentinel `asr_yellow_sec` already used and
+  which the jamat tier treats as DISABLED (`svc_http` emits JSON `null`).
+  **V6 re-verdict: still unreachable.** All 11 call sites receive a
+  `PrayerTimes::calculate()` result that passed the validity gate
+  (`PrayerTimes.cpp:415-418`; otherwise `ESP_ERR_INVALID_STATE` at
+  `svc_prayer_engine.cpp:145-147`), so fajr/sunrise/dhuhr/asr/maghrib/
+  isha are never NaN; `sunset` is covered by the polar bail at
+  `PrayerTimes.cpp:264`; `zawal` is pure transit arithmetic and
+  `midnight` (lines 385-391) is built only from sunset/sunrise/fajr,
+  all non-NaN; `asr_yellowing` was already sentinel-mapped explicitly at
+  `svc_prayer_engine.cpp:156-158`. No field besides `asr_yellow_sec` can
+  therefore carry the sentinel, and the only unchecked arithmetic in
+  `jamat_calculator.c` (`ADHAN_PLUS`, line 54) takes an anchor derived
+  from the NaN-gated fields, so it cannot wrap. No caller guard added.
+  Compile-verified only: the helper is `static` and no public-API input
+  produces NaN, so a host test would require exporting it -- not done.
+
 ---
 
 ## Known issues (architecture)

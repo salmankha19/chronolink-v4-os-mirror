@@ -72,7 +72,10 @@ typedef enum {
    asr_yellow_sec uses UINT32_MAX as a sentinel for "sun does not reach
    5 degrees above the horizon today" (high-latitude winter), distinct
    from 0 (00:00:00). Consumers should treat UINT32_MAX as unavailable,
-   not as a real time. */
+   not as a real time. Any field that cannot be computed now carries the
+   same sentinel instead of 0 (CR S4); today that is still only
+   asr_yellow_sec, because the six primary prayers are rejected upstream
+   via `valid` before any field is written. */
 typedef struct {
     bool     valid;
     uint32_t fajr_sec;
