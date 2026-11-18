@@ -540,6 +540,19 @@ Verify each against hardware or datasheet before fixing.
   deletion in PR 5.6 removed one file from the same dead tree; this
   removes the rest.
 
+- **Safe mode runs a heartbeat with no dispatcher (CR S3, 2026-11-18):**
+  documented as **unreachable dead code; no firmware change required**.
+  Nothing sets `BOOT_FLAG_SAFE_MODE`: `main.c` passes 0,
+  `read_pending_boot_request()` can only return
+  `BOOT_FLAG_FACTORY_RESET`, and `app_main()` starts every service
+  regardless. If the path were ever entered, `core_os_init()` has already
+  started the 1 Hz `EVENT_BOOT_HEALTH` timer before the safe-mode check
+  and `core_os_start()` returns before `event_dispatch_task` exists, so
+  the 32-slot bus fills and evicts oldest (the CR #1 class); `core1_task`
+  is also skipped, so submitted frames never render. Wiring it up is a
+  separate design item -- if done, start the dispatcher before the
+  safe-mode early return.
+
 ---
 
 ## Known issues (architecture)

@@ -171,8 +171,18 @@ panels. The mono path is unchanged. The ST7796S backend correctly
 declines text; the font layer is the sanctioned text path for both
 panel families.
 
-- In safe mode (`BOOT_FLAG_SAFE_MODE`) the kernel skips the normal
-  service tasks.
+- **Safe mode (`BOOT_FLAG_SAFE_MODE`) is currently unreachable dead
+  code** (CR S3, documented 2026-11-18). No firmware path sets the flag:
+  `main.c` calls `boot_manager_init(0)`, `read_pending_boot_request()`
+  can only return `BOOT_FLAG_FACTORY_RESET`, and `app_main()` never
+  gates service startup on it. If the mode is ever wired up,
+  `event_dispatch_task` must be started **before** the safe-mode early
+  return in `core_os_start()`: `core_os_init()` already started the 1 Hz
+  heartbeat timer before that check, and every service in `app_main()`
+  still starts and publishes. With no dispatcher, the 32-slot event bus
+  fills and the evict-oldest path silently drops events -- exactly the
+  CR #1 class of bug -- while `core1_task` never runs, so submitted
+  frames never render.
 
 ### 4.1 Time, Sync, and Prayer State Machine
 
