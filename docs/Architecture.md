@@ -239,6 +239,115 @@ presets, tomorrow's jamat, and the pre-5.1a migration path — is in
 [prayer-times-model.md](prayer-times-model.md). This section is only
 the pointer; the domain model lives there.
 
+### 4.3 WiFi recovery mode (CR #2)
+
+A clock whose saved Wi-Fi credentials stop working used to retry forever, with
+no way back in short of a USB reflash. `svc_network` now detects a credential
+lockout and raises an **in-place** recovery AP (no reboot) that an installer can
+join to correct the credentials. The full design -- rejected alternatives,
+review history, verification checklist -- is in
+[sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md).
+This section records the shape and the invariants that must survive
+refactoring.
+
+```mermaid
+flowchart TB
+    START[NOT_STARTED] -->|"svc_network_start: no credentials"| SETUP["SETUP_AP (open)"]
+    START -->|"svc_network_start: has credentials"| STA[STA_CONNECT]
+    STA -->|GOT_IP| CONNECTED[CONNECTED]
+    STA -->|"auth-class reason: 202/15/204/2"| RETRYA["RETRY, count++"]
+    STA -->|"any other reason"| RETRYO["RETRY, count = 0"]
+    RETRYA -->|"count < 5: backoff 1 s to 30 s"| STA
+    RETRYO -->|"backoff 1 s to 30 s"| STA
+    RETRYA -->|"count >= 5: 250 ms trigger"| RECOVERY["RECOVERY_AP (WPA2-PSK)"]
+    RECOVERY -->|"idle 15 min OR absolute 30 min"| EXIT["stop then start; arm 10 min cooldown"]
+    EXIT -->|STA_CONNECT| STA
+```
+
+`SETUP_AP` (no credentials at boot) is unchanged. `RECOVERY_AP` sits after
+`RETRY` and before `CONNECTED`: it is entered from `RETRY` when the auth-class
+streak reaches the threshold, and it returns through `svc_network_stop()` then
+`svc_network_start()` to `STA_CONNECT`, never straight to `CONNECTED`.
+
+**Thresholds and windows.** Plain `#define`s in `svc_network.c` (the same
+precedent as `SVC_NETWORK_BACKOFF_MAX_MS`), not Kconfig entries:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class failures that trigger recovery |
+| `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
+| `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
+| `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, window in which auth failures are not counted |
+| entry-trigger one-shot | 250 ms | delay before the entry worker is spawned |
+
+**Reason whitelist.** Only these `WIFI_EVENT_STA_DISCONNECTED` reasons count
+toward the streak:
+
+| Reason | Name |
+|---|---|
+| 202 | `WIFI_REASON_AUTH_FAIL` |
+| 15 | `WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT` |
+| 204 | `WIFI_REASON_HANDSHAKE_TIMEOUT` |
+| 2 | `WIFI_REASON_AUTH_EXPIRE` |
+
+Every other reason resets the streak to 0 and reconnects exactly as before.
+**#131 R1 is preserved by construction:** `201 WIFI_REASON_NO_AP_FOUND` is not
+in the whitelist, and neither are `200 BEACON_TIMEOUT`, `205 CONNECTION_FAIL`
+nor `212 NO_AP_FOUND_IN_RSSI_THRESHOLD`, so a router that is simply down can
+never be mistaken for wrong credentials. `210`/`211` (WPA3-only security
+mismatch) are deliberately deferred to a follow-up.
+
+**Where the pieces live:**
+
+- `svc_network.c` -- reason classification, streak counter, entry and exit
+  workers, the four timers (entry trigger, idle/absolute timeout, bring-up
+  retry, cooldown), the bring-up retry ladder (1 s -> 30 s, never gives up),
+  and the accessors `svc_network_is_recovery_mode()`,
+  `svc_network_get_recovery_ssid()`,
+  `svc_network_get_recovery_passphrase()`,
+  `svc_network_touch_recovery_idle_timeout()`.
+- `svc_http.c` -- `recovery_exempt()`, called first from `require_auth()`.
+  While recovery mode is up it accepts `POST /api/wifi` and `POST /api/reboot`
+  without the `X-Chronolink-Auth` token, but only for
+  `Content-Type: application/json` (strict; an HTML `<form>` cannot produce it,
+  so form-based CSRF stays blocked), and it then touches the idle timer.
+  Everything else keeps the token, and the open setup AP gets no exemption at
+  all.
+- `ui_producer.c` -- the recovery screen (SSID + passphrase). The recovery
+  predicate is tested **before** the setup-AP predicate because the recovery AP
+  is raised through the same `start_ap_mode()`, so both are true during
+  recovery.
+
+**Security invariants (must survive refactoring).** Copied verbatim from
+[sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md)
+section 5.
+
+**Invariant 1 — the auth exemption keys on recovery mode, never on AP mode.**
+`recovery_exempt()` (in `svc_http.c`) branches on
+`svc_network_is_recovery_mode()`. It must **never** branch on
+`svc_network_is_ap_mode()`. The setup AP (`ChronoLink-Setup`) is
+`WIFI_AUTH_OPEN` — no passphrase, no physical-possession proof. If a future
+refactor "simplifies" the predicate to `is_ap_mode()`, the setup AP becomes
+unauthenticated. This sentence appears verbatim as a code comment at
+`recovery_exempt()` and must not be removed.
+
+**Invariant 2 — `s_recovery_mode` cleared first, set last.**
+`s_recovery_mode` is cleared inside `svc_network_stop()`, **under the recovery
+mutex, before any teardown begins**. It is set inside `start_ap_mode()`, **under
+the same mutex, only after the AP is confirmed up** (i.e. after
+`esp_wifi_start()` returned `ESP_OK` and `s_ap_mode` is about to be set true).
+This makes the httpd-side predicate fail closed at both edges: no window in
+which a non-recovery interface accepts exempted requests.
+
+**Invariant 3 — `s_recovery_active` must never be held across a
+`svc_network_start()` call.**
+`s_recovery_active` exists only to suppress the auth-failure counter during
+teardown. It is set true immediately before `svc_network_stop()` and cleared
+immediately after `svc_network_stop()` returns, before `svc_network_start()` is
+called. If it were held across `svc_network_start()`, the first
+`STA_DISCONNECTED` after start would be swallowed (E4), the reconnect timer
+would never arm, and the device would sit idle forever.
+
 ---
 
 ## 5. Known deviations from the rules

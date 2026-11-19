@@ -64,6 +64,77 @@ Once step 4 completes, the system is fully autonomous. `svc_time` ticks at 1 Hz,
 
 ---
 
+## WiFi recovery mode
+
+Wrong saved Wi-Fi credentials used to lock the clock out of the network
+permanently: `svc_network` retried forever and neither switch on the PCB is
+user-accessible (SW1/SW2 are inside the case). CR #2 adds an **in-place**
+recovery AP -- no reboot -- so an installer standing next to the clock can
+correct the credentials over Wi-Fi. The full design is in
+[sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md); the
+architecture summary is section 4.3 of
+[Architecture.md](Architecture.md).
+
+**Entry condition.** Nothing changes at boot unless the saved credentials fail.
+Each `WIFI_EVENT_STA_DISCONNECTED` carrying an auth-class reason -- `202
+AUTH_FAIL`, `15 4WAY_HANDSHAKE_TIMEOUT`, `204 HANDSHAKE_TIMEOUT`, `2
+AUTH_EXPIRE` -- increments a counter; any other reason resets it to 0, so a
+router that is merely down (`201 NO_AP_FOUND`) never triggers recovery (#131
+R1). On the fifth consecutive auth-class failure a 250 ms one-shot spawns the
+entry worker, which tears the STA stack down and brings the recovery AP up. On a
+mis-provisioned device that is roughly 30 s after power-up: four backoff waits
+(1 s + 2 s + 4 s + 8 s), five handshake attempts, plus the 250 ms trigger.
+
+**The recovery AP.** SSID `ChronoLink-Recovery-<XXXX>`, where `<XXXX>` is the
+last two STA MAC bytes (`%02X%02X`, 24 characters -- the h=18 glyph-width
+arithmetic in the design doc puts that inside a 320 px panel, though the
+on-panel check is still open). WPA2-PSK on channel 1 with up to 4 clients: the
+same softAP settings as
+the setup AP, except for the auth mode and a generated passphrase. The
+passphrase is 16 uppercase hex characters from `esp_fill_random()` (8 bytes),
+regenerated at every entry and never written to NVS. `ui_producer` replaces the
+clock face with a recovery screen showing the SSID and the passphrase (plus
+`192.168.4.1` and "Auto-exits when idle"); the normal web UI is served on that
+AP, with the shared token exempted only for `POST /api/wifi` and
+`POST /api/reboot`.
+
+**Exit conditions.** One timer enforces two bounds: 15 min with no HTTP activity
+(any exempted request restarts the idle window) or 30 min from entry regardless
+of activity, whichever comes first. The exit worker then runs
+`svc_network_stop()` followed by `svc_network_start()`, i.e. back to STA with
+the (now corrected) credentials, and arms the cooldown. Nothing is rebooted and
+timekeeping never stops -- `svc_time` keeps ticking and the display returns to
+the clock face.
+
+**Cooldown.** For 10 min after exit, auth-class failures are not counted, so a
+still-wrong password cannot bounce the device straight back into recovery. The
+cooldown is cleared by `IP_EVENT_STA_GOT_IP` -- not by
+`WIFI_EVENT_STA_CONNECTED`, because on WPA2-PSK association succeeds before the
+4-way handshake fails, so clearing on connect would clear it on the very first
+retry with still-wrong credentials -- or by its own one-shot expiring. It is
+deliberately not stopped or cleared by `svc_network_stop()`: a cooldown that
+outlives its own recovery cycle is intentional.
+
+**Power-cycle escape hatch.** The auth-fail counter, the cooldown flag and the
+recovery guard flags live in RAM only; nothing about recovery state is
+persisted. Pulling power clears all of them, so the same wrong credentials
+re-enter recovery in about 30 s (five failures on the backoff ladder plus the
+250 ms trigger) and a fresh passphrase is generated. That is the documented last
+resort when the 10 min cooldown is still running and the installer wants back in
+immediately. It also means the device is never permanently unreachable: the
+worst case is always "power-cycle and try again".
+
+**Residual risk.** The token exemption is bounded to two endpoints and to the
+30-minute absolute cap. An actor who passes it already knows the WPA2
+passphrase, i.e. is physically present -- which `svc_http.c` already declares
+out of scope for CSRF. But a rogue-AP override via `POST /api/wifi` pivots
+through `svc_time`'s NTP to prayer times, so it is not "just recoverable": that
+is why the `application/json` content-type requirement is mandatory rather than
+optional. It restores the CSRF defence the shared token was providing, in a form
+an HTML `<form>` cannot satisfy.
+
+---
+
 ## Reset mechanisms
 
 The phrase "factory reset" is overloaded. Three distinct mechanisms
