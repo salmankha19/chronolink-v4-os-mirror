@@ -9,6 +9,7 @@ sdkconfig
 sdkconfig.old
 sdkconfig.single_mcu
 sdkconfig.single_mcu_test
+sdkconfig.single_mcu_debug
 sdkconfig.split_mcu_main
 sdkconfig.display_mcu
 sdkconfig.esp32s3
