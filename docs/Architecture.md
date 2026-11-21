@@ -270,7 +270,7 @@ an empty SSID can never associate, so `svc_network_start()` treats it as
 unconfigured instead of burning the STA ladder on a guaranteed failure. Both
 triggers share one entry helper, `arm_recovery_entry()`: `RECOVERY_AP` sits
 after `RETRY` and before `CONNECTED`, is entered from `RETRY` when either
-streak reaches its threshold (5 auth-class, or 8 of any reason), and returns
+streak reaches its threshold (5 auth-class, or 24 of any reason), and returns
 through `svc_network_stop()` then `svc_network_start()` to `STA_CONNECT`,
 never straight to `CONNECTED`.
 
@@ -280,7 +280,7 @@ precedent as `SVC_NETWORK_BACKOFF_MAX_MS`), not Kconfig entries:
 | Constant | Value | Meaning |
 |---|---|---|
 | `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class failures that trigger recovery |
-| `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 8 | consecutive failures of **any** reason that trigger recovery (slow path) |
+| `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive failures of **any** reason that trigger recovery (slow path) |
 | `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
 | `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
 | `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, window in which auth failures are not counted |
@@ -311,7 +311,7 @@ keeps failing to come up, an AP that answers `NO_AP_FOUND` forever, or one
 that is simply out of range all produced infinite STA retries with no way back
 in. A second counter, `s_consecutive_fail`, now counts consecutive
 `STA_DISCONNECTED` events of **any** reason under the same guard; at
-`SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (8, roughly 2 min at the capped 30 s
+`SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24, roughly 10 min at the capped 30 s
 backoff) it enters recovery through the same `arm_recovery_entry()`. Both
 triggers therefore obey the same rules: nothing is counted while
 `recovery_guards_active()` (cooldown or recovery up), the 250 ms one-shot is

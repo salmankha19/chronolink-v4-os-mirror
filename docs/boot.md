@@ -92,7 +92,7 @@ attempts, plus the 250 ms trigger.
 that keeps failing to come up, or an AP that answers `NO_AP_FOUND` forever, used
 to leave the clock retrying STA indefinitely. A second counter, incremented by
 every `STA_DISCONNECTED` regardless of reason, therefore triggers the same
-recovery entry at `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (8) -- roughly 2 min
+recovery entry at `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) -- roughly 10 min
 at the capped 30 s backoff. Both counters obey the same guard, so nothing is
 counted during recovery or during the 10 min cooldown after it, and a
 successful `GOT_IP` clears both.
