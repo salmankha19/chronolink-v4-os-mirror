@@ -51,8 +51,10 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    defaults on failure), start `ui_producer`, start `svc_time` (reads
    the RTC, applies the POSIX timezone and subscribes to
    `EVENT_NETWORK_CONNECTED` -- it has to be up before `svc_network`
-   can publish one), start `svc_network` (non-fatal), optional audio
-   test, then idle. From then on `svc_time` ticks its snapshot once a
+   can publish one), start `svc_network` (non-fatal; a cold-boot
+   bring-up failure arms the bring-up retry ladder instead of leaving
+   the clock with no link -- see "WiFi recovery mode" below), optional
+   audio test, then idle. From then on `svc_time` ticks its snapshot once a
    second (RTC when present, otherwise the libc clock once NTP has
    synced), so the time it serves keeps advancing.
 
@@ -78,12 +80,35 @@ architecture summary is section 4.3 of
 **Entry condition.** Nothing changes at boot unless the saved credentials fail.
 Each `WIFI_EVENT_STA_DISCONNECTED` carrying an auth-class reason -- `202
 AUTH_FAIL`, `15 4WAY_HANDSHAKE_TIMEOUT`, `204 HANDSHAKE_TIMEOUT`, `2
-AUTH_EXPIRE` -- increments a counter; any other reason resets it to 0, so a
-router that is merely down (`201 NO_AP_FOUND`) never triggers recovery (#131
-R1). On the fifth consecutive auth-class failure a 250 ms one-shot spawns the
-entry worker, which tears the STA stack down and brings the recovery AP up. On a
-mis-provisioned device that is roughly 30 s after power-up: four backoff waits
-(1 s + 2 s + 4 s + 8 s), five handshake attempts, plus the 250 ms trigger.
+AUTH_EXPIRE` -- increments an auth-streak counter; any other reason resets it to
+0, so a router that is merely down (`201 NO_AP_FOUND`) is never mistaken for
+wrong credentials (#131 R1). On the fifth consecutive auth-class failure a
+250 ms one-shot spawns the entry worker, which tears the STA stack down and
+brings the recovery AP up. On a mis-provisioned device that is roughly 30 s
+after power-up: four backoff waits (1 s + 2 s + 4 s + 8 s), five handshake
+attempts, plus the 250 ms trigger.
+
+**Slow path (PR #157).** Not every lockout is a credential rejection: a driver
+that keeps failing to come up, or an AP that answers `NO_AP_FOUND` forever, used
+to leave the clock retrying STA indefinitely. A second counter, incremented by
+every `STA_DISCONNECTED` regardless of reason, therefore triggers the same
+recovery entry at `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (8) -- roughly 2 min
+at the capped 30 s backoff. Both counters obey the same guard, so nothing is
+counted during recovery or during the 10 min cooldown after it, and a
+successful `GOT_IP` clears both.
+
+**Unconfigured or empty SSID.** "No credentials in NVS" and "an empty SSID
+stored" both take the setup AP at boot: an empty SSID can never associate, so
+treating it as configured would only burn the retry ladder. An empty *password*
+with a non-empty SSID stays valid -- that is an open network.
+
+**Cold-boot bring-up failure.** If `svc_network_start()` fails outright at boot
+(setup-AP driver bring-up, or the STA `esp_wifi_set_mode` / `_set_config` /
+`_start` sequence) it arms the bring-up retry ladder (1 s -> 30 s, never gives
+up) before returning `ESP_FAIL`. The retry worker calls `svc_network_stop()`
+then `svc_network_start()`, which re-enters the correct branch; the failure path
+leaves `s_started` set so that `stop()` can deinitialise a half-built driver --
+without that the retry would fail on `ESP_ERR_WIFI_INIT_STATE` forever.
 
 **The recovery AP.** SSID `ChronoLink-Recovery-<XXXX>`, where `<XXXX>` is the
 last two STA MAC bytes (`%02X%02X`, 24 characters -- the h=18 glyph-width
@@ -96,7 +121,13 @@ regenerated at every entry and never written to NVS. `ui_producer` replaces the
 clock face with a recovery screen showing the SSID and the passphrase (plus
 `192.168.4.1` and "Auto-exits when idle"); the normal web UI is served on that
 AP, with the shared token exempted only for `POST /api/wifi` and
-`POST /api/reboot`.
+`POST /api/reboot`. A bench board with no panel has nowhere to display that
+screen, so building with `-DCHRONOLINK_DEBUG_PRINT_TOKEN=1` (set in the
+git-ignored `platformio.local.ini` for `env:single_mcu_debug`, the same flag
+`svc_http.c` uses for the API token) makes the recovery branch of
+`start_ap_mode()` also log ` Recovery passphrase (bench debug): <pass>` on the
+serial line right after the SSID. The setup branch never prints a passphrase,
+and the line is compiled out entirely when the flag is undefined.
 
 **Exit conditions.** One timer enforces two bounds: 15 min with no HTTP activity
 (any exempted request restarts the idle window) or 30 min from entry regardless

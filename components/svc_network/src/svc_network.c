@@ -59,6 +59,14 @@ static const char *TAG = "svc_network";
    as SVC_NETWORK_BACKOFF_MAX_MS above. See
    docs/sessions/cr2-wifi-lockout-design.md sections 6.2, 6.5, 6.8. */
 #define SVC_NETWORK_AUTH_FAIL_THRESHOLD        5
+/* CR #2 slow path (PR #157). Consecutive STA disconnects of ANY reason that
+   raise the recovery AP. The auth threshold above only ever sees reasons
+   2/15/202/204; a configured clock whose AP never becomes reachable -- router
+   off, 200/201/205 answers, a driver that keeps failing -- would otherwise
+   retry STA forever with no way back in. #131 R1 covered only the "wait for
+   the router" case, and the slow path keeps that: STA still retries first,
+   just a bounded number of times. 8 is ~2 min at the capped 30 s backoff. */
+#define SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD 8
 #define SVC_NETWORK_RECOVERY_IDLE_WINDOW_US    (15LL * 60LL * 1000000LL)  /* 15 min */
 #define SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US   (30LL * 60LL * 1000000LL)  /* 30 min */
 #define SVC_NETWORK_COOLDOWN_US                (10LL * 60LL * 1000000LL)  /* 10 min */
@@ -106,6 +114,10 @@ static char                         s_ip_str[16]   = {0};
  *                      but not the STA retry.
  * s_generation       : bumped by svc_network_stop(); a worker compares its
  *                      snapshot to detect a restart it must not overrule.
+ * s_consecutive_fail : consecutive STA disconnects of ANY reason, counted
+ *                      under the same guard as the auth streak. Reaching
+ *                      SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD (8) enters
+ *                      recovery even when the reason is not auth-class.
  * s_recovery_lock    : static mutex guarding the two strings; NULL means
  *                      uninitialised, which makes the getters fail closed.
  * -------------------------------------------------------------------- */
@@ -114,6 +126,7 @@ static bool                             s_recovery_mode          = false;
 static bool                             s_force_recovery         = false;
 static bool                             s_cooldown_active        = false;
 static uint8_t                          s_consecutive_auth_fail  = 0;
+static uint8_t                          s_consecutive_fail       = 0;
 static uint32_t                         s_generation             = 0;
 static int64_t                          s_recovery_entry_us         = 0;
 static int64_t                          s_last_recovery_activity_us = 0;
@@ -383,6 +396,41 @@ static bool ensure_recovery_lock(void)
 /* CR #2 -- recovery workers and timer callbacks                      */
 /* ------------------------------------------------------------------ */
 
+/* PR #157 -- the single guarded entry into the recovery AP. Both triggers
+ * use it: the auth-class streak (SVC_NETWORK_AUTH_FAIL_THRESHOLD) and the
+ * unreachable slow path (SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD). Returns
+ * true when the entry is armed; the caller must then NOT schedule a
+ * reconnect, because the entry worker's stop()/start() owns the link.
+ *
+ * Returns false after rolling BOTH flags back, so the caller falls through
+ * to the normal STA ladder. Leaving either flag set on failure would make
+ * recovery_guards_active() true forever: the counters stop counting and the
+ * device silently loses its only path back to the network.
+ *
+ * s_recovery_active is set BEFORE arming: it gates a double spawn, and the
+ * guard it raises makes any disconnect that arrives inside the 250 ms window
+ * a no-op. */
+static bool arm_recovery_entry(void)
+{
+    s_force_recovery  = true;
+    s_recovery_active = true;   /* set BEFORE arming: gates double-spawn */
+    /* Arm a 250 ms one-shot; the callback spawns the worker. Never
+       xTaskCreate here: that allocates on the Wi-Fi event task,
+       and this file already arms timers for that reason. */
+    esp_err_t arm_err = s_recovery_entry_trigger_timer
+        ? esp_timer_start_once(s_recovery_entry_trigger_timer,
+                               250ULL * 1000ULL)
+        : ESP_ERR_INVALID_STATE;
+    if (arm_err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to arm recovery entry (%s)",
+                 esp_err_to_name(arm_err));
+        s_force_recovery  = false;
+        s_recovery_active = false;
+        return false;
+    }
+    return true;
+}
+
 /* Design section 6.7 (E1): the bring-up retry ladder. Deliberately separate
  * from the STA ladder (s_backoff_ms): svc_network_stop() resets that one on
  * every cycle, so a shared ladder would retry esp_wifi_init() once per second
@@ -552,6 +600,7 @@ static void recovery_exit_worker(void *arg)
     } else {
         s_bringup_backoff_ms    = SVC_NETWORK_BACKOFF_MIN_MS;   /* E1 */
         s_consecutive_auth_fail = 0;                            /* F4 */
+        s_consecutive_fail      = 0;                            /* PR #157 */
     }
     vTaskDelete(NULL);
 }
@@ -704,55 +753,67 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
         bool auth_class = reason_is_auth_class(reason);
 
-        /* CR #2 (design section 6.2.2): count only auth-class reasons, and
-           only while no guard is active. recovery_guards_active() guards the
-           COUNTER; s_recovery_active alone also guards schedule_reconnect(). */
-        if (auth_class && !recovery_guards_active()) {
-            /* Clamp: the counter only has to reach the threshold, and a wrap
+        /* CR #2 (design section 6.2.2): count only while no guard is active.
+           recovery_guards_active() guards BOTH counters; s_recovery_active
+           alone also guards schedule_reconnect(). */
+        if (!recovery_guards_active()) {
+            /* Clamp: a counter only has to reach its threshold, and a wrap
                to 0 would restart a fresh run from inside an already-stale
                one. */
-            if (s_consecutive_auth_fail < 0xFF) {
-                s_consecutive_auth_fail++;
+            if (s_consecutive_fail < 0xFF) {
+                s_consecutive_fail++;
             }
-            ESP_LOGW(TAG, "auth-class reason=%u, consecutive=%u",
-                     (unsigned)reason, (unsigned)s_consecutive_auth_fail);
-            if (s_consecutive_auth_fail >= SVC_NETWORK_AUTH_FAIL_THRESHOLD) {
-                s_force_recovery  = true;
-                s_recovery_active = true;   /* set BEFORE arming: gates double-spawn */
-                /* Arm a 250 ms one-shot; the callback spawns the worker. Never
-                   xTaskCreate here: that allocates on the Wi-Fi event task,
-                   and this file already arms timers for that reason. */
-                esp_err_t arm_err = s_recovery_entry_trigger_timer
-                    ? esp_timer_start_once(s_recovery_entry_trigger_timer,
-                                           250ULL * 1000ULL)
-                    : ESP_ERR_INVALID_STATE;
-                if (arm_err != ESP_OK) {
-                    ESP_LOGE(TAG, "failed to arm recovery entry (%s)",
-                             esp_err_to_name(arm_err));
-                    s_force_recovery  = false;
-                    s_recovery_active = false;
-                    schedule_reconnect();
+            if (auth_class) {
+                if (s_consecutive_auth_fail < 0xFF) {
+                    s_consecutive_auth_fail++;
+                }
+                ESP_LOGW(TAG, "auth-class reason=%u, consecutive=%u",
+                         (unsigned)reason, (unsigned)s_consecutive_auth_fail);
+                if (s_consecutive_auth_fail >= SVC_NETWORK_AUTH_FAIL_THRESHOLD) {
+                    if (arm_recovery_entry()) {
+                        return;   /* the entry worker owns the link now */
+                    }
+                    /* Arm failed: both flags are rolled back, so fall through
+                       to the ordinary ladder below. */
                 }
             } else {
-                schedule_reconnect();
-            }
-        } else {
-            if (!auth_class) {
                 /* F4: only an unbroken series of auth-class failures is
                    evidence of wrong credentials; anything else ends the run. */
                 s_consecutive_auth_fail = 0;
             }
-            /* #131 (R1): do NOT fall back to AP on retry exhaustion. Boot
-               before the router is up is a normal power-cut scenario; calling
-               start_ap_mode() here (which calls esp_wifi_stop()) would lock
-               the device in setup mode until the next power-cycle. Keep
-               retrying STA with the capped backoff (1 s -> 30 s); when the
-               router comes up, the next retry reconnects automatically.
-               AP mode is reachable only from svc_network_start() when
-               credentials are absent. */
-            if (!s_recovery_active) {
-                schedule_reconnect();
+
+            /* CR #2 slow path (PR #157): a configured clock whose AP never
+               becomes reachable must still become reachable itself. The
+               auth-class ladder above only ever sees 2/15/202/204, so a
+               router that is off, an AP answering 200/201/205, or a driver
+               that keeps failing would otherwise retry STA forever (#131 R1
+               assumed "the router will come up"; nothing guaranteed it). 8
+               consecutive failures is ~2 min at the capped 30 s backoff. */
+            if (s_consecutive_fail >= SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD) {
+                ESP_LOGW(TAG, "AP unreachable (%u consecutive failures), "
+                              "entering recovery",
+                         (unsigned)s_consecutive_fail);
+                if (arm_recovery_entry()) {
+                    return;   /* the entry worker owns the link now */
+                }
             }
+        } else if (!auth_class) {
+            /* F4 in the guarded case: a non-auth disconnect ends the auth
+               run even while a guard is active, so a stale streak cannot
+               survive a cooldown or a recovery cycle. */
+            s_consecutive_auth_fail = 0;
+        }
+
+        /* #131 (R1): a plain STA retry, never AP, unless a trigger above
+           already returned. Boot before the router is up is a normal
+           power-cut scenario; calling start_ap_mode() from here would lock
+           the device in setup mode until the next power-cycle. The bounded
+           slow path above is what makes recovery reachable, not this branch.
+           s_recovery_active still suppresses the retry on its own: during
+           teardown the STA driver is going away, and arming a reconnect into
+           it would race svc_network_stop(). */
+        if (!s_recovery_active) {
+            schedule_reconnect();
         }
         break;
     }
@@ -774,8 +835,11 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
         s_connected = true;
         reset_backoff();
 
-        /* F4: a working link ends any auth-fail run. */
+        /* F4: a working link ends any auth-fail run, and the slow path's
+           failure run with it (PR #157) -- otherwise a link that just came
+           back would still be one disconnect away from the trigger. */
         s_consecutive_auth_fail = 0;
+        s_consecutive_fail      = 0;
 
         /* E1 defence in depth: svc_network_start() already reset the ladder on
            its ESP_OK return; repeating it here keeps the invariant true for
@@ -866,6 +930,18 @@ static void start_ap_mode(ap_mode_t mode)
             return;
         }
         ESP_LOGW(TAG, "Starting recovery AP (SSID: %s)", s_recovery_ssid);
+        /* Bench aid: a board with no panel cannot show the passphrase that
+           ui_producer would draw, so the recovery identity is unreadable on
+           the bench without this. Same build-flag pattern as the API token
+           print in svc_http.c: opt in with -DCHRONOLINK_DEBUG_PRINT_TOKEN=1
+           in platformio.local.ini (git-ignored). Setup branches never print
+           it, and with the flag undefined the line and its format string are
+           removed by the preprocessor, so nothing leaks in a shipped image.
+           Safe to print here: the guard above already proved the identity is
+           prepared (16 chars), and this task is the only writer. */
+#if defined(CHRONOLINK_DEBUG_PRINT_TOKEN)
+        ESP_LOGW(TAG, " Recovery passphrase (bench debug): %s", s_recovery_pass);
+#endif
     } else {
         ESP_LOGW(TAG, "Starting AP setup mode (no WiFi credentials; SSID: %s)",
                  AP_SSID);
@@ -1019,16 +1095,39 @@ esp_err_t svc_network_start(void)
         return start_recovery_ap();
     }
 
-    if (cred_err != ESP_OK) {
-        ESP_LOGW(TAG, "No WiFi credentials found. Starting AP mode.");
+    /* PR #157: an empty SSID is a credential set that can never associate --
+       treat it exactly like "unconfigured" instead of burning the STA ladder
+       on a guaranteed failure. An empty PASSWORD with a non-empty SSID stays
+       valid: that is an open network (see the authmode line below). */
+    if (cred_err != ESP_OK || ssid[0] == '\0') {
+        if (cred_err != ESP_OK) {
+            ESP_LOGW(TAG, "No WiFi credentials found. Starting AP mode.");
+        } else {
+            ESP_LOGW(TAG, "Empty SSID stored; treating as unconfigured. "
+                          "Starting AP mode.");
+        }
 
         if (bringup_ap_driver() != ESP_OK) {
+            /* PR #157: cold-boot bring-up failure. Nothing else would ever
+               retry at this point (no worker is running yet), so arm the
+               ladder instead of stranding the clock with no link and no AP.
+               The retry worker's stop() is a no-op here (s_started is still
+               false) and its start() re-runs this same branch. */
+            arm_bringup_retry();
             return ESP_FAIL;
         }
 
         s_started = true; // Allow svc_network_stop() to clean up if AP mode fails
         start_ap_mode(AP_MODE_SETUP);
-        return s_ap_mode ? ESP_OK : ESP_FAIL;
+        if (!s_ap_mode) {
+            /* Same cold-boot treatment as above. s_started is already true, so
+               the retry worker's stop() tears the half-built AP down --
+               including esp_wifi_deinit(), which the next bringup_ap_driver()
+               requires -- before start() tries again. */
+            arm_bringup_retry();
+            return ESP_FAIL;
+        }
+        return ESP_OK;
     }
     ESP_LOGI(TAG, "Connecting to SSID '%s'", ssid);
 
@@ -1134,6 +1233,16 @@ esp_err_t svc_network_start(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "WiFi start sequence failed: %s", esp_err_to_name(err));
         publish_error(SVC_NETWORK_STAGE_CONNECT, err);
+        /* PR #157: cold-boot bring-up failure. s_started is set before the
+           return on purpose -- the driver is initialised and the event
+           handlers and the STA netif are live, so svc_network_stop() must be
+           allowed to tear them down. Without it the retry worker's stop() is
+           a no-op and its start() dies on esp_wifi_init()'s
+           ESP_ERR_WIFI_INIT_STATE forever, which would turn "bounded retries"
+           into "bounded failures". Same partial-failure contract as the
+           setup-AP branch above. */
+        s_started = true;
+        arm_bringup_retry();
         return ESP_FAIL;
     }
 
@@ -1147,9 +1256,13 @@ esp_err_t svc_network_start(void)
        F4 (design section 6.2): a successful restart also ends any auth-fail
        streak. Without this the counter would still sit at the threshold when
        the STA path resumes after a recovery cycle, so the next single
-       auth-class failure would re-trigger recovery immediately. */
+       auth-class failure would re-trigger recovery immediately. The
+       any-reason counter (PR #157) is reset for the same reason: a successful
+       bring-up must not leave the next single disconnect one step away from
+       the slow-path trigger. */
     s_bringup_backoff_ms    = SVC_NETWORK_BACKOFF_MIN_MS;
     s_consecutive_auth_fail = 0;
+    s_consecutive_fail      = 0;
 
     ESP_LOGI(TAG, "WiFi STA starting");
     publish_network_event(EVENT_NETWORK_STARTING, NULL, 0);

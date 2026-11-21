@@ -252,22 +252,27 @@ refactoring.
 
 ```mermaid
 flowchart TB
-    START[NOT_STARTED] -->|"svc_network_start: no credentials"| SETUP["SETUP_AP (open)"]
+    START[NOT_STARTED] -->|"svc_network_start: no or empty credentials"| SETUP["SETUP_AP (open)"]
     START -->|"svc_network_start: has credentials"| STA[STA_CONNECT]
     STA -->|GOT_IP| CONNECTED[CONNECTED]
-    STA -->|"auth-class reason: 202/15/204/2"| RETRYA["RETRY, count++"]
-    STA -->|"any other reason"| RETRYO["RETRY, count = 0"]
-    RETRYA -->|"count < 5: backoff 1 s to 30 s"| STA
-    RETRYO -->|"backoff 1 s to 30 s"| STA
-    RETRYA -->|"count >= 5: 250 ms trigger"| RECOVERY["RECOVERY_AP (WPA2-PSK)"]
+    STA -->|"auth-class reason: 202/15/204/2"| RETRYA["RETRY, auth++ total++"]
+    STA -->|"any other reason"| RETRYO["RETRY, auth = 0 total++"]
+    RETRYA -->|"auth < 5 and total < 8: backoff 1 s to 30 s"| STA
+    RETRYO -->|"total < 8: backoff 1 s to 30 s"| STA
+    RETRYA -->|"auth >= 5: 250 ms trigger"| RECOVERY["RECOVERY_AP (WPA2-PSK)"]
+    RETRYO -->|"total >= 8: 250 ms trigger"| RECOVERY
     RECOVERY -->|"idle 15 min OR absolute 30 min"| EXIT["stop then start; arm 10 min cooldown"]
     EXIT -->|STA_CONNECT| STA
 ```
 
-`SETUP_AP` (no credentials at boot) is unchanged. `RECOVERY_AP` sits after
-`RETRY` and before `CONNECTED`: it is entered from `RETRY` when the auth-class
-streak reaches the threshold, and it returns through `svc_network_stop()` then
-`svc_network_start()` to `STA_CONNECT`, never straight to `CONNECTED`.
+`SETUP_AP` covers both "no credentials at boot" and "an empty SSID stored" --
+an empty SSID can never associate, so `svc_network_start()` treats it as
+unconfigured instead of burning the STA ladder on a guaranteed failure. Both
+triggers share one entry helper, `arm_recovery_entry()`: `RECOVERY_AP` sits
+after `RETRY` and before `CONNECTED`, is entered from `RETRY` when either
+streak reaches its threshold (5 auth-class, or 8 of any reason), and returns
+through `svc_network_stop()` then `svc_network_start()` to `STA_CONNECT`,
+never straight to `CONNECTED`.
 
 **Thresholds and windows.** Plain `#define`s in `svc_network.c` (the same
 precedent as `SVC_NETWORK_BACKOFF_MAX_MS`), not Kconfig entries:
@@ -275,6 +280,7 @@ precedent as `SVC_NETWORK_BACKOFF_MAX_MS`), not Kconfig entries:
 | Constant | Value | Meaning |
 |---|---|---|
 | `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class failures that trigger recovery |
+| `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 8 | consecutive failures of **any** reason that trigger recovery (slow path) |
 | `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
 | `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
 | `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, window in which auth failures are not counted |
@@ -290,18 +296,43 @@ toward the streak:
 | 204 | `WIFI_REASON_HANDSHAKE_TIMEOUT` |
 | 2 | `WIFI_REASON_AUTH_EXPIRE` |
 
-Every other reason resets the streak to 0 and reconnects exactly as before.
-**#131 R1 is preserved by construction:** `201 WIFI_REASON_NO_AP_FOUND` is not
-in the whitelist, and neither are `200 BEACON_TIMEOUT`, `205 CONNECTION_FAIL`
-nor `212 NO_AP_FOUND_IN_RSSI_THRESHOLD`, so a router that is simply down can
-never be mistaken for wrong credentials. `210`/`211` (WPA3-only security
-mismatch) are deliberately deferred to a follow-up.
+Every other reason resets the auth streak to 0 and reconnects as before (PR
+#157: it also advances the any-reason counter described below).
+**#131 R1 is preserved for the credentials question:** `201 WIFI_REASON_NO_AP_FOUND`
+is not in the whitelist, and neither are `200 BEACON_TIMEOUT`, `205
+CONNECTION_FAIL` nor `212 NO_AP_FOUND_IN_RSSI_THRESHOLD`, so a router that is
+simply down is never *classified* as wrong credentials and STA keeps being
+retried first. `210`/`211` (WPA3-only security mismatch) are deliberately
+deferred to a follow-up.
+
+**Slow path (PR #157).** The auth streak alone left a configured clock
+stranded whenever the failure was not a credential rejection: a driver that
+keeps failing to come up, an AP that answers `NO_AP_FOUND` forever, or one
+that is simply out of range all produced infinite STA retries with no way back
+in. A second counter, `s_consecutive_fail`, now counts consecutive
+`STA_DISCONNECTED` events of **any** reason under the same guard; at
+`SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (8, roughly 2 min at the capped 30 s
+backoff) it enters recovery through the same `arm_recovery_entry()`. Both
+triggers therefore obey the same rules: nothing is counted while
+`recovery_guards_active()` (cooldown or recovery up), the 250 ms one-shot is
+the only spawn path, and `IP_EVENT_STA_GOT_IP` clears both counters.
+
+**Cold-boot bring-up failure (PR #157).** `svc_network_start()` returning
+`ESP_FAIL` from a cold boot (setup AP, or the STA `esp_wifi_set_mode` /
+`_set_config` / `_start` sequence) now arms the bring-up retry ladder instead
+of leaving the clock with no link and no AP. The failure path leaves the
+service stoppable (`s_started = true`, the same partial-failure contract the
+setup AP already used) so the retry worker's `stop()` can deinitialise the
+driver before `start()` runs again; without that the retry would die on
+`esp_wifi_init()`'s `ESP_ERR_WIFI_INIT_STATE` forever.
 
 **Where the pieces live:**
 
-- `svc_network.c` -- reason classification, streak counter, entry and exit
-  workers, the four timers (entry trigger, idle/absolute timeout, bring-up
-  retry, cooldown), the bring-up retry ladder (1 s -> 30 s, never gives up),
+- `svc_network.c` -- reason classification, the two streak counters, the
+  single guarded entry helper `arm_recovery_entry()` (both triggers use it),
+  entry and exit workers, the four timers (entry trigger, idle/absolute
+  timeout, bring-up retry, cooldown), the bring-up retry ladder
+  (1 s -> 30 s, never gives up; also armed from a cold-boot bring-up failure),
   and the accessors `svc_network_is_recovery_mode()`,
   `svc_network_get_recovery_ssid()`,
   `svc_network_get_recovery_passphrase()`,
