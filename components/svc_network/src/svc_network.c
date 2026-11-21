@@ -65,8 +65,10 @@ static const char *TAG = "svc_network";
    off, 200/201/205 answers, a driver that keeps failing -- would otherwise
    retry STA forever with no way back in. #131 R1 covered only the "wait for
    the router" case, and the slow path keeps that: STA still retries first,
-   just a bounded number of times. 8 is ~2 min at the capped 30 s backoff. */
-#define SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD 8
+   just a bounded number of times. 24 is ~10 min at the capped 30 s backoff
+   (1+2+4+8+16 s, then 30 s each), long enough to outlast a router or ISP
+   modem that boots slower than the ESP32 after a power cut. */
+#define SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD 24
 #define SVC_NETWORK_RECOVERY_IDLE_WINDOW_US    (15LL * 60LL * 1000000LL)  /* 15 min */
 #define SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US   (30LL * 60LL * 1000000LL)  /* 30 min */
 #define SVC_NETWORK_COOLDOWN_US                (10LL * 60LL * 1000000LL)  /* 10 min */
@@ -116,7 +118,7 @@ static char                         s_ip_str[16]   = {0};
  *                      snapshot to detect a restart it must not overrule.
  * s_consecutive_fail : consecutive STA disconnects of ANY reason, counted
  *                      under the same guard as the auth streak. Reaching
- *                      SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD (8) enters
+ *                      SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD (24) enters
  *                      recovery even when the reason is not auth-class.
  * s_recovery_lock    : static mutex guarding the two strings; NULL means
  *                      uninitialised, which makes the getters fail closed.
@@ -787,8 +789,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
                auth-class ladder above only ever sees 2/15/202/204, so a
                router that is off, an AP answering 200/201/205, or a driver
                that keeps failing would otherwise retry STA forever (#131 R1
-               assumed "the router will come up"; nothing guaranteed it). 8
-               consecutive failures is ~2 min at the capped 30 s backoff. */
+               assumed "the router will come up"; nothing guaranteed it). 24
+               consecutive failures is ~10 min at the capped 30 s backoff. */
             if (s_consecutive_fail >= SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD) {
                 ESP_LOGW(TAG, "AP unreachable (%u consecutive failures), "
                               "entering recovery",
