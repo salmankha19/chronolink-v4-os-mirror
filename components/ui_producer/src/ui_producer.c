@@ -30,15 +30,14 @@
  * (5 ms mutex + 5 ms queue). The task is pinned to core 0, leaving core 1 to
  * the 60 Hz display pump in core1_task.
  *
- * The task owns three screens, in this priority order:
- *   1. recovery AP  -- CR #2, design section 6.10 (svc_network_is_recovery_mode)
- *   2. setup AP     -- ChronoLink-Setup (svc_network_is_ap_mode)
- *   3. clock face
- * While either AP screen is up the loop submits one self-contained layout
+ * The task owns two screens: the provisioning AP screen (one unified layout
+ * for both entry scenarios -- no credentials stored, and credential lockout)
+ * and the clock face.
+ * While the AP screen is up the loop submits one self-contained layout
  * (leading DM_CMD_CLEAR) and skips the clock work entirely. s_last_text holds
- * the draw key of whatever is on the panel -- "AP_MODE",
- * "RECOVERY_<ssid>_<passphrase>", or the clock key -- so a mode change, a
- * passphrase rotation, or a time/date change always forces a re-render.
+ * the draw key of whatever is on the panel -- "AP_<ssid>_<passphrase>" or the
+ * clock key -- so a mode change, a passphrase rotation, or a time/date change
+ * always forces a re-render.
  */
 #include "ui_producer.h"
 #include "display_manager.h"
@@ -72,18 +71,6 @@ static const char *TAG = "ui_producer";
 static TaskHandle_t s_producer_task = NULL;
 static char s_last_text[128] = {0};   /* matches draw_key[128]; see 5e */
 
-/* Draw-key tag for the CR #2 recovery screen. Used both to build the key and
-   to detect "the panel is still showing recovery" on exit, so the two can
-   never drift apart. */
-#define UI_KEY_RECOVERY_PREFIX "RECOVERY_"
-
-/* CR #2 (design section 6.10): draw key for the recovery AP screen. Static,
-   not a local -- this task's stack is only 3072 B and already holds a
-   dm_frame_t (~708 B). 128 B matches s_last_text[128]; the longest possible
-   key is "RECOVERY_" + 32-char SSID + "_" + 64-char passphrase + NUL = 107,
-   so the identity can never be silently truncated into the key. */
-static char s_recovery_key[128] = {0};
-
 
 /* --------------------------------------------------------------------------
  * Producer task (core 0)
@@ -112,113 +99,77 @@ static void ui_producer_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(UI_POLL_PERIOD_MS));
 
-        /* CR #2 (design section 6.10): recovery AP screen. This test MUST come
-           before the setup-AP branch below. It is not just a priority rule:
-           the recovery AP is brought up through the same start_ap_mode() as
-           the setup AP, so during recovery svc_network_is_ap_mode() is TRUE as
-           well. Testing is_ap_mode() first would therefore show the
-           "ChronoLink-Setup" instructions instead of the recovery identity. */
-        if (svc_network_is_recovery_mode()) {
+        /* CR #4: single provisioning AP screen. svc_network_is_ap_mode() covers
+           both entry scenarios -- no credentials stored at boot, and credential
+           lockout -- and the identity is "ChronoLink-<MAC4>" either way, so
+           there is one branch, not two. */
+        if (svc_network_is_ap_mode()) {
             /* 33 = worst-case 802.11 SSID (32) + NUL; 17 = the 16-char
-               recovery passphrase + NUL. Both getters fail closed with
-               ESP_ERR_INVALID_SIZE instead of truncating, so an identity that
-               outgrew these buffers blanks the screen rather than showing a
-               misleading one. */
+               passphrase + NUL. Both getters fail closed on a too-small buffer
+               and while the identity is not ready, so a partial identity can
+               never be drawn. */
             char ssid[33] = {0};
             char pass[17] = {0};
 
-            /* Recovery mode can end between the predicate above and these
-               calls (idle/absolute timeout); both then return
-               ESP_ERR_INVALID_STATE. Skip the frame and retry next poll --
-               never draw stale or empty strings, and never build a key from
-               half an identity. */
-            if (svc_network_get_recovery_ssid(ssid, sizeof ssid) != ESP_OK ||
-                svc_network_get_recovery_passphrase(pass, sizeof pass) != ESP_OK) {
+            /* AP mode can end between the predicate above and these calls
+               (recovery idle/absolute timeout, stop from a worker); both then
+               return ESP_ERR_INVALID_STATE. Skip the frame and retry next
+               poll -- never draw stale or empty strings, and never build a key
+               from half an identity. */
+            if (svc_network_get_ap_ssid(ssid, sizeof(ssid)) != ESP_OK ||
+                svc_network_get_ap_passphrase(pass, sizeof(pass)) != ESP_OK) {
                 continue;
             }
 
-            snprintf(s_recovery_key, sizeof s_recovery_key,
-                     UI_KEY_RECOVERY_PREFIX "%s_%s", ssid, pass);
+            char draw_key[128];
+            snprintf(draw_key, sizeof(draw_key), "AP_%s_%s", ssid, pass);
 
-            if (strcmp(s_recovery_key, s_last_text) != 0) {
+            if (strcmp(draw_key, s_last_text) != 0) {
                 dm_frame_t frame;
-                memset(&frame, 0, sizeof frame);
+                memset(&frame, 0, sizeof(frame));
                 frame.flags = DM_FRAME_FLAG_NONE;
 
                 /* 9 commands (1 clear + 8 text) against
-                   DM_MAX_CMDS_PER_FRAME 16. Longest string is the 24-char
+                   DM_MAX_CMDS_PER_FRAME 16. Longest string is the 15-char
                    SSID; DM_MAX_TEXT_LEN is 32, i.e. 31 usable chars. */
                 uint8_t n = 0;
                 dm_cmd_clear(&frame.cmds[n++], UI_COLOR_BLACK);
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 30,
-                                        /* font_id */ 1, 24, "WiFi Recovery Mode");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 80,
-                                        /* font_id */ 1, 18, "Connect to:");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 110,
-                                        /* font_id */ 1, 18, ssid);
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 150,
-                                        /* font_id */ 1, 18, "Password:");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 180,
-                                        /* font_id */ 1, 18, pass);
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 220,
-                                        /* font_id */ 1, 18, "Open Browser:");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 250,
-                                        /* font_id */ 1, 18, "192.168.4.1");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 290,
-                                        /* font_id */ 1, 18, "Auto-exits when idle");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 30, 1, 24,
+                                        "WiFi Provisioning Mode");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 70, 1, 18,
+                                        "Connect to:");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 95, 1, 18, ssid);
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 125, 1, 18,
+                                        "Password:");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 150, 1, 18, pass);
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 180, 1, 18,
+                                        "Open Browser:");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 205, 1, 18,
+                                        "192.168.4.1");
+                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 235, 1, 16,
+                                        "Auto-exits when idle");
                 frame.cmd_count = n;
 
                 if (!display_manager_submit_frame(&frame)) {
-                    ESP_LOGW(TAG, "recovery frame submit failed");
+                    ESP_LOGW(TAG, "AP frame submit failed");
                 } else {
                     /* Copy only after a successful submit, so a dropped frame
                        is retried on the next poll (same as the clock path). */
-                    strncpy(s_last_text, s_recovery_key, sizeof s_last_text - 1);
+                    strncpy(s_last_text, draw_key, sizeof(s_last_text) - 1);
                     s_last_text[sizeof(s_last_text) - 1] = '\0';
                 }
             }
-            continue; /* Skip the setup-AP and clock logic below */
+            continue; /* Skip the clock logic below */
         }
 
-        /* Check if we are in WiFi Setup (AP) mode */
-        if (svc_network_is_ap_mode()) {
-            if (strcmp(s_last_text, "AP_MODE") != 0) {
-                
-                dm_frame_t frame;
-                memset(&frame, 0, sizeof frame);
-                frame.flags = DM_FRAME_FLAG_NONE;
-                uint8_t n = 0;
-
-                dm_cmd_clear(&frame.cmds[n++], UI_COLOR_BLACK);
-                
-                // Draw Setup Instructions (using font_id 1, target height 24)
-                uint16_t fh = 24;
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 40, 1, fh, "WiFi Setup Mode");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 80, 1, fh, "Connect to:");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 110, 1, fh, "ChronoLink-Setup");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 160, 1, fh, "Open Browser:");
-                dm_cmd_draw_text_scaled(&frame.cmds[n++], 10, 190, 1, fh, "192.168.4.1");
-                
-                frame.cmd_count = n;
-                if (display_manager_submit_frame(&frame)) {
-                    strncpy(s_last_text, "AP_MODE", sizeof s_last_text - 1);
-                }
-            }
-            continue; // Skip the clock logic below
-        } else {
-            /* If we just left AP mode or the recovery AP, force a full clock
-               redraw. first_frame matters here: it is what emits the
-               DM_CMD_CLEAR, and the AP screens paint outside the clock's own
-               rects (the recovery screen runs down to y=290), so without the
-               clear their lines would survive underneath the clock. The
-               recovery key is compared by prefix because it embeds the
-               current SSID and passphrase. */
-            if (strcmp(s_last_text, "AP_MODE") == 0 ||
-                strncmp(s_last_text, UI_KEY_RECOVERY_PREFIX,
-                        sizeof UI_KEY_RECOVERY_PREFIX - 1) == 0) {
-                s_last_text[0] = '\0';
-                first_frame = true;
-            }
+        /* If we just left AP mode, force a full clock redraw. first_frame
+           matters here: it is what emits the DM_CMD_CLEAR, and the AP screen
+           paints outside the clock's own rects (down to y=235), so without the
+           clear its lines would survive underneath the clock. The AP key is
+           compared by prefix because it embeds the SSID and passphrase. */
+        if (strncmp(s_last_text, "AP_", 3) == 0) {
+            s_last_text[0] = '\0';
+            first_frame = true;
         }
 
         svc_time_snapshot_t snap;

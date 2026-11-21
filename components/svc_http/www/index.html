@@ -48,7 +48,7 @@
       every configuration request. Without it, POST endpoints reply 403.
     </p>
     <label>API Token</label>
-    <input type="password" id="api_token" placeholder="64-character hex token from serial console">
+    <input type="password" id="api_token" placeholder="16-character hex token from serial console">
     <button style="background:#16a085;" onclick="saveToken()">Save Token</button>
     <p id="token_status" style="font-size:0.85em; color:#888; margin-top:8px;">&mdash;</p>
   </div>
@@ -423,8 +423,17 @@
   <script>
     const TOKEN_KEY = 'chronolink_api_token';
 
+    /* Drop a token stored by an older page. The device token used to be 64
+       hex chars and is now 16, so a stale value would make every write 401
+       with no visible reason. Treat it as absent; updateTokenStatus() then
+       asks for the new value printed on the serial console. */
     function getToken() {
-      return localStorage.getItem(TOKEN_KEY) || '';
+      const t = localStorage.getItem(TOKEN_KEY) || '';
+      if (t && !/^[0-9a-f]{16}$/.test(t)) {
+        localStorage.removeItem(TOKEN_KEY);
+        return '';
+      }
+      return t;
     }
 
     function authHeaders() {
@@ -436,8 +445,8 @@
 
     function saveToken() {
       const t = document.getElementById('api_token').value.trim();
-      if (!/^[0-9a-f]{64}$/.test(t)) {
-        showToast('Token must be 64 lowercase hex characters');
+      if (!/^[0-9a-f]{16}$/.test(t)) {
+        showToast('Token must be 16 lowercase hex characters');
         return;
       }
       localStorage.setItem(TOKEN_KEY, t);

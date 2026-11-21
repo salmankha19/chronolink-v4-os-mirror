@@ -27,8 +27,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "esp_mac.h"      /* esp_read_mac() -- recovery SSID suffix (CR #2) */
-#include "esp_random.h"   /* esp_fill_random() -- recovery passphrase (CR #2) */
+#include "esp_mac.h"      /* esp_read_mac() -- AP SSID suffix (CR #4) */
+#include "esp_random.h"   /* esp_fill_random() -- AP passphrase (CR #4) */
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -41,8 +41,6 @@
 #include "network_events.h"
 
 static const char *TAG = "svc_network";
-
-#define AP_SSID "ChronoLink-Setup"
 
 #define NVS_NAMESPACE_WIFI   "wifi"
 #define NVS_KEY_SSID         "ssid"
@@ -61,8 +59,8 @@ static const char *TAG = "svc_network";
 #define SVC_NETWORK_AUTH_FAIL_THRESHOLD        5
 /* CR #2 slow path (PR #157). Consecutive STA disconnects of ANY reason that
    raise the recovery AP. The auth threshold above only ever sees reasons
-   2/15/202/204; a configured clock whose AP never becomes reachable -- router
-   off, 200/201/205 answers, a driver that keeps failing -- would otherwise
+   2/15/202/204/205; a configured clock whose AP never becomes reachable --
+   router off, 200/201 answers, a driver that keeps failing -- would otherwise
    retry STA forever with no way back in. #131 R1 covered only the "wait for
    the router" case, and the slow path keeps that: STA still retries first,
    just a bounded number of times. 24 is ~10 min at the capped 30 s backoff
@@ -79,14 +77,14 @@ static const char *TAG = "svc_network";
    re-deriving the other -- an idle window alone determines how long an
    installer has, a cooldown alone determines how long they wait. */
 
-/* Recovery AP identity (design section 6.4). SSID is
-   "ChronoLink-Recovery-" + the last two STA MAC bytes as %02X%02X
-   (24 chars), so a 33-byte buffer covers the 802.11 maximum. */
-#define RECOVERY_SSID_PREFIX    "ChronoLink-Recovery-"
-#define RECOVERY_SSID_BUF_LEN   33   /* 802.11 SSID max 32 + NUL */
-#define RECOVERY_PASS_BYTES     8    /* 8 random bytes -> 16 hex chars */
-#define RECOVERY_PASS_LEN       (2 * RECOVERY_PASS_BYTES)
-#define RECOVERY_PASS_BUF_LEN   (RECOVERY_PASS_LEN + 1)
+/* Provisioning AP identity (CR #4, replacing the CR #2 recovery-only
+   identity). SSID is "ChronoLink-" + the last two STA MAC bytes as %02X%02X
+   (15 chars), so a 33-byte buffer covers the 802.11 maximum; 17 bytes cover
+   the 16-char passphrase and its NUL. */
+#define AP_SSID_BUF_LEN   33   /* 802.11 SSID max 32 + NUL */
+#define AP_PASS_BYTES     8    /* 8 random bytes -> 16 hex chars */
+#define AP_PASS_LEN       (2 * AP_PASS_BYTES)
+#define AP_PASS_BUF_LEN   (AP_PASS_LEN + 1)
 
 /* ------------------------------------------------------------------ */
 /* Internal state                                                     */
@@ -106,9 +104,11 @@ static char                         s_ip_str[16]   = {0};
 /* --- CR #2 recovery state -------------------------------------------
  * s_recovery_active  : held ONLY across svc_network_stop() from a worker;
  *                      never across svc_network_start() (invariant 3).
- * s_recovery_mode    : true while the recovery AP is up; the httpd
- *                      exemption keys on THIS, never on s_ap_mode
- *                      (invariant 1). Cleared first in stop(), set last in
+ * s_recovery_mode    : true while the recovery AP is up (the credential
+ *                      lockout path). CR #4 gave both APs a single identity
+ *                      and moved the httpd exemption to s_ap_mode, so this
+ *                      flag now gates only the recovery idle timeout and the
+ *                      exit worker. Cleared first in stop(), set last in
  *                      start_ap_mode() (invariant 2).
  * s_force_recovery   : makes the next svc_network_start() take the
  *                      recovery-AP branch instead of STA.
@@ -120,8 +120,9 @@ static char                         s_ip_str[16]   = {0};
  *                      under the same guard as the auth streak. Reaching
  *                      SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD (24) enters
  *                      recovery even when the reason is not auth-class.
- * s_recovery_lock    : static mutex guarding the two strings; NULL means
- *                      uninitialised, which makes the getters fail closed.
+ * s_ap_identity_lock : static mutex guarding the AP identity strings
+ *                      (SSID + passphrase); NULL means uninitialised, which
+ *                      makes the getters fail closed.
  * -------------------------------------------------------------------- */
 static bool                             s_recovery_active        = false;
 static bool                             s_recovery_mode          = false;
@@ -133,10 +134,10 @@ static uint32_t                         s_generation             = 0;
 static int64_t                          s_recovery_entry_us         = 0;
 static int64_t                          s_last_recovery_activity_us = 0;
 static uint32_t                         s_bringup_backoff_ms     = SVC_NETWORK_BACKOFF_MIN_MS;
-static char                             s_recovery_ssid[RECOVERY_SSID_BUF_LEN] = {0};
-static char                             s_recovery_pass[RECOVERY_PASS_BUF_LEN] = {0};
-static StaticSemaphore_t                s_recovery_lock_storage;
-static SemaphoreHandle_t                s_recovery_lock          = NULL;
+static char                             s_ap_ssid[AP_SSID_BUF_LEN] = {0};
+static char                             s_ap_pass[AP_PASS_BUF_LEN] = {0};
+static StaticSemaphore_t                s_ap_identity_lock_storage;
+static SemaphoreHandle_t                s_ap_identity_lock      = NULL;
 static esp_timer_handle_t               s_recovery_entry_trigger_timer = NULL;
 static esp_timer_handle_t               s_recovery_timeout_timer       = NULL;
 static esp_timer_handle_t               s_bringup_retry_timer          = NULL;
@@ -147,16 +148,22 @@ static esp_timer_handle_t               s_cooldown_timer               = NULL;
 /* ------------------------------------------------------------------ */
 
 /* Design section 6.1 -- pure predicate, no state. Whitelist frozen at
-   {2, 15, 202, 204} (values verified against esp_wifi_types_generic.h,
-   IDF v6.0). Deliberately NOT counted: 200 BEACON_TIMEOUT,
-   201 NO_AP_FOUND, 205 CONNECTION_FAIL -- #131 R1 requires "the router is
-   down" to stay on plain STA retry forever. Deliberately deferred:
-   210 / 211 (WPA3-only router). */
+   {2, 15, 202, 204, 205} (values verified against esp_wifi_types_generic.h,
+   IDF v6.0). 205 CONNECTION_FAIL is counted as auth-class: the AP was seen
+   and the association/handshake was rejected, which is what a wrong password
+   looks like on routers that answer 205 instead of 15/202/204. Leaving it out
+   reset the streak, so a run that mixed 15/202 with 205 never reached the
+   threshold and a pure-205 wrong password only ever hit the slow path.
+   Deliberately NOT counted: 200 BEACON_TIMEOUT and 201 NO_AP_FOUND, which mean
+   the router is down or out of range; #131 R1 requires that case to stay on
+   plain STA retry forever, with the 24-strike slow path as its bounded
+   backstop. Deliberately deferred: 210 / 211 (WPA3-only router). */
 static bool reason_is_auth_class(uint8_t reason)
 {
     switch (reason) {
     case WIFI_REASON_AUTH_FAIL:              /* 202 */
     case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: /* 15  */
+    case WIFI_REASON_CONNECTION_FAIL:        /* 205 */
     case WIFI_REASON_HANDSHAKE_TIMEOUT:      /* 204 */
     case WIFI_REASON_AUTH_EXPIRE:            /* 2   */
         return true;
@@ -178,38 +185,75 @@ static bool recovery_guards_active(void)
     return s_recovery_active || s_recovery_mode || s_cooldown_active;
 }
 
-/* Design section 6.4 -- 16 uppercase hex chars, regenerated at every
- * recovery entry. Ephemeral: RAM only, never written to NVS, cleared by
- * svc_network_stop(). The hex loop mirrors load_or_generate_api_token()
- * in svc_http.c, which is deliberately NOT refactored by this change.
+/* CR #4 -- 16 uppercase hex chars, regenerated at every AP entry.
+ * Ephemeral: RAM only, never written to NVS, cleared by svc_network_stop().
+ * The hex loop mirrors load_or_generate_api_token() in svc_http.c, which is
+ * deliberately NOT refactored by this change.
  * WPA2-PSK requires 8..63 characters; 16 always satisfies that.
  *
  * Lock discipline (design section 7, C5): this helper takes
- * s_recovery_lock itself, so callers must NOT hold it across the call.
- * With no mutex it fails closed and leaves s_recovery_pass untouched --
- * s_recovery_pass is never written unlocked. */
-static esp_err_t generate_recovery_passphrase(void)
+ * s_ap_identity_lock itself, so callers must NOT hold it across the call.
+ * With no mutex it fails closed and leaves the identity untouched -- neither
+ * string is ever written unlocked. */
+static esp_err_t generate_ap_passphrase(void)
 {
-    if (!s_recovery_lock) {
-        ESP_LOGE(TAG, "recovery mutex not initialised; no passphrase");
+    if (!s_ap_identity_lock) {
+        ESP_LOGE(TAG, "AP identity mutex not initialised; no passphrase");
         return ESP_ERR_INVALID_STATE;
     }
-    if (xSemaphoreTake(s_recovery_lock, portMAX_DELAY) != pdTRUE) {
-        ESP_LOGE(TAG, "recovery mutex take failed (passphrase)");
+    if (xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "AP identity mutex take failed (passphrase)");
         return ESP_ERR_TIMEOUT;
     }
 
-    uint8_t raw[RECOVERY_PASS_BYTES];
+    uint8_t raw[AP_PASS_BYTES];
     esp_fill_random(raw, sizeof(raw));   /* hardware RNG, 8 bytes */
     static const char hex[] = "0123456789ABCDEF";
     for (size_t i = 0; i < sizeof(raw); i++) {
-        s_recovery_pass[2 * i]     = hex[raw[i] >> 4];
-        s_recovery_pass[2 * i + 1] = hex[raw[i] & 0x0F];
+        s_ap_pass[2 * i]     = hex[raw[i] >> 4];
+        s_ap_pass[2 * i + 1] = hex[raw[i] & 0x0F];
     }
-    s_recovery_pass[RECOVERY_PASS_LEN] = '\0';   /* index 16 */
+    s_ap_pass[AP_PASS_LEN] = '\0';   /* index 16 */
 
-    xSemaphoreGive(s_recovery_lock);
+    xSemaphoreGive(s_ap_identity_lock);
     return ESP_OK;
+}
+
+/* CR #4 -- build the single provisioning-AP identity: SSID
+ * "ChronoLink-<MAC4>" plus a fresh passphrase, for BOTH entry paths (no
+ * credentials at boot and credential lockout), so nothing over the air
+ * distinguishes them.
+ *
+ * Both strings are written inside one critical section, so a getter can never
+ * observe a torn identity (a new SSID with the previous passphrase). On
+ * failure nothing is partially written: the SSID is only formatted after the
+ * MAC read succeeds, and a failed mutex take returns before either write. */
+static esp_err_t generate_ap_identity(void)
+{
+    if (!s_ap_identity_lock) {
+        ESP_LOGE(TAG, "AP identity mutex not initialised; no identity");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "AP identity mutex take failed (identity)");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    uint8_t mac[6] = {0};
+    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_read_mac(ESP_MAC_WIFI_STA) failed: %s",
+                 esp_err_to_name(err));
+        xSemaphoreGive(s_ap_identity_lock);
+        return err;
+    }
+
+    snprintf(s_ap_ssid, sizeof(s_ap_ssid), "ChronoLink-%02X%02X",
+             mac[4], mac[5]);
+
+    xSemaphoreGive(s_ap_identity_lock);
+
+    return generate_ap_passphrase();
 }
 
 /* ------------------------------------------------------------------ */
@@ -380,18 +424,18 @@ static void reset_backoff(void)
     }
 }
 
-/* D8: create the recovery mutex on first use. Static storage means this
+/* D8: create the AP identity mutex on first use. Static storage means this
  * cannot fragment the heap, and xSemaphoreCreateMutexStatic() does not
  * allocate. Idempotent, so every svc_network_start() may call it. Not
  * itself locked: the callers (boot path, entry/exit/retry workers) are
  * serialised by s_started / s_recovery_active. */
-static bool ensure_recovery_lock(void)
+static bool ensure_ap_identity_lock(void)
 {
-    if (s_recovery_lock) {
+    if (s_ap_identity_lock) {
         return true;
     }
-    s_recovery_lock = xSemaphoreCreateMutexStatic(&s_recovery_lock_storage);
-    return s_recovery_lock != NULL;
+    s_ap_identity_lock = xSemaphoreCreateMutexStatic(&s_ap_identity_lock_storage);
+    return s_ap_identity_lock != NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -516,10 +560,10 @@ static void recovery_entry_worker(void *arg)
 
     esp_err_t err = svc_network_start();   /* recovery branch: s_force_recovery is set */
 
-    /* Invariant 1: a plain bool read suffices. This worker is the task that
-     * just ran start_ap_mode(), and s_recovery_mode is set there under
-     * s_recovery_lock only after esp_wifi_start() returned ESP_OK. */
-    if (err != ESP_OK || !svc_network_is_recovery_mode()) {
+    /* A plain bool read suffices. This worker is the task that just ran
+     * start_ap_mode(), and s_recovery_mode is set there under
+     * s_ap_identity_lock only after esp_wifi_start() returned ESP_OK. */
+    if (err != ESP_OK || !s_recovery_mode) {
         /* C1: fall back to the STA path. stop() is mandatory first because
          * s_started is sticky on partial failure -- start() would no-op. */
         s_force_recovery = false;
@@ -786,9 +830,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
             /* CR #2 slow path (PR #157): a configured clock whose AP never
                becomes reachable must still become reachable itself. The
-               auth-class ladder above only ever sees 2/15/202/204, so a
-               router that is off, an AP answering 200/201/205, or a driver
-               that keeps failing would otherwise retry STA forever (#131 R1
+               auth-class ladder above only ever sees 2/15/202/204/205, so a
+               router that is off, an AP answering 200/201, or a driver that
+               keeps failing would otherwise retry STA forever (#131 R1
                assumed "the router will come up"; nothing guaranteed it). 24
                consecutive failures is ~10 min at the capped 30 s backoff. */
             if (s_consecutive_fail >= SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD) {
@@ -876,43 +920,16 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
 /* Public API                                                         */
 /* ------------------------------------------------------------------ */
 
-/* CR #2: which AP the parameterised start_ap_mode() brings up. */
+/* CR #2: which AP the parameterised start_ap_mode() brings up. CR #4 gives
+   both entries the same SSID and the same WPA2 treatment; the value still
+   selects the entry path's bookkeeping (s_recovery_mode and the idle
+   timeout armed by the recovery entry worker). */
 typedef enum {
-    AP_MODE_SETUP    = 0,  /* no credentials at boot: ChronoLink-Setup, open  */
-    AP_MODE_RECOVERY = 1,  /* auth-class lockout: ChronoLink-Recovery-<MAC4>,
+    AP_MODE_SETUP    = 0,  /* no credentials at boot: ChronoLink-<MAC4>,
                               WPA2-PSK, passphrase shown on the display      */
+    AP_MODE_RECOVERY = 1,  /* auth-class / unreachable lockout:
+                              ChronoLink-<MAC4>, WPA2-PSK, passphrase shown  */
 } ap_mode_t;
-
-/* Build "ChronoLink-Recovery-<MAC4>" (last two STA MAC bytes) and generate a
- * fresh passphrase. Each write is its own short critical section on
- * s_recovery_lock, so the getters can never observe a torn identity (C5).
- * generate_recovery_passphrase() takes the same mutex itself, so the two
- * writes must stay in separate sections -- the mutex is not recursive.
- * Fails closed if the mutex is not up (D8). */
-static esp_err_t prepare_recovery_identity(void)
-{
-    uint8_t mac[6] = {0};
-    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_read_mac(ESP_MAC_WIFI_STA) failed: %s",
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    if (!s_recovery_lock) {
-        ESP_LOGE(TAG, "recovery mutex not initialised; no recovery identity");
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (xSemaphoreTake(s_recovery_lock, portMAX_DELAY) != pdTRUE) {
-        ESP_LOGE(TAG, "recovery mutex take failed (ssid)");
-        return ESP_ERR_TIMEOUT;
-    }
-    snprintf(s_recovery_ssid, sizeof(s_recovery_ssid), "%s%02X%02X",
-             RECOVERY_SSID_PREFIX, mac[4], mac[5]);
-    xSemaphoreGive(s_recovery_lock);
-
-    return generate_recovery_passphrase();
-}
 
 static void start_ap_mode(ap_mode_t mode)
 {
@@ -920,34 +937,34 @@ static void start_ap_mode(ap_mode_t mode)
 
     const bool recovery = (mode == AP_MODE_RECOVERY);
 
-    if (recovery) {
-        /* The identity is prepared by svc_network_start()'s recovery branch
-           (start_recovery_ap()) immediately before this call. Do NOT generate
-           it again here: a second generate_recovery_passphrase() would
-           silently replace the passphrase the caller just published and burn
-           a second RNG draw. Fail closed if the caller skipped that step. */
-        if (s_recovery_ssid[0] == '\0' ||
-            strlen(s_recovery_pass) != (size_t)RECOVERY_PASS_LEN) {
-            ESP_LOGE(TAG, "recovery identity not prepared; AP not started");
-            return;
-        }
-        ESP_LOGW(TAG, "Starting recovery AP (SSID: %s)", s_recovery_ssid);
-        /* Bench aid: a board with no panel cannot show the passphrase that
-           ui_producer would draw, so the recovery identity is unreadable on
-           the bench without this. Same build-flag pattern as the API token
-           print in svc_http.c: opt in with -DCHRONOLINK_DEBUG_PRINT_TOKEN=1
-           in platformio.local.ini (git-ignored). Setup branches never print
-           it, and with the flag undefined the line and its format string are
-           removed by the preprocessor, so nothing leaks in a shipped image.
-           Safe to print here: the guard above already proved the identity is
-           prepared (16 chars), and this task is the only writer. */
-#if defined(CHRONOLINK_DEBUG_PRINT_TOKEN)
-        ESP_LOGW(TAG, " Recovery passphrase (bench debug): %s", s_recovery_pass);
-#endif
-    } else {
-        ESP_LOGW(TAG, "Starting AP setup mode (no WiFi credentials; SSID: %s)",
-                 AP_SSID);
+    /* CR #4: one identity for both entry paths, generated HERE so it rotates
+       on every AP entry (the recovery branch used to prepare it beforehand;
+       doing it in one place keeps the two paths identical).
+
+       Fail closed: without a passphrase there is no physical-possession proof,
+       so never fall back to an open AP. Returning here leaves s_ap_mode false;
+       svc_network_start() then arms the bring-up retry ladder instead of
+       pretending the AP is up. */
+    esp_err_t gen_err = generate_ap_identity();
+    if (gen_err != ESP_OK) {
+        ESP_LOGE(TAG, "AP identity generation failed: %s",
+                 esp_err_to_name(gen_err));
+        return;
     }
+
+    ESP_LOGW(TAG, "Starting provisioning AP (SSID: %s)", s_ap_ssid);
+
+    /* Bench aid: a board with no panel cannot show the passphrase that
+       ui_producer would draw, so the AP is unjoinable on the bench without
+       this. Same build-flag pattern as the API token print in svc_http.c: opt
+       in with -DCHRONOLINK_DEBUG_PRINT_TOKEN=1 in platformio.local.ini
+       (git-ignored). With the flag undefined the line and its format string
+       are removed by the preprocessor, so nothing leaks in a shipped image.
+       Safe to print here: generate_ap_identity() returned ESP_OK, so the
+       passphrase is a full 16 chars, and this task is the only writer. */
+#if defined(CHRONOLINK_DEBUG_PRINT_TOKEN)
+    ESP_LOGW(TAG, " AP passphrase (bench debug): %s", s_ap_pass);
+#endif
 
     esp_wifi_stop(); // Best-effort stop of STA mode
 
@@ -960,28 +977,23 @@ static void start_ap_mode(ap_mode_t mode)
         return;
     }
 
-    /* AP_MODE_SETUP leaves this initialiser exactly as it was before CR #2;
-       the recovery branch overrides SSID, passphrase and auth mode below. */
+    /* One initialiser, one identity (CR #4). .authmode defaults to WPA2-PSK so
+       a future branch that forgets to set it can never silently open the AP;
+       both entry paths then copy the same s_ap_ssid / s_ap_pass below. */
     wifi_config_t ap_config = {
         .ap = {
-            .ssid = AP_SSID,
-            .ssid_len = strlen(AP_SSID),
             .channel = 1,
-            .authmode = WIFI_AUTH_OPEN,
+            .authmode = WIFI_AUTH_WPA2_PSK,
             .max_connection = 4,
         },
     };
 
-    if (recovery) {
-        /* Clear the AP_SSID bytes first: the recovery SSID is 24 chars. */
-        memset(ap_config.ap.ssid, 0, sizeof(ap_config.ap.ssid));
-        memcpy(ap_config.ap.ssid, s_recovery_ssid,
-               strnlen(s_recovery_ssid, sizeof(ap_config.ap.ssid)));
-        ap_config.ap.ssid_len = strlen(s_recovery_ssid);
-        memcpy(ap_config.ap.password, s_recovery_pass,
-               strnlen(s_recovery_pass, sizeof(s_recovery_pass)));
-        ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    }
+    /* Designated initialisers zero the members they do not name, so .ssid and
+       .password start empty and need no memset before the copy. ssid_len must
+       be set explicitly: the driver does not assume NUL termination. */
+    memcpy(ap_config.ap.ssid, s_ap_ssid, strlen(s_ap_ssid));
+    ap_config.ap.ssid_len = strlen(s_ap_ssid);
+    memcpy(ap_config.ap.password, s_ap_pass, AP_PASS_LEN);
 
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
     if (err == ESP_OK) err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
@@ -1000,16 +1012,19 @@ static void start_ap_mode(ap_mode_t mode)
     /* Invariant 2: s_recovery_mode is set LAST -- under the mutex, and only
        once esp_wifi_start() returned ESP_OK and s_ap_mode is true. A reader
        that observes recovery mode therefore observes a live AP. If the mutex
-       is not available the flag stays false and the httpd exemption stays
-       closed, which is the safe direction. */
+       is not available the flag stays false, so no idle timeout is ever armed:
+       that fails closed toward "stay up", never toward "exit early".
+
+       CR #4: both APs share one identity, but only the recovery entry arms the
+       idle/absolute timers, so this flag stays recovery-specific. */
     if (recovery) {
-        if (!s_recovery_lock ||
-            xSemaphoreTake(s_recovery_lock, portMAX_DELAY) != pdTRUE) {
+        if (!s_ap_identity_lock ||
+            xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
             ESP_LOGE(TAG, "AP up but recovery mode not published (no mutex)");
             return;
         }
         s_recovery_mode = true;
-        xSemaphoreGive(s_recovery_lock);
+        xSemaphoreGive(s_ap_identity_lock);
     }
 }
 
@@ -1041,14 +1056,10 @@ static esp_err_t bringup_ap_driver(void)
 }
 
 /* CR #2 recovery branch of svc_network_start(). Caller has set
- * s_force_recovery. Prepares the WPA2 identity, then reuses the setup AP's
- * bring-up path with AP_MODE_RECOVERY. */
+ * s_force_recovery. Reuses the shared AP bring-up path with AP_MODE_RECOVERY;
+ * start_ap_mode() generates the identity itself (CR #4). */
 static esp_err_t start_recovery_ap(void)
 {
-    if (prepare_recovery_identity() != ESP_OK) {
-        ESP_LOGE(TAG, "recovery identity unavailable; cannot enter recovery AP");
-        return ESP_FAIL;
-    }
     if (bringup_ap_driver() != ESP_OK) {
         return ESP_FAIL;
     }
@@ -1066,11 +1077,12 @@ esp_err_t svc_network_start(void)
         return ESP_OK;
     }
 
-    /* D8: the recovery mutex must exist before the recovery branch publishes
-       the SSID/passphrase. Failure here is not fatal for the STA path; the
-       recovery branch fails closed instead (prepare_recovery_identity()). */
-    if (!ensure_recovery_lock()) {
-        ESP_LOGE(TAG, "recovery mutex unavailable; recovery AP will fail closed");
+    /* D8: the AP identity mutex must exist before start_ap_mode() writes, or a
+       getter reads, an identity. Failure here is not fatal for the STA path;
+       both AP entry paths fail closed instead (generate_ap_identity()), so no
+       provisioning AP can come up without a passphrase. */
+    if (!ensure_ap_identity_lock()) {
+        ESP_LOGE(TAG, "AP identity mutex unavailable; AP will fail closed");
     }
 
     /* D8 sibling: the four recovery timers (CR #2). esp_timer_create()
@@ -1092,7 +1104,7 @@ esp_err_t svc_network_start(void)
        set s_force_recovery before calling here. This check comes BEFORE the
        missing-credentials branch on purpose: a recovery entry with
        unreadable credentials must still bring up the WPA2 recovery AP, never
-       the open setup AP. */
+       the setup AP. */
     if (s_force_recovery) {
         return start_recovery_ap();
     }
@@ -1278,21 +1290,27 @@ esp_err_t svc_network_stop(void)
     }
 
     /* Invariant 2 (design section 5): clear s_recovery_mode FIRST, under the
-       recovery mutex, before any teardown begins. The httpd exemption
-       (recovery_exempt()) keys on this flag, so it must fail closed before the
-       interface it protects starts to disappear. The identity goes with it:
-       the passphrase is ephemeral and regenerated at every entry (section
-       6.4). If the mutex is missing we still clear, unlocked, because leaving
-       the exemption open is the unsafe direction. */
-    bool locked = (s_recovery_lock != NULL) &&
-                  (xSemaphoreTake(s_recovery_lock, portMAX_DELAY) == pdTRUE);
+       AP identity mutex, before any teardown begins, and clear the AP identity
+       with it -- it is ephemeral and regenerated at every entry (CR #4). The
+       getters gate on s_ap_mode and on the identity itself, so they fail
+       closed before the interface they describe starts to disappear.
+
+       Note (CR #4): the HTTP carve-out keys on s_ap_mode via
+       provisioning_exempt(), so it stays open until s_ap_mode is cleared below.
+       That is deliberate: the AP is still WPA2 while it is torn down, and the
+       exempted paths are the commissioning endpoints.
+
+       If the mutex is missing we still clear, unlocked, because leaving the
+       identity readable is the unsafe direction. */
+    bool locked = (s_ap_identity_lock != NULL) &&
+                  (xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) == pdTRUE);
     s_recovery_mode = false;
-    s_recovery_ssid[0] = '\0';
-    s_recovery_pass[0] = '\0';
+    s_ap_ssid[0] = '\0';
+    s_ap_pass[0] = '\0';
     if (locked) {
-        xSemaphoreGive(s_recovery_lock);
+        xSemaphoreGive(s_ap_identity_lock);
     } else {
-        ESP_LOGE(TAG, "recovery mutex unavailable; identity cleared unlocked");
+        ESP_LOGE(TAG, "AP identity mutex unavailable; identity cleared unlocked");
     }
 
     /* D3: unregister the event handlers BEFORE esp_wifi_stop/deinit. Stop
@@ -1367,6 +1385,13 @@ bool svc_network_is_connected(void)
     return s_connected;
 }
 
+/* True while the provisioning AP is up. CR #4 unified the two scenarios this
+   AP serves -- no credentials stored (setup) and a credential lockout
+   (recovery) -- into one identity, so a caller cannot and need not tell them
+   apart: the SSID is "ChronoLink-<MAC4>" either way, and both are WPA2-PSK
+   with a per-entry passphrase. Plain bool read, deliberately unlocked: httpd
+   calls it on every request and ui_producer every 250 ms, and a value one tick
+   stale is harmless to both. */
 bool svc_network_is_ap_mode(void)
 {
     return s_ap_mode;
@@ -1378,81 +1403,70 @@ const char *svc_network_get_ip_str(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* CR #2: recovery-mode public API (design section 7)                  */
+/* CR #4: provisioning AP public API                                  */
 /* ------------------------------------------------------------------ */
 
-bool svc_network_is_recovery_mode(void)
-{
-    /* Invariant 1: plain read, deliberately unlocked. httpd calls this on every
-       request and ui_producer every 250 ms; the value is a single aligned word
-       and one stale tick is harmless for both. Taking s_recovery_lock here
-       would make every HTTP request wait behind whichever task currently holds
-       the lock. */
-    return s_recovery_mode;
-}
+/* Both getters return the identity of the AP that is currently up; there is no
+   setup/recovery distinction to make any more. On any error out[] is left
+   untouched, so a caller that ignores the return value can never read a stale
+   or truncated SSID/passphrase as if it were the current one. */
 
-/* Shared body of the two getters (C5): copy one identity string under
- * s_recovery_lock. Returns
- *   ESP_ERR_INVALID_ARG    -- out is NULL or cap is 0
- *   ESP_ERR_INVALID_STATE  -- not in recovery, or the mutex is unavailable
- *   ESP_ERR_INVALID_SIZE   -- cap cannot hold the string plus its NUL
- * On any error out[] is left untouched, so a caller that ignores the return
- * value can never read a truncated or stale SSID/passphrase as if it were the
- * current one. The identity arrays are module-private and only mutated under
- * this lock (svc_network_stop(), start_ap_mode(), the entry worker), so the
- * copy is always a consistent snapshot. */
-static esp_err_t copy_recovery_identity(char *out, size_t cap, const char *src)
+esp_err_t svc_network_get_ap_ssid(char *out, size_t cap)
 {
-    if (!out || cap == 0) {
+    /* s_ap_ssid is written only by generate_ap_identity()/svc_network_stop()
+       on the bringing-up task, and read here without the mutex: the copy is of
+       a NUL-terminated string that is at most 15 chars, and the s_ap_mode test
+       below makes a caller ignore any result taken across a rotation. */
+    if (!out || cap < strlen(s_ap_ssid) + 1) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_recovery_lock ||
-        xSemaphoreTake(s_recovery_lock, portMAX_DELAY) != pdTRUE) {
-        /* Fail closed: an unreadable identity must look like "not in
-           recovery", never like an empty one. */
+    if (!s_ap_mode || s_ap_ssid[0] == '\0') {
         return ESP_ERR_INVALID_STATE;
     }
+    strncpy(out, s_ap_ssid, cap);
+    return ESP_OK;
+}
 
-    esp_err_t err = ESP_OK;
-    if (!s_recovery_mode) {
-        err = ESP_ERR_INVALID_STATE;
-    } else {
-        size_t need = strlen(src) + 1;
-        if (need > cap) {
-            err = ESP_ERR_INVALID_SIZE;
-        } else {
-            memcpy(out, src, need);
-        }
+esp_err_t svc_network_get_ap_passphrase(char *out, size_t cap)
+{
+    /* cap is checked against the full buffer, not against strlen(), so an
+       identity that is still empty reports ESP_ERR_INVALID_STATE below rather
+       than looking like a short passphrase. */
+    if (!out || cap < AP_PASS_BUF_LEN) {
+        return ESP_ERR_INVALID_ARG;
     }
-
-    xSemaphoreGive(s_recovery_lock);
-    return err;
-}
-
-esp_err_t svc_network_get_recovery_ssid(char *out, size_t cap)
-{
-    return copy_recovery_identity(out, cap, s_recovery_ssid);
-}
-
-esp_err_t svc_network_get_recovery_passphrase(char *out, size_t cap)
-{
-    return copy_recovery_identity(out, cap, s_recovery_pass);
+    if (!s_ap_identity_lock ||
+        xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_ap_mode || s_ap_pass[0] == '\0') {
+        xSemaphoreGive(s_ap_identity_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    strncpy(out, s_ap_pass, cap);
+    xSemaphoreGive(s_ap_identity_lock);
+    return ESP_OK;
 }
 
 void svc_network_touch_recovery_idle_timeout(void)
 {
     /* E2: this function and the entry worker (which seeds the value) are the
        only writers of s_last_recovery_activity_us, and both hold
-       s_recovery_lock. Never stop or start a timer from here: re-arming is the
-       timeout callback's job (D7), and doing it from an HTTP request would let
-       a request storm push the absolute cap out indefinitely. */
-    if (!s_recovery_lock ||
-        xSemaphoreTake(s_recovery_lock, portMAX_DELAY) != pdTRUE) {
+       s_ap_identity_lock. Never stop or start a timer from here: re-arming is
+       the timeout callback's job (D7), and doing it from an HTTP request would
+       let a request storm push the absolute cap out indefinitely.
+       No-op unless the recovery AP is up: CR #4 unified the identity, but the
+       idle/absolute timers are still armed only by the recovery entry worker,
+       so touching them during a setup AP would only write a timestamp nothing
+       reads. */
+    if (!s_ap_identity_lock ||
+        xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
         ESP_LOGW(TAG, "idle-timeout touch dropped (no mutex)");
         return;
     }
     if (s_recovery_mode) {
         s_last_recovery_activity_us = esp_timer_get_time();
     }
-    xSemaphoreGive(s_recovery_lock);
+    xSemaphoreGive(s_ap_identity_lock);
 }
+
