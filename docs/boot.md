@@ -51,8 +51,10 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    defaults on failure), start `ui_producer`, start `svc_time` (reads
    the RTC, applies the POSIX timezone and subscribes to
    `EVENT_NETWORK_CONNECTED` -- it has to be up before `svc_network`
-   can publish one), start `svc_network` (non-fatal), optional audio
-   test, then idle. From then on `svc_time` ticks its snapshot once a
+   can publish one), start `svc_network` (non-fatal; a cold-boot
+   bring-up failure arms the bring-up retry ladder instead of leaving
+   the clock with no link -- see "WiFi recovery mode" below), optional
+   audio test, then idle. From then on `svc_time` ticks its snapshot once a
    second (RTC when present, otherwise the libc clock once NTP has
    synced), so the time it serves keeps advancing.
 
@@ -61,6 +63,106 @@ exist earlier. Steps 3.1–3.6 are observable on the serial log only.
 
 **Post-Boot Autonomy:**
 Once step 4 completes, the system is fully autonomous. `svc_time` ticks at 1 Hz, keeping the internal clock alive. If the RTC is present, it is read every second to keep the snapshot accurate. If Wi-Fi connects, NTP corrects the RTC. Prayer times are calculated immediately on boot and recalculated at midnight (00:01) and upon any successful NTP sync.
+
+---
+
+## WiFi recovery mode
+
+Wrong saved Wi-Fi credentials used to lock the clock out of the network
+permanently: `svc_network` retried forever and neither switch on the PCB is
+user-accessible (SW1/SW2 are inside the case). CR #2 adds an **in-place**
+recovery AP -- no reboot -- so an installer standing next to the clock can
+correct the credentials over Wi-Fi. The full design is in
+[sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md); the
+architecture summary is section 4.3 of
+[Architecture.md](Architecture.md).
+
+**Entry condition.** Nothing changes at boot unless the saved credentials fail.
+Each `WIFI_EVENT_STA_DISCONNECTED` carrying an auth-class reason -- `202
+AUTH_FAIL`, `15 4WAY_HANDSHAKE_TIMEOUT`, `204 HANDSHAKE_TIMEOUT`, `2
+AUTH_EXPIRE` -- increments an auth-streak counter; any other reason resets it to
+0, so a router that is merely down (`201 NO_AP_FOUND`) is never mistaken for
+wrong credentials (#131 R1). On the fifth consecutive auth-class failure a
+250 ms one-shot spawns the entry worker, which tears the STA stack down and
+brings the recovery AP up. On a mis-provisioned device that is roughly 30 s
+after power-up: four backoff waits (1 s + 2 s + 4 s + 8 s), five handshake
+attempts, plus the 250 ms trigger.
+
+**Slow path (PR #157).** Not every lockout is a credential rejection: a driver
+that keeps failing to come up, or an AP that answers `NO_AP_FOUND` forever, used
+to leave the clock retrying STA indefinitely. A second counter, incremented by
+every `STA_DISCONNECTED` regardless of reason, therefore triggers the same
+recovery entry at `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (8) -- roughly 2 min
+at the capped 30 s backoff. Both counters obey the same guard, so nothing is
+counted during recovery or during the 10 min cooldown after it, and a
+successful `GOT_IP` clears both.
+
+**Unconfigured or empty SSID.** "No credentials in NVS" and "an empty SSID
+stored" both take the setup AP at boot: an empty SSID can never associate, so
+treating it as configured would only burn the retry ladder. An empty *password*
+with a non-empty SSID stays valid -- that is an open network.
+
+**Cold-boot bring-up failure.** If `svc_network_start()` fails outright at boot
+(setup-AP driver bring-up, or the STA `esp_wifi_set_mode` / `_set_config` /
+`_start` sequence) it arms the bring-up retry ladder (1 s -> 30 s, never gives
+up) before returning `ESP_FAIL`. The retry worker calls `svc_network_stop()`
+then `svc_network_start()`, which re-enters the correct branch; the failure path
+leaves `s_started` set so that `stop()` can deinitialise a half-built driver --
+without that the retry would fail on `ESP_ERR_WIFI_INIT_STATE` forever.
+
+**The recovery AP.** SSID `ChronoLink-Recovery-<XXXX>`, where `<XXXX>` is the
+last two STA MAC bytes (`%02X%02X`, 24 characters -- the h=18 glyph-width
+arithmetic in the design doc puts that inside a 320 px panel, though the
+on-panel check is still open). WPA2-PSK on channel 1 with up to 4 clients: the
+same softAP settings as
+the setup AP, except for the auth mode and a generated passphrase. The
+passphrase is 16 uppercase hex characters from `esp_fill_random()` (8 bytes),
+regenerated at every entry and never written to NVS. `ui_producer` replaces the
+clock face with a recovery screen showing the SSID and the passphrase (plus
+`192.168.4.1` and "Auto-exits when idle"); the normal web UI is served on that
+AP, with the shared token exempted only for `POST /api/wifi` and
+`POST /api/reboot`. A bench board with no panel has nowhere to display that
+screen, so building with `-DCHRONOLINK_DEBUG_PRINT_TOKEN=1` (set in the
+git-ignored `platformio.local.ini` for `env:single_mcu_debug`, the same flag
+`svc_http.c` uses for the API token) makes the recovery branch of
+`start_ap_mode()` also log ` Recovery passphrase (bench debug): <pass>` on the
+serial line right after the SSID. The setup branch never prints a passphrase,
+and the line is compiled out entirely when the flag is undefined.
+
+**Exit conditions.** One timer enforces two bounds: 15 min with no HTTP activity
+(any exempted request restarts the idle window) or 30 min from entry regardless
+of activity, whichever comes first. The exit worker then runs
+`svc_network_stop()` followed by `svc_network_start()`, i.e. back to STA with
+the (now corrected) credentials, and arms the cooldown. Nothing is rebooted and
+timekeeping never stops -- `svc_time` keeps ticking and the display returns to
+the clock face.
+
+**Cooldown.** For 10 min after exit, auth-class failures are not counted, so a
+still-wrong password cannot bounce the device straight back into recovery. The
+cooldown is cleared by `IP_EVENT_STA_GOT_IP` -- not by
+`WIFI_EVENT_STA_CONNECTED`, because on WPA2-PSK association succeeds before the
+4-way handshake fails, so clearing on connect would clear it on the very first
+retry with still-wrong credentials -- or by its own one-shot expiring. It is
+deliberately not stopped or cleared by `svc_network_stop()`: a cooldown that
+outlives its own recovery cycle is intentional.
+
+**Power-cycle escape hatch.** The auth-fail counter, the cooldown flag and the
+recovery guard flags live in RAM only; nothing about recovery state is
+persisted. Pulling power clears all of them, so the same wrong credentials
+re-enter recovery in about 30 s (five failures on the backoff ladder plus the
+250 ms trigger) and a fresh passphrase is generated. That is the documented last
+resort when the 10 min cooldown is still running and the installer wants back in
+immediately. It also means the device is never permanently unreachable: the
+worst case is always "power-cycle and try again".
+
+**Residual risk.** The token exemption is bounded to two endpoints and to the
+30-minute absolute cap. An actor who passes it already knows the WPA2
+passphrase, i.e. is physically present -- which `svc_http.c` already declares
+out of scope for CSRF. But a rogue-AP override via `POST /api/wifi` pivots
+through `svc_time`'s NTP to prayer times, so it is not "just recoverable": that
+is why the `application/json` content-type requirement is mandatory rather than
+optional. It restores the CSRF defence the shared token was providing, in a form
+an HTML `<form>` cannot satisfy.
 
 ---
 
