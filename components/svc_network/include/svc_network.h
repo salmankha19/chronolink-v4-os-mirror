@@ -52,7 +52,11 @@ esp_err_t svc_network_stop(void);
 /* Cached link state; does not block. */
 bool svc_network_is_connected(void);
 
-/* Returns true if the device is currently in AP (Setup) mode. */
+/* Returns true while the provisioning AP is up. CR #4 unified the two
+   scenarios it serves -- no credentials stored (setup) and a credential
+   lockout (recovery) -- into a single identity, so a caller cannot and need
+   not tell them apart: SSID "ChronoLink-<MAC4>", WPA2-PSK, passphrase
+   regenerated on every entry. */
 bool svc_network_is_ap_mode(void);
 
 /* Dotted IPv4 string, or NULL if not connected. Owned by the service;
@@ -66,35 +70,33 @@ const char *svc_network_get_ip_str(void);
 esp_err_t svc_network_set_credentials(const char *ssid, const char *pass);
 
 /*
- * CR #2 recovery mode (docs/sessions/cr2-wifi-lockout-design.md section 7).
+ * Copy the current provisioning AP identity into out (NUL-terminated).
+ * There is one AP identity for both entry paths (CR #4): setup and recovery
+ * use the same SSID, so no caller has to know which one is up.
  *
- * True while the recovery AP (ChronoLink-Recovery-<MAC4>) is up after an
- * auth-class lockout. Plain bool read, deliberately unlocked: httpd calls it
- * on every request and ui_producer every 250 ms, and a value one tick stale is
- * harmless for both. Recovery decisions must key on THIS predicate, never on
- * svc_network_is_ap_mode() -- the setup AP (ChronoLink-Setup) is also AP mode,
- * and the setup AP must stay available to anyone in radio range.
+ * SSID:       "ChronoLink-<MAC4>" -- the last two STA MAC bytes as %02X%02X
+ *             (15 chars).
+ * Passphrase: 16 uppercase hex characters from the hardware RNG, regenerated
+ *             at every AP entry, RAM only, cleared by svc_network_stop().
+ *
+ * Returns ESP_ERR_INVALID_ARG   if out is NULL or cap is too small (SSID:
+ *                               strlen(current SSID) + 1, passphrase: 17),
+ *         ESP_ERR_INVALID_STATE if no provisioning AP is up, the identity has
+ *                               not been generated yet, or (passphrase only)
+ *                               the internal mutex cannot be taken.
+ *
+ * On any error out[] is left untouched. A caller that must not show a stale
+ * identity treats ESP_ERR_INVALID_STATE as "not ready" and retries on its next
+ * poll. The passphrase is a per-entry random draw: read it, do not cache it.
  */
-bool svc_network_is_recovery_mode(void);
-
-/*
- * Copy the current recovery AP identity into out (NUL-terminated).
- *
- * Returns ESP_ERR_INVALID_ARG   if out is NULL or cap is 0,
- *         ESP_ERR_INVALID_STATE if not in recovery or the internal mutex is
- *                               unavailable,
- *         ESP_ERR_INVALID_SIZE  if cap cannot hold the string plus its NUL.
- *
- * On any error out[] is left untouched. Callers must treat
- * ESP_ERR_INVALID_STATE as "not in recovery", never as an empty passphrase.
- * The passphrase is a per-recovery random draw: read it, do not cache it.
- */
-esp_err_t svc_network_get_recovery_ssid(char *out, size_t cap);
-esp_err_t svc_network_get_recovery_passphrase(char *out, size_t cap);
+esp_err_t svc_network_get_ap_ssid(char *out, size_t cap);
+esp_err_t svc_network_get_ap_passphrase(char *out, size_t cap);
 
 /*
  * httpd-side activity marker: extends the recovery idle timeout so a setup
- * session in progress is not cut off (design D7). No-op when not in recovery.
+ * session in progress is not cut off (design D7). No-op unless the recovery
+ * AP is up -- CR #4 unified the identity, but the idle/absolute timers are
+ * still armed only by the recovery entry worker.
  * Writes one timestamp; never stops or starts a timer.
  */
 void svc_network_touch_recovery_idle_timeout(void);

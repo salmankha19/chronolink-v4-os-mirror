@@ -53,10 +53,22 @@ not.** Where another doc mentions a gap, this file has the detail.
   `uint16_t` fields. All state-changing endpoints (`POST /api/config`,
   `/api/config/preset`, `/api/wifi`, `/api/reboot`, `/api/factory-reset`,
   `/api/timetable`, `/api/timetable/regenerate`, `DELETE /api/timetable`,
-  and `POST /api/ota`) require `X-Chronolink-Auth: Bearer <64-hex>` where
+  and `POST /api/ota`) require `X-Chronolink-Auth: Bearer <16-hex>` where
   the token is generated on first boot, stored in NVS namespace
   `svc_http` key `api_token`, and printed once to serial. OTA refuses to
   run while `OTA_SHARED_TOKEN` is still the shipped default.
+- **API token length: 16 hex chars (64-bit), reduced from 64 (256-bit).**
+  Short enough to type on a phone, which is what an on-site debug session
+  actually needs. 64-bit security is adequate for local network admin
+  operations on a mosque prayer clock: the main threat is someone already
+  on the mosque WiFi, and that is mitigated by the WiFi password; the
+  token's job is to block CSRF and stray writes, not to resist an attacker
+  who holds that password or physical access. The change is self-healing on
+  upgrade -- a stored token whose length no longer matches is discarded and
+  a fresh one is generated and persisted at boot -- but the installer must
+  re-paste the new value once. `www/index.html` validates 16 lowercase hex
+  chars and drops a stale token from `localStorage`; `src/index_html.c` is
+  regenerated with `scripts/embed_html.py`.
   Upload/OTA streaming now fails after a bounded number of consecutive
   socket timeouts (upload ~10 s, OTA ~30 s) instead of looping forever;
   upload also checks `fwrite` and rejects short writes.
@@ -385,18 +397,19 @@ Code: `components/svc_network` (public header `svc_network.h`, source
 from the NVS namespace `wifi`, connects, and retries with a 1 s -> 30 s
 exponential backoff (#131 R1 -- a disconnect never drops straight to AP mode).
 Since PR #157 the retry is bounded for a *configured* device: 24 consecutive
-failures of any reason raise the recovery AP instead of retrying forever. A
-missing or empty SSID takes the open setup AP. Publishes `EVENT_NETWORK_STARTING`,
+failures of any reason raise the provisioning AP instead of retrying forever. A
+missing or empty SSID takes the same provisioning AP from boot. Publishes `EVENT_NETWORK_STARTING`,
 `EVENT_NETWORK_CONNECTED` (on `IP_EVENT_STA_GOT_IP`, not on
 `WIFI_EVENT_STA_CONNECTED`), `EVENT_NETWORK_DISCONNECTED` and
 `EVENT_NETWORK_ERROR` with an `SVC_NETWORK_STAGE_*` stage.
 
 Public API: `svc_network_start()`, `svc_network_stop()`,
 `svc_network_is_connected()`, `svc_network_is_ap_mode()`,
-`svc_network_get_ip_str()`, `svc_network_set_credentials()`, plus the recovery
-accessors listed below.
+`svc_network_get_ip_str()`, `svc_network_set_credentials()`, plus the unified
+provisioning-AP accessors listed below (`svc_network_get_ap_ssid()`,
+`svc_network_get_ap_passphrase()`, `svc_network_touch_recovery_idle_timeout()`).
 
-### WiFi recovery mode (CR #2, implemented; hardware verification pending)
+### WiFi provisioning mode (CR #2 recovery path + CR #4 unified AP; hardware verification pending)
 
 Full design: `docs/sessions/cr2-wifi-lockout-design.md`. Architecture summary:
 `docs/Architecture.md` section 4.3. Boot-time behaviour and the power-cycle
@@ -404,7 +417,7 @@ escape hatch: `docs/boot.md`.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class disconnects (202/15/204/2) that raise the recovery AP |
+| `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class disconnects (202/15/204/2/205) that raise the recovery AP |
 | `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive disconnects of **any** reason that raise the recovery AP (slow path, PR #157) |
 | `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
 | `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
@@ -412,47 +425,71 @@ escape hatch: `docs/boot.md`.
 
 - Slow path (PR #157): `s_consecutive_fail` counts disconnects of **any** reason
   under the same `recovery_guards_active()` guard, so a configured clock whose AP
-  is off, out of range, or answering `200`/`201`/`205` reaches the recovery AP
-  after 24 failures (~10 min at the capped backoff) instead of retrying forever.
+  is off, out of range, or answering `200`/`201` reaches the recovery AP after
+  24 failures (~10 min at the capped backoff) instead of retrying forever.
+  `200`/`201` are the only non-auth reasons still expected to drive this path:
+  `205 CONNECTION_FAIL` is auth-class, because it means the AP was seen and
+  rejected the association or handshake (the wrong-password signature on routers
+  that do not answer `15`/`202`/`204`).
   Both triggers call `arm_recovery_entry()`, which sets `s_recovery_active`
   before arming the 250 ms one-shot and rolls both flags back if the arm fails.
-- An empty SSID in NVS is treated as unconfigured (setup AP); an empty password
-  with a non-empty SSID is still a valid open network.
+- An empty SSID in NVS is treated as unconfigured (provisioning AP); an empty
+  password with a non-empty SSID is still a valid open network.
 - Cold-boot bring-up failure (`bringup_ap_driver()`, `start_ap_mode()` leaving
   `s_ap_mode` false, or the STA `set_mode` / `set_config` / `start` sequence)
   arms the bring-up retry ladder before `svc_network_start()` returns
   `ESP_FAIL`. The failure path leaves `s_started` set so the retry worker's
   `stop()` can `esp_wifi_deinit()` before `start()` runs again.
-- Recovery AP: `ChronoLink-Recovery-<MAC4>`, WPA2-PSK on channel 1, up to 4
-  clients, 16-char uppercase-hex passphrase from the hardware RNG, regenerated
-  on every entry, never persisted and never logged -- except behind the
-  bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag (see next bullet).
+- Provisioning AP (CR #4): one identity for both entry paths, so nothing over
+  the air distinguishes an unconfigured boot from a lockout -- SSID
+  `ChronoLink-<MAC4>` (last two STA MAC bytes, 15 chars), WPA2-PSK on channel 1,
+  up to 4 clients, 16-char uppercase-hex passphrase from the hardware RNG,
+  regenerated on every entry, never persisted and never logged -- except behind
+  the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag (see next bullet).
+  `start_ap_mode()` generates the identity itself (`generate_ap_identity()`),
+  under `s_ap_identity_lock`, for both `AP_MODE_SETUP` and `AP_MODE_RECOVERY`,
+  and the designated initialiser's default auth mode is `WIFI_AUTH_WPA2_PSK`.
 - Bench aid: with `-DCHRONOLINK_DEBUG_PRINT_TOKEN=1` (set in
   `platformio.local.ini` for `env:single_mcu_debug`, git-ignored; the same
-  pattern `svc_http.c` already uses for the API token) `start_ap_mode()`'s
-  recovery branch logs ` Recovery passphrase (bench debug): <pass>` right after
-  the SSID line, because a bench board has no panel to show the recovery screen.
-  The setup branch never prints a passphrase, and with the flag undefined the
-  line and its format string are removed by the preprocessor.
+  pattern `svc_http.c` uses for the API token) `start_ap_mode()` logs
+  ` AP passphrase (bench debug): <pass>` right after the SSID line, because a
+  bench board has no panel to show the provisioning screen. With the flag
+  undefined the line and its format string are removed by the preprocessor.
 - Entry and exit are in place -- `svc_network_stop()` then
   `start_ap_mode()` with recovery set, and the reverse on exit -- so nothing
   reboots and `svc_time` never stops.
-- `svc_http`'s `recovery_exempt()` waives the token for `POST /api/wifi` and
-  `POST /api/reboot` only while recovery mode is up, and only for
-  `Content-Type: application/json`; every other endpoint keeps the token and the
-  open setup AP gets no exemption at all.
-- `ui_producer` draws the recovery screen (SSID + passphrase) and tests the
-  recovery predicate before the setup-AP predicate, because both are true while
-  recovery is up.
-- Recovery accessors: `svc_network_is_recovery_mode()`,
-  `svc_network_get_recovery_ssid()`,
-  `svc_network_get_recovery_passphrase()` (both return
-  `ESP_ERR_INVALID_SIZE` rather than truncating),
-  `svc_network_touch_recovery_idle_timeout()` (called by `svc_http` on each
-  exempted request; writes a timestamp only).
-- The three security invariants are recorded verbatim in
-  `docs/Architecture.md` section 4.3. Invariant 1 in particular: never
-  "simplify" `recovery_exempt()` to key on `is_ap_mode()`.
+- `svc_http`'s static `provisioning_exempt()` waives the token for the
+  commissioning endpoints -- `/api/wifi`, `/api/config`, `/api/timetable` and
+  `/api/reboot` -- only while the provisioning AP is up. On those paths a
+  non-GET request (`POST`, `DELETE`) must also carry
+  `Content-Type: application/json`, which an HTML `<form>` cannot produce, so
+  form-based CSRF stays blocked; GET is exempt from that requirement because a
+  GET must be side-effect free and no browser attaches a content-type to one.
+  The token is still accepted on every exempt path. Every write outside that
+  list keeps the token (`/api/ota`, `/api/factory-reset`,
+  `/api/config/preset`, `/api/timetable/regenerate`), the last two because
+  `uri_path_equals()` matches a full path and not its sub-paths.
+- Auth model as it stands: **reads are open, writes require auth.** No GET
+  handler calls `require_auth()` at all, so `/`, `/api/config`, `/api/timetable`,
+  `/api/prayers` and `/debug/ntp` answer without the token in every mode, not
+  only in AP mode. The method guard in `provisioning_exempt()` is therefore
+  defensive only: it stops a future GET handler on one of the four exempt paths
+  from inheriting a content-type requirement that would lock a browser out of
+  reading.
+- `ui_producer` draws one provisioning screen (SSID + passphrase) for both
+  entry paths, keyed on `svc_network_is_ap_mode()` alone.
+- Provisioning accessors: `svc_network_is_ap_mode()`,
+  `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`
+  (`ESP_ERR_INVALID_ARG` for a too-small buffer, `ESP_ERR_INVALID_STATE` when
+  no AP is up or the identity is not ready -- both fail closed rather than
+  truncating), and `svc_network_touch_recovery_idle_timeout()` (called by
+  `svc_http` on each exempted request; writes a timestamp only, and only while
+  the recovery AP -- the one with an idle timer -- is up).
+- The security invariants are recorded in `docs/Architecture.md` section 4.3.
+  CR #4 inverted the old invariant 1: the exemption now keys on
+  `is_ap_mode()`, which is only sound because **every** provisioning AP is
+  WPA2-PSK. Never revert an AP to `WIFI_AUTH_OPEN` without reverting the
+  exemption in the same change.
 
 ---
 
@@ -753,7 +790,7 @@ readers.
 The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
-- **AP Setup Mode (PR 4.2; #131 removed fallback; PR #157 empty-SSID):** If no WiFi credentials are saved **or the saved SSID is empty**, `svc_network` drops into Access Point mode (`ChronoLink-Setup`, IP `192.168.4.1`). An empty SSID can never associate, so it is treated as unconfigured rather than fed to the STA ladder; an empty password with a non-empty SSID stays a valid open network. `ui_producer` displays these setup instructions on the screen instead of the clock. **(CR #2, implemented — hardware verification checklist in the design doc is still open; see `docs/sessions/cr2-wifi-lockout-design.md`)** `svc_network` now supports a second AP mode: the *recovery* AP (`ChronoLink-Recovery-<MAC4>`, WPA2-PSK, passphrase regenerated on every entry), entered after `SVC_NETWORK_AUTH_FAIL_THRESHOLD` (5) consecutive auth-class disconnects (reason 2/15/202/204) with no guard active, **or after `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) consecutive disconnects of any reason** (PR #157 slow path, so a router that is off or out of range also ends in a reachable AP). Implemented in `svc_network`: the state machine, the three workers, the four timers (entry trigger, idle/absolute timeout, bring-up retry, cooldown), the bring-up retry ladder, and the accessors `svc_network_is_recovery_mode()`, `svc_network_get_recovery_ssid()`, `svc_network_get_recovery_passphrase()`, `svc_network_touch_recovery_idle_timeout()`. **httpd exemption implemented (step 2):** `svc_http.c` has `recovery_exempt()`, called first from `require_auth()`. While recovery mode is up it lets `POST /api/wifi` and `POST /api/reboot` through without the `X-Chronolink-Auth` token, but only when the request carries a `Content-Type` of `application/json` (strict, case-sensitive; a `<form>` cannot produce it, so form-based CSRF stays blocked) and it then touches the recovery idle timer. Everything else — `/api/ota`, `/api/factory-reset`, `/api/config`, `/api/config/preset`, `/api/timetable` (GET/POST/DELETE), `/api/timetable/regenerate`, `/api/prayers`, `/` — still requires the token, and the open setup AP gets no exemption at all. **Timing:** the recovery AP exits after 15 min idle / 30 min absolute, then observes a 10 min cooldown during which auth failures are not counted. **Recovery screen implemented (step 3):** `ui_producer` tests `svc_network_is_recovery_mode()` *before* `svc_network_is_ap_mode()` — necessary, not just a priority rule, because the recovery AP is brought up through the same `start_ap_mode()` and so also reports AP mode. It draws a 9-command screen (clear, then `WiFi Recovery Mode`, `Connect to:` + SSID, `Password:` + passphrase, `Open Browser:` + `192.168.4.1`, `Auto-exits when idle`). The identity is re-read every 250 ms through the two getters and folded into the draw key `RECOVERY_<ssid>_<passphrase>` (static 128 B, off the 3072 B task stack), so a rotation on re-entry forces a redraw; a failed getter — recovery ended between the predicate and the read — skips the frame rather than drawing stale or partial strings, and the key is only stored after a successful submit. Leaving recovery re-runs the full clear-and-redraw path, so none of the recovery lines survive under the clock. The passphrase is still never logged and never exposed over HTTP (the single exception is the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag described above, which is absent from shipped images); nothing now remains between a lockout and a working setup session.
+- **AP Setup Mode (PR 4.2; #131 removed fallback; PR #157 empty-SSID):** If no WiFi credentials are saved **or the saved SSID is empty**, `svc_network` drops into Access Point mode (`ChronoLink-<MAC4>`, WPA2-PSK, IP `192.168.4.1`). An empty SSID can never associate, so it is treated as unconfigured rather than fed to the STA ladder; an empty password with a non-empty SSID stays a valid open network. `ui_producer` displays these setup instructions on the screen instead of the clock. **(CR #2, implemented — hardware verification checklist in the design doc is still open; see `docs/sessions/cr2-wifi-lockout-design.md`; CR #4 unified both APs into one)** The same provisioning AP is also entered after `SVC_NETWORK_AUTH_FAIL_THRESHOLD` (5) consecutive auth-class disconnects (reason 2/15/202/204/205) with no guard active, **or after `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) consecutive disconnects of any reason** (PR #157 slow path, so a router that is off or out of range also ends in a reachable AP). Implemented in `svc_network`: the state machine, the three workers, the four timers (entry trigger, idle/absolute timeout, bring-up retry, cooldown), the bring-up retry ladder, and the accessors `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`, `svc_network_touch_recovery_idle_timeout()`. **httpd exemption implemented (step 2, widened by CR #4):** `svc_http.c` has a static `provisioning_exempt()`, called first from `require_auth()`. While the provisioning AP is up it lets `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` through without the `X-Chronolink-Auth` token; on those paths a non-GET request must also carry a `Content-Type` of `application/json` (strict, case-sensitive; a `<form>` cannot produce it, so form-based CSRF stays blocked), and an exempt request then touches the recovery idle timer. GET is exempt from the content-type requirement because a GET must be side-effect free and no browser attaches one. **Reads are open, writes require auth:** no GET handler calls `require_auth()` at all, so `/`, `/api/config`, `/api/timetable`, `/api/prayers` and `/debug/ntp` answer without the token in every mode, not only in AP mode — the method guard in `provisioning_exempt()` is defensive only. Every write outside that list — `/api/ota`, `/api/factory-reset`, `/api/config/preset`, `/api/timetable/regenerate` — still requires the token (the two sub-paths are not covered: `uri_path_equals()` matches a full path only), and no AP mode means no exemption at all. **Timing:** the recovery AP exits after 15 min idle / 30 min absolute, then observes a 10 min cooldown during which auth failures are not counted. **Provisioning screen (step 3, unified by CR #4):** `ui_producer` has a single `svc_network_is_ap_mode()` branch — there is no second predicate any more, because both entry paths share one identity. It draws a 9-command screen (clear, then `WiFi Provisioning Mode`, `Connect to:` + SSID, `Password:` + passphrase, `Open Browser:` + `192.168.4.1`, `Auto-exits when idle`). The identity is re-read every 250 ms through `svc_network_get_ap_ssid()` / `svc_network_get_ap_passphrase()` and folded into the draw key `AP_<ssid>_<passphrase>`, so a rotation on re-entry forces a redraw; a failed getter — AP mode ended between the predicate and the read — skips the frame rather than drawing stale or partial strings, and the key is only stored after a successful submit. Leaving AP mode re-runs the full clear-and-redraw path, so none of the AP lines survive under the clock. The passphrase is still never logged and never exposed over HTTP (the single exception is the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag described above, which is absent from shipped images), and no API token has to be shown on the panel any more: the exemption covers every commissioning endpoint, so nothing now remains between a lockout and a working setup session.
 - **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and a preset selector that calls `POST /api/config/preset`. Full prayer-times configuration is now settable from the browser without
 recompiling. **Hijri calendar:** the config card carries a Hijri method
 dropdown (`hijri_calc_method`: Umm al-Qura KSA / Kuwaiti tabular) and a

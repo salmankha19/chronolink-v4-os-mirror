@@ -23,8 +23,9 @@
 
 /* OTA shared secret. Required in the X-OTA-Token header on POST /api/ota.
  * Compile-time; changing it requires a rebuild. Prevents drive-by flashing
- * from the open AP setup network (ChronoLink-Setup). Override via
- * -DOTA_SHARED_TOKEN=... in build_flags or edit the default below. */
+ * from the provisioning AP (ChronoLink-<MAC4>).
+ * Override via -DOTA_SHARED_TOKEN=... in build_flags or edit the default
+ * below. */
 #ifndef OTA_SHARED_TOKEN
 #define OTA_SHARED_TOKEN "change-me-before-flashing"
 #endif
@@ -64,19 +65,41 @@ static httpd_handle_t s_server = NULL;
  * access to the device or serial console. That threat model is out of
  * scope.
  *
- * CR #2 carve-out: while the recovery AP is up, POST /api/wifi and
- * POST /api/reboot are accepted without the token (recovery_exempt()). They
- * still need a Content-Type of exactly "application/json", which a <form>
- * cannot produce, so the CSRF property above holds: a cross-origin request
- * needs a non-simple content type, i.e. a CORS preflight this server never
- * approves. Everything else still needs the token, and the open setup AP
- * (ChronoLink-Setup) gets no carve-out at all (INVARIANT 1).
+ * Provisioning carve-out (CR #4): while the provisioning AP is up, all the
+ * commissioning endpoints are accepted without the token
+ * (provisioning_exempt()): /api/wifi, /api/config, /api/timetable and
+ * /api/reboot. That AP is SSID "ChronoLink-<MAC4>", WPA2-PSK with a per-entry
+ * random passphrase drawn on the device and shown only on its panel, so
+ * joining it is proof of physical possession -- and it is isolated from the
+ * internet, so the only reachable targets are this device's own endpoints.
+ * The exempt requests still need a Content-Type of exactly
+ * "application/json", which a <form> cannot produce, so the CSRF property
+ * above holds: a cross-origin request needs a non-simple content type, i.e. a
+ * CORS preflight this server never approves. Destructive paths (/api/ota,
+ * /api/factory-reset, /api/config/preset, /api/timetable/regenerate) and
+ * everything else still need the token.
  * ------------------------------------------------------------------------- */
 
 #define NVS_NAMESPACE_SVC_HTTP  "svc_http"
 #define NVS_KEY_API_TOKEN       "api_token"
-#define API_TOKEN_HEX_LEN       64
+/* 16 hex chars = 64-bit security. Adequate for local network admin
+ * operations, typeable in debug mode.
+ *
+ * This length is load-bearing in four places; change them together:
+ *   1. the NVS length check in load_or_generate_api_token() below,
+ *   2. the raw-byte pool and the terminator index in the generator,
+ *   3. the header length check in require_auth(),
+ *   4. the JS validation in components/svc_http/www/index.html, after which
+ *      src/index_html.c must be regenerated with scripts/embed_html.py.
+ * A stored token of any other length (for example the 64-char token an older
+ * image wrote) is treated as absent and replaced by a fresh one at boot, so a
+ * change here is self-healing on upgrade -- but the installer must re-paste
+ * the newly printed value once. */
+#define API_TOKEN_HEX_LEN       16
 #define AUTH_HEADER             "X-Chronolink-Auth"
+_Static_assert((API_TOKEN_HEX_LEN % 2) == 0,
+               "API token length must be even: the generator emits one hex "
+               "char per nibble");
 #define AUTH_SCHEME             "Bearer "
 
 static char s_api_token[API_TOKEN_HEX_LEN + 1];
@@ -92,6 +115,11 @@ static esp_err_t load_or_generate_api_token(void)
     } else {
         size_t len = sizeof(s_api_token);
         esp_err_t rd_err = nvs_get_str(h, NVS_KEY_API_TOKEN, s_api_token, &len);
+        /* Exact-length match: a token of any other size is treated as missing
+           and regenerated + persisted below. That is the upgrade path when
+           API_TOKEN_HEX_LEN changes (the old 64-char token stops matching);
+           nvs_get_str() does not overflow s_api_token, it only reports the
+           required size, and the generator overwrites the whole buffer. */
         if (rd_err == ESP_OK && len == API_TOKEN_HEX_LEN + 1) {
             nvs_close(h);
             ESP_LOGI(TAG, "API token loaded from NVS");
@@ -112,7 +140,7 @@ static esp_err_t load_or_generate_api_token(void)
         }
     }
 
-    uint8_t raw[32];
+    uint8_t raw[API_TOKEN_HEX_LEN / 2];
     esp_fill_random(raw, sizeof(raw));
     static const char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < sizeof(raw); i++) {
@@ -169,52 +197,81 @@ static bool uri_path_equals(const char *req_uri, const char *want)
            (req_uri[wl] == '\0' || req_uri[wl] == '?');
 }
 
-/* CR #2 (design section 6.9): the only way past the API token without
- * holding it. Returns true when this request may proceed unauthenticated.
+/* CR #4: the only way past the API token without holding it. Returns true when
+ * this request may proceed unauthenticated.
  *
- * INVARIANT 1: this predicate keys on svc_network_is_recovery_mode(), NEVER
- * on svc_network_is_ap_mode(). The setup AP (ChronoLink-Setup) is
- * WIFI_AUTH_OPEN — no passphrase, no physical-possession proof. Keying on
- * is_ap_mode() would make the open setup AP accept unauthenticated
- * state-changing requests. Do not "simplify" this predicate. */
-static bool recovery_exempt(httpd_req_t *req)
+ * Exempts the commissioning endpoints from API token auth during AP mode.
+ * Physical possession of the WPA2 passphrase is sufficient proof of presence,
+ * and the AP is isolated from the internet, so this is secure.
+ *
+ * Access rule: GET is waived outright, with no content-type check -- a GET must
+ * be side-effect free, so it carries no CSRF surface, and no browser attaches a
+ * content-type to one. POST/DELETE must present
+ * Content-Type: application/json, which an HTML <form> cannot produce, so
+ * form-based CSRF stays blocked.
+ *
+ * Auth model as it actually stands: reads are open, writes require auth. No GET
+ * handler calls require_auth() at all -- "/", "/api/config", "/api/timetable",
+ * "/api/prayers" and "/debug/ntp" are readable without the token in every mode,
+ * not only in AP mode. This predicate therefore only ever decides write traffic
+ * today, and the GET guard above is defensive: it stops a future GET handler on
+ * one of these paths from silently inheriting a content-type requirement that
+ * would lock a browser out of reading.
+ *
+ * The gate keys on svc_network_is_ap_mode(), the single provisioning AP
+ * (SSID "ChronoLink-<MAC4>", WIFI_AUTH_WPA2_PSK, passphrase regenerated per
+ * entry and shown only on the device panel), which serves both the
+ * unconfigured-boot path and the credential-lockout path. An open AP would
+ * NOT qualify: never revert the AP to WIFI_AUTH_OPEN without reverting this
+ * predicate in the same change.
+ *
+ * Closed by default for writes: only the paths below are reachable without the
+ * token while the AP is up. Every other write still takes the 16-hex token
+ * path, in particular:
+ *   /api/ota                    -- writes the inactive OTA slot
+ *   /api/factory-reset          -- erases NVS and /storage
+ *   /api/config/preset          -- bulk configuration overwrite
+ *   /api/timetable/regenerate   -- overwrites the calendar
+ * The two sub-paths are deliberately NOT covered: uri_path_equals() requires
+ * the match to end at the terminator or '?', so "/api/config" does not match
+ * "/api/config/preset", nor "/api/timetable" "/api/timetable/regenerate".
+ * The token path remains accepted for every exempt path as well, so an
+ * installer who holds the token is unaffected by this predicate.
+ *
+ * Compare on path only; req->uri may carry a query string. */
+static bool provisioning_exempt(httpd_req_t *req)
 {
-    if (!svc_network_is_recovery_mode()) return false;
+    if (!svc_network_is_ap_mode()) return false;
 
-    /* Closed by default: only these two paths are reachable without the
-     * token while recovery mode is up. Everything else still takes the
-     * 64-hex token path, in particular:
-     *   /api/ota                    -- writes the inactive OTA slot
-     *   /api/factory-reset          -- erases NVS and /storage
-     *   /api/config                 -- prayer/display configuration
-     *   /api/config/preset          -- bulk configuration overwrite
-     *   /api/timetable              -- GET/POST/DELETE the mosque calendar
-     *   /api/timetable/regenerate   -- overwrites the calendar
-     *   /api/prayers                -- computed prayer times
-     *   /                           -- the whole web UI
-     * The token path remains accepted for the two exempt paths as well, so an
-     * installer who holds the token is unaffected by this predicate.
-     *
-     * Compare on path only; req->uri may carry a query string. */
     if (!(uri_path_equals(req->uri, "/api/wifi") ||
+          uri_path_equals(req->uri, "/api/config") ||
+          uri_path_equals(req->uri, "/api/timetable") ||
           uri_path_equals(req->uri, "/api/reboot"))) return false;
 
-    /* C7: force a CORS preflight. HTML forms can only send urlencoded,
-     * multipart, or text/plain — a JSON content-type is unattainable from
-     * a <form>, so form-based CSRF is blocked outright. The web UI already
-     * sets this header, so no www/index.html change is needed. Note that a
-     * missing header and an over-long one (truncated by the httpd) both land
-     * on ESP_OK != err, i.e. fail closed. */
-    char ct[40];
-    if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct)) != ESP_OK) {
-        return false;
+    /* C7: force a CORS preflight on state-changing requests only. HTML forms
+     * can only send urlencoded, multipart, or text/plain -- a JSON
+     * content-type is unattainable from a <form>, so form-based CSRF is
+     * blocked outright. The web UI sets this header on its POSTs, so no
+     * www/index.html change is needed.
+     * GET is skipped: it must be side-effect free, hence no CSRF surface, and
+     * no browser sends a content-type with one. That is a guard for the future,
+     * not a behaviour change -- no GET handler on these paths calls
+     * require_auth() today (reads are open in every mode). A DELETE or POST
+     * that omits the header simply falls through to the token path. A missing
+     * header and an over-long one (truncated by the httpd) both land on
+     * ESP_OK != err, i.e. fail closed. */
+    if (req->method != HTTP_GET) {
+        char ct[40];
+        if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct)) != ESP_OK) {
+            return false;
+        }
+        /* RFC 2045 is case-insensitive; we are deliberately strict (case-
+         * sensitive, no charset parameter) which fails closed. The web UI
+         * sends exactly "application/json". */
+        if (strncmp(ct, "application/json", 16) != 0) return false;
+        char boundary = ct[16];
+        if (!(boundary == '\0' || boundary == ';' || boundary == ' ')) return false;
     }
-    /* RFC 2045 is case-insensitive; we are deliberately strict (case-
-     * sensitive, no charset parameter) which fails closed. The web UI sends
-     * exactly "application/json". */
-    if (strncmp(ct, "application/json", 16) != 0) return false;
-    char boundary = ct[16];
-    if (!(boundary == '\0' || boundary == ';' || boundary == ' ')) return false;
 
     /* D7: touch the idle timer. Single-writer per E2. */
     svc_network_touch_recovery_idle_timeout();
@@ -224,12 +281,14 @@ static bool recovery_exempt(httpd_req_t *req)
 /* Returns true on success. On failure sends a 403 JSON response and returns
    false; the caller must `return ESP_FAIL;` immediately.
 
-   CR #2: recovery_exempt() short-circuits the token check for two endpoints
-   while the recovery AP is up. Every other endpoint -- and both of these
-   whenever recovery mode is not active -- still requires the token. */
+   CR #4: provisioning_exempt() short-circuits the token check for the
+   commissioning endpoints while the provisioning AP is up. Every other write --
+   and all of these whenever no AP is up -- still requires the token. Only
+   write handlers call this function; no GET handler does, so reads are open in
+   every mode by design. */
 static bool require_auth(httpd_req_t *req)
 {
-    if (recovery_exempt(req)) return true;
+    if (provisioning_exempt(req)) return true;
 
     char hdr[128];
     if (httpd_req_get_hdr_value_str(req, AUTH_HEADER, hdr, sizeof(hdr)) != ESP_OK) {
@@ -772,15 +831,14 @@ static esp_err_t post_reboot_handler(httpd_req_t *req)
  * to a direct esp_partition_erase_range() so a cleanly-mountable FS is
  * still erased.
  *
- * SECURITY: like /api/reboot and every other state-changing endpoint,
- * this handler calls require_auth() first, so a request needs
+ * SECURITY: like every other state-changing endpoint, this handler calls
+ * require_auth() first, so a request needs
  * X-Chronolink-Auth: Bearer <device token>. That closes the CSRF path
  * from a browser page on the same WiFi. The only unauthenticated path is
- * recovery_exempt(), which covers POST /api/wifi and POST /api/reboot
- * exclusively -- never this endpoint, and never while the setup AP is up.
- * The AP setup network itself remains open, so first-boot provisioning
- * still works; the installer pastes the token from the serial console
- * once. */
+ * provisioning_exempt(), which covers the commissioning endpoints
+ * (/api/wifi, /api/config, /api/timetable, /api/reboot) -- never this one,
+ * and only while the WPA2 provisioning AP is up, i.e. after the installer has
+ * joined it with the per-entry passphrase shown on the panel. */
 static esp_err_t post_factory_reset_handler(httpd_req_t *req)
 {
     if (!require_auth(req)) return ESP_FAIL;

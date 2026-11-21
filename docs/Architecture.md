@@ -239,36 +239,45 @@ presets, tomorrow's jamat, and the pre-5.1a migration path — is in
 [prayer-times-model.md](prayer-times-model.md). This section is only
 the pointer; the domain model lives there.
 
-### 4.3 WiFi recovery mode (CR #2)
+### 4.3 WiFi provisioning mode (CR #2 recovery path, unified by CR #4)
 
 A clock whose saved Wi-Fi credentials stop working used to retry forever, with
 no way back in short of a USB reflash. `svc_network` now detects a credential
-lockout and raises an **in-place** recovery AP (no reboot) that an installer can
-join to correct the credentials. The full design -- rejected alternatives,
-review history, verification checklist -- is in
+lockout and raises an **in-place** provisioning AP (no reboot) that an installer
+can join to correct the credentials. CR #4 unified that AP with the
+first-boot/unconfigured AP: one SSID (`ChronoLink-<MAC4>`), the same WPA2-PSK
+settings and the same freshly generated passphrase in both cases, so nothing
+over the air reveals which scenario is running. The full design -- rejected
+alternatives, review history, verification checklist -- is in
 [sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md).
 This section records the shape and the invariants that must survive
 refactoring.
 
 ```mermaid
 flowchart TB
-    START[NOT_STARTED] -->|"svc_network_start: no or empty credentials"| SETUP["SETUP_AP (open)"]
+    START[NOT_STARTED] -->|"svc_network_start: no or empty credentials"| SETUP["AP_UP (WPA2-PSK, ChronoLink-MAC4)"]
     START -->|"svc_network_start: has credentials"| STA[STA_CONNECT]
     STA -->|GOT_IP| CONNECTED[CONNECTED]
-    STA -->|"auth-class reason: 202/15/204/2"| RETRYA["RETRY, auth++ total++"]
+    STA -->|"auth-class reason: 202/15/204/2/205"| RETRYA["RETRY, auth++ total++"]
     STA -->|"any other reason"| RETRYO["RETRY, auth = 0 total++"]
-    RETRYA -->|"auth < 5 and total < 8: backoff 1 s to 30 s"| STA
-    RETRYO -->|"total < 8: backoff 1 s to 30 s"| STA
-    RETRYA -->|"auth >= 5: 250 ms trigger"| RECOVERY["RECOVERY_AP (WPA2-PSK)"]
-    RETRYO -->|"total >= 8: 250 ms trigger"| RECOVERY
+    RETRYA -->|"auth < 5 and total < 24: backoff 1 s to 30 s"| STA
+    RETRYO -->|"total < 24: backoff 1 s to 30 s"| STA
+    RETRYA -->|"auth >= 5: 250 ms trigger"| RECOVERY["AP_UP (WPA2-PSK, ChronoLink-MAC4)"]
+    RETRYO -->|"total >= 24: 250 ms trigger"| RECOVERY
     RECOVERY -->|"idle 15 min OR absolute 30 min"| EXIT["stop then start; arm 10 min cooldown"]
     EXIT -->|STA_CONNECT| STA
 ```
 
-`SETUP_AP` covers both "no credentials at boot" and "an empty SSID stored" --
-an empty SSID can never associate, so `svc_network_start()` treats it as
+Because CR #4 gives both entry paths one identity, `SETUP` and `RECOVERY` are
+the same AP on the air and in the UI. The only difference is bookkeeping: the
+`RECOVERY` node is the one that arms the idle/absolute timers and the exit
+worker. `SETUP` is a terminal state -- an unconfigured device stays in its AP
+until credentials are written and it reboots.
+
+`AP_UP` covers both "no credentials at boot" and "an empty SSID stored" -- an
+empty SSID can never associate, so `svc_network_start()` treats it as
 unconfigured instead of burning the STA ladder on a guaranteed failure. Both
-triggers share one entry helper, `arm_recovery_entry()`: `RECOVERY_AP` sits
+lockout triggers share one entry helper, `arm_recovery_entry()`: the AP sits
 after `RETRY` and before `CONNECTED`, is entered from `RETRY` when either
 streak reaches its threshold (5 auth-class, or 24 of any reason), and returns
 through `svc_network_stop()` then `svc_network_start()` to `STA_CONNECT`,
@@ -293,16 +302,23 @@ toward the streak:
 |---|---|
 | 202 | `WIFI_REASON_AUTH_FAIL` |
 | 15 | `WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT` |
+| 205 | `WIFI_REASON_CONNECTION_FAIL` |
 | 204 | `WIFI_REASON_HANDSHAKE_TIMEOUT` |
 | 2 | `WIFI_REASON_AUTH_EXPIRE` |
 
 Every other reason resets the auth streak to 0 and reconnects as before (PR
 #157: it also advances the any-reason counter described below).
-**#131 R1 is preserved for the credentials question:** `201 WIFI_REASON_NO_AP_FOUND`
-is not in the whitelist, and neither are `200 BEACON_TIMEOUT`, `205
-CONNECTION_FAIL` nor `212 NO_AP_FOUND_IN_RSSI_THRESHOLD`, so a router that is
-simply down is never *classified* as wrong credentials and STA keeps being
-retried first. `210`/`211` (WPA3-only security mismatch) are deliberately
+`205 CONNECTION_FAIL` is in the whitelist: it is emitted when the AP was seen
+but the association or handshake was rejected, which is how some routers
+answer a wrong password. While it was excluded it reset the streak, so a run
+that mixed `15`/`202` with `205` never reached the threshold and a pure-`205`
+wrong password only ever hit the slow path.
+**#131 R1 is preserved for the credentials question:** the deliberate
+exclusions are `200 BEACON_TIMEOUT`, `201 NO_AP_FOUND` and
+`212 NO_AP_FOUND_IN_RSSI_THRESHOLD` -- the "router is down or out of range"
+signatures -- so that case is never *classified* as wrong credentials and STA
+keeps being retried first, with the any-reason slow path as its bounded
+backstop. `210`/`211` (WPA3-only security mismatch) are deliberately
 deferred to a follow-up.
 
 **Slow path (PR #157).** The auth streak alone left a configured clock
@@ -333,42 +349,70 @@ driver before `start()` runs again; without that the retry would die on
   entry and exit workers, the four timers (entry trigger, idle/absolute
   timeout, bring-up retry, cooldown), the bring-up retry ladder
   (1 s -> 30 s, never gives up; also armed from a cold-boot bring-up failure),
-  and the accessors `svc_network_is_recovery_mode()`,
-  `svc_network_get_recovery_ssid()`,
-  `svc_network_get_recovery_passphrase()`,
+  the unified identity (`generate_ap_identity()`, `s_ap_ssid` / `s_ap_pass`
+  under `s_ap_identity_lock`, called by `start_ap_mode()` for both
+  `AP_MODE_SETUP` and `AP_MODE_RECOVERY`), and the accessors
+  `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`,
+  `svc_network_get_ap_passphrase()`,
   `svc_network_touch_recovery_idle_timeout()`.
-- `svc_http.c` -- `recovery_exempt()`, called first from `require_auth()`.
-  While recovery mode is up it accepts `POST /api/wifi` and `POST /api/reboot`
-  without the `X-Chronolink-Auth` token, but only for
-  `Content-Type: application/json` (strict; an HTML `<form>` cannot produce it,
-  so form-based CSRF stays blocked), and it then touches the idle timer.
-  Everything else keeps the token, and the open setup AP gets no exemption at
-  all.
-- `ui_producer.c` -- the recovery screen (SSID + passphrase). The recovery
-  predicate is tested **before** the setup-AP predicate because the recovery AP
-  is raised through the same `start_ap_mode()`, so both are true during
-  recovery.
+- `svc_http.c` -- the static `provisioning_exempt()`, called first from
+  `require_auth()`. While the provisioning AP is up it accepts
+  `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` without the
+  `X-Chronolink-Auth` token. On those paths a non-GET request (`POST`,
+  `DELETE`) must also carry `Content-Type: application/json` (strict; an HTML
+  `<form>` cannot produce it, so form-based CSRF stays blocked), and it then
+  touches the idle timer; GET is exempt from that requirement because a GET
+  must be side-effect free and browsers never attach a content-type to one.
+  Every write outside that list keeps the token -- in particular `/api/ota`,
+  `/api/factory-reset`, `/api/config/preset` and `/api/timetable/regenerate`
+  (the last two because `uri_path_equals()` matches a full path, not a
+  sub-path).
+- Auth model to keep in mind while reading the two service bullets above:
+  **reads are open, writes require auth.** No GET handler calls
+  `require_auth()`, so `/`,
+  `/api/config`, `/api/timetable`, `/api/prayers` and `/debug/ntp` answer
+  without the token in every mode, not just in AP mode. The method guard in
+  `provisioning_exempt()` is defensive only -- it stops a future GET handler on
+  one of the four exempt paths from inheriting a content-type requirement and
+  locking browsers out of reading.
+- API tokens are 16 hex characters (64-bit). This is typeable in debug mode
+  while providing adequate security for local admin operations: the threat
+  here is a drive-by CSRF or someone on the mosque WiFi, and that network is
+  already gated by its WPA2 password. The token is a check on who is asking,
+  not a defence against an attacker holding the passphrase or physical
+  access. A device that holds a token of any other length (the 64-char token
+  an older image wrote) discards it and generates a fresh one at boot, which
+  is why the length can be changed without a migration step.
+- `ui_producer.c` -- one provisioning screen (SSID + passphrase), keyed on
+  `svc_network_is_ap_mode()` alone. There is no second predicate any more,
+  because both entry paths share one identity.
 
 **Security invariants (must survive refactoring).** Copied verbatim from
 [sessions/cr2-wifi-lockout-design.md](sessions/cr2-wifi-lockout-design.md)
 section 5.
 
-**Invariant 1 — the auth exemption keys on recovery mode, never on AP mode.**
-`recovery_exempt()` (in `svc_http.c`) branches on
-`svc_network_is_recovery_mode()`. It must **never** branch on
-`svc_network_is_ap_mode()`. The setup AP (`ChronoLink-Setup`) is
-`WIFI_AUTH_OPEN` — no passphrase, no physical-possession proof. If a future
-refactor "simplifies" the predicate to `is_ap_mode()`, the setup AP becomes
-unauthenticated. This sentence appears verbatim as a code comment at
-`recovery_exempt()` and must not be removed.
+**Invariant 1 (rewritten by CR #4) — the auth exemption keys on AP mode, and
+only because every provisioning AP is WPA2-PSK.**
+`provisioning_exempt()` (in `svc_http.c`) branches on
+`svc_network_is_ap_mode()`. That is sound *only* while both entry paths raise
+the same SSID (`ChronoLink-<MAC4>`) with `WIFI_AUTH_WPA2_PSK` and a per-entry
+random passphrase shown only on the device panel, so joining it proves physical
+possession. Never revert an AP to `WIFI_AUTH_OPEN`, and never give the setup
+path a separate (open) identity: either change makes the exemption
+unauthenticated. The pre-CR #4 form of this invariant ("never key on
+`is_ap_mode()`; the setup AP is open") is obsolete, and the corresponding code
+comment was rewritten in the same change.
 
 **Invariant 2 — `s_recovery_mode` cleared first, set last.**
-`s_recovery_mode` is cleared inside `svc_network_stop()`, **under the recovery
-mutex, before any teardown begins**. It is set inside `start_ap_mode()`, **under
-the same mutex, only after the AP is confirmed up** (i.e. after
+`s_recovery_mode` is cleared inside `svc_network_stop()`, **under the AP
+identity mutex (`s_ap_identity_lock`), before any teardown begins**, together
+with `s_ap_ssid` / `s_ap_pass`. It is set inside `start_ap_mode()`, **under the
+same mutex, only after the AP is confirmed up** (i.e. after
 `esp_wifi_start()` returned `ESP_OK` and `s_ap_mode` is about to be set true).
-This makes the httpd-side predicate fail closed at both edges: no window in
-which a non-recovery interface accepts exempted requests.
+This keeps the recovery idle timeout and the exit worker consistent at both
+edges. The httpd predicate no longer depends on it: since CR #4 it keys on
+`s_ap_mode`, which `stop()` clears later on purpose (the AP is still
+WPA2-protected while it is being torn down).
 
 **Invariant 3 — `s_recovery_active` must never be held across a
 `svc_network_start()` call.**
@@ -378,6 +422,17 @@ immediately after `svc_network_stop()` returns, before `svc_network_start()` is
 called. If it were held across `svc_network_start()`, the first
 `STA_DISCONNECTED` after start would be swallowed (E4), the reconnect timer
 would never arm, and the device would sit idle forever.
+
+**CR #4 note — why the widened exemption is safe, and what it does not cover.**
+During AP mode, all commissioning endpoints are exempt from API token auth.
+This is secure because the AP is WPA2-protected (proving physical presence)
+and isolated from the internet. Two limits belong with that statement. First,
+"writes" is load-bearing: the exemption only ever decides write traffic today,
+because no GET handler calls `require_auth()` at all -- reads are open in every
+mode, so `/api/config`, `/api/timetable`, `/api/prayers`, `/` and `/debug/ntp`
+need neither the AP nor the token. Second, the content-type gate covers non-GET
+methods only, since a GET must be side-effect free and carries no CSRF surface.
+The method guard exists so those two facts cannot change by accident.
 
 ---
 
