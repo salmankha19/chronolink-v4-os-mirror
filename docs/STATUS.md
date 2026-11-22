@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-22 at commit `HEAD` (recent PRs: #157 bounded retry slow path; #158 slow-path threshold 24; #159 unified WPA2-PSK provisioning AP plus reason 205 in the auth-class set; #160 RTC write-verify compares UTC epoch seconds; #161 test harness restores the board's pre-run location/method. Earlier: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-22 at commit `HEAD` (recent PRs: #157 bounded retry slow path; #158 slow-path threshold 24; #159 unified WPA2-PSK provisioning AP plus reason 205 in the auth-class set; #160 RTC write-verify compares UTC epoch seconds; #161 test harness restores the board's pre-run location/method. Earlier: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). In review: Quick Setup city presets (nine cities, Horsham default; presets no longer carry jamat/season) -- see the Quick Setup bullet below. Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -91,7 +91,23 @@ not.** Where another doc mentions a gap, this file has the detail.
   forwards matching events non-blocking, up to
   `EVENT_BUS_MAX_SUBSCRIBERS` (8) entries. `svc_time` is the first
   subscriber (PR 5b-2): it registers for `EVENT_NETWORK_CONNECTED`.
-- **Services:** `svc_network` (WiFi station), `state_manager`, `svc_config` (NVS-backed installation config: location, method, madhab, iqamah offsets, adhan mode, display preferences, high-latitude rule, adhan offsets, zawal buffer — storage + accessors only, no calculation or hardware). **PR 5.1a additions:** seasonal jamat config (`jamat[5]` with per-prayer winter/summer anchor+offset and shared rounding, plus a `season` struct with fixed summer/winter transition dates) and named presets (`SVC_CONFIG_PRESET_UK` default, `SVC_CONFIG_PRESET_PAKISTAN`). Legacy `iqamah_offset_min[]` retained as deprecated mirror of `jamat[i].winter.offset_min` for backward compatibility (removal in 5.1c; `refactor(config): drop iqamah mirror`). **PR #146/#147 additions:** `hijri_offset_days` (`int8_t`, -3 to +3) and `hijri_calc_method` (`uint8_t`, 0=Kuwaiti, 1=Umm al-Qura) replace the old `ramadan_windows[]` table. Uses an algorithmic Gregorian-to-Hijri conversion (with a 158-year KSA bitmask) to compute `is_ramadan`.
+- **Services:** `svc_network` (WiFi station), `state_manager`, `svc_config` (NVS-backed installation config: location, method, madhab, iqamah offsets, adhan mode, display preferences, high-latitude rule, adhan offsets, zawal buffer — storage + accessors only, no calculation or hardware). **PR 5.1a additions:** seasonal jamat config (`jamat[5]` with per-prayer winter/summer anchor+offset and shared rounding, plus a `season` struct with fixed summer/winter transition dates) and named presets (originally `SVC_CONFIG_PRESET_UK` / `_PAKISTAN`, replaced on 2026-11-22 by nine city presets — see the Quick Setup bullet below). Legacy `iqamah_offset_min[]` retained as deprecated mirror of `jamat[i].winter.offset_min` for backward compatibility (removal in 5.1c; `refactor(config): drop iqamah mirror`). **PR #146/#147 additions:** `hijri_offset_days` (`int8_t`, -3 to +3) and `hijri_calc_method` (`uint8_t`, 0=Kuwaiti, 1=Umm al-Qura) replace the old `ramadan_windows[]` table. Uses an algorithmic Gregorian-to-Hijri conversion (with a 158-year KSA bitmask) to compute `is_ramadan`.
+- **Quick Setup city presets (2026-11-22):** `SVC_CONFIG_PRESET_*` is now a
+  nine-city table (`k_city_presets[]` in `svc_config.c`): Horsham, Crawley,
+  London, Lahore, Bahawalpur, Penang, Jeddah, Toronto, New Jersey. A preset
+  seeds latitude, longitude, `location_valid`, method, `high_lat_rule`,
+  madhab, `hijri_calc_method` and `hijri_offset_days`, and seeds
+  `location_name` only when it is empty. It deliberately does NOT touch
+  `jamat[]`, `season`, `adhan_offset_min[]` or the display preferences, so
+  congregational times survive a city change (see
+  `docs/prayer-times-model.md` section 5). `set_defaults()` now applies the
+  **Horsham, UK** preset (Moonsighting, high-lat AUTO, Standard madhab,
+  Kuwaiti Hijri), so an NVS-erased board has `location_valid == true` and
+  produces prayer times as soon as the RTC is trusted; jamat anchors stay
+  DISABLED and adhan margins 0 until the installer sets them. The default
+  timezone is `svc_time`'s UK POSIX string, which matches the default
+  location. `svc_config_apply_preset()` persists the new fields (including
+  the microdegree lat/lon) to NVS; the preset index itself is never stored.
 - **Hijri date display (2026-11-15, numeric format):** `svc_config_get_hijri_date()`
   exposes the Islamic calendar to other layers; `svc_prayer_engine_service`
   populates `svc_prayer_engine_times_t.hijri_{year,month,day}` plus full
@@ -370,15 +386,20 @@ Three NTP slots live in NVS namespace `time`:
 - **Timezone storage:** NVS key `tz` in namespace `time`, holding a POSIX
   TZ string; default `GMT0BST,M3.5.0/1,M10.5.0` (UK, DST-aware) with a
   warning log when the key is absent.
-  POSIX TZ strings only -- the web UI translates an IANA zone to POSIX
-  and may store an optional `ntp_region` key for display; that UI arrives
-  with `svc_http`.
+  POSIX TZ strings only. The only writer today is
+  `POST /api/config/preset`, which applies `svc_config_preset_timezone()`
+  for the chosen city (UK `GMT0BST,...`, `PKT-5`, `MYT-8`, `AST-3`,
+  `EST5EDT,...`). There is no IANA-to-POSIX translation and no
+  `ntp_region` key.
 - **1 Hz tick (PR 5c):** the worker wakes every second and refreshes the
   snapshot -- from the RTC when one answers, otherwise from the libc clock
   once NTP has stepped it -- so `svc_time_get_*()` advances instead of
   returning the value captured at sync time. The default TZ is the UK POSIX
-  string `GMT0BST,M3.5.0/1,M10.5.0` (GMT/BST with automatic DST): a
-  dev/QA target until `svc_http` can store the user's zone.
+  string `GMT0BST,M3.5.0/1,M10.5.0` (GMT/BST with automatic DST), which
+  matches the Horsham factory-default location. A city preset is currently
+  the only way to change it (`POST /api/config/preset` applies
+  `svc_config_preset_timezone()`); there is still no free-form timezone
+  field in the web form.
 - **RTC Trust & Invalid UX (PR 5.5b):** The snapshot gains `rtc_untrusted`.
   The UI shows a "Starting..." splash on boot, then `--:--` if the RTC is
   untrusted (OSF set or year < build year). A two-line warning banner
@@ -822,9 +843,15 @@ The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
 - **AP Setup Mode (PR 4.2; #131 removed fallback; PR #157 empty-SSID):** If no WiFi credentials are saved **or the saved SSID is empty**, `svc_network` drops into Access Point mode (`ChronoLink-<MAC4>`, WPA2-PSK, IP `192.168.4.1`). An empty SSID can never associate, so it is treated as unconfigured rather than fed to the STA ladder; an empty password with a non-empty SSID stays a valid open network. `ui_producer` displays these setup instructions on the screen instead of the clock. **(CR #2, implemented — hardware verification checklist in the design doc is still open; see `docs/sessions/cr2-wifi-lockout-design.md`; CR #4 unified both APs into one)** The same provisioning AP is also entered after `SVC_NETWORK_AUTH_FAIL_THRESHOLD` (5) consecutive auth-class disconnects (reason 2/15/202/204/205) with no guard active, **or after `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) consecutive disconnects of any reason** (PR #157 slow path, so a router that is off or out of range also ends in a reachable AP). Implemented in `svc_network`: the state machine, the four workers (entry, exit, bring-up retry, setup re-entry), the five timers (entry trigger, idle/absolute timeout, bring-up retry, cooldown, setup re-entry), the bring-up retry ladder, and the accessors `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`, `svc_network_touch_provisioning_idle_timeout()`. **httpd exemption implemented (step 2, widened by CR #4):** `svc_http.c` has a static `provisioning_exempt()`, called first from `require_auth()`. While the provisioning AP is up it lets `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` through without the `X-Chronolink-Auth` token; on those paths a non-GET request must also carry a `Content-Type` of `application/json` (strict, case-sensitive; a `<form>` cannot produce it, so form-based CSRF stays blocked), and an exempt request then touches the provisioning idle timer (either AP). GET is exempt from the content-type requirement because a GET must be side-effect free and no browser attaches one. **Reads are open, writes require auth:** no GET handler calls `require_auth()` at all, so `/`, `/api/config`, `/api/timetable`, `/api/prayers` and `/debug/ntp` answer without the token in every mode, not only in AP mode — the method guard in `provisioning_exempt()` is defensive only. Every write outside that list — `/api/ota`, `/api/factory-reset`, `/api/config/preset`, `/api/timetable/regenerate` — still requires the token (the two sub-paths are not covered: `uri_path_equals()` matches a full path only), and no AP mode means no exemption at all. **Timing (both APs, Setup-AP timeout parity):** every provisioning AP exits after 15 min idle / 30 min absolute, whichever comes first, and an exempted HTTP request restarts the idle window. A recovery exit returns to STA with the (possibly corrected) credentials and then observes a 10 min cooldown during which failures are not counted; a setup exit instead holds the link down for the same 10 min with both failure counters frozen, then re-enters the setup AP deterministically from `s_setup_reentry_timer()`, so an unconfigured clock cycles screen -> 10 min down -> screen instead of staying in setup mode until a power cycle. **Provisioning screen (step 3, unified by CR #4):** `ui_producer` has a single `svc_network_is_ap_mode()` branch — there is no second predicate any more, because both entry paths share one identity. It draws a 9-command screen (clear, then `WiFi Provisioning Mode`, `Connect to:` + SSID, `Password:` + passphrase, `Open Browser:` + `192.168.4.1`, `Auto-exits when idle`). The identity is re-read every 250 ms through `svc_network_get_ap_ssid()` / `svc_network_get_ap_passphrase()` and folded into the draw key `AP_<ssid>_<passphrase>`, so a rotation on re-entry forces a redraw; a failed getter — AP mode ended between the predicate and the read — skips the frame rather than drawing stale or partial strings, and the key is only stored after a successful submit. Leaving AP mode re-runs the full clear-and-redraw path, so none of the AP lines survive under the clock. The passphrase is still never logged and never exposed over HTTP (the single exception is the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag described above, which is absent from shipped images), and no API token has to be shown on the panel any more: the exemption covers every commissioning endpoint, so nothing now remains between a lockout and a working setup session.
-- **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and a preset selector that calls `POST /api/config/preset`. Full prayer-times configuration is now settable from the browser without
-recompiling. **Hijri calendar:** the config card carries a Hijri method
-dropdown (`hijri_calc_method`: Umm al-Qura KSA / Kuwaiti tabular) and a
+- **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and — since 2026-11-22 — a **Quick Setup: Select Your City** dropdown at the top of the card (`#quick-setup-city`) that fills latitude, longitude, method, high-lat rule, madhab and Hijri options client-side and then calls `POST /api/config/preset`, which also applies that city's POSIX timezone. Presets never touch jamat or adhan margins, so mosque times are still entered and saved separately. Full prayer-times configuration is now settable from the browser without
+recompiling. The Prayer Timetable card asks the operator to save the
+configuration **before** uploading a custom calendar and states that any
+settings saved after an upload apply to the uploaded timetable (the fields
+the file omits are filled on read); *Regenerate* / *Delete File* remain the
+controls that replace or remove an upload.
+
+**Hijri calendar:** the config card carries a Hijri method dropdown
+(`hijri_calc_method`: Umm al-Qura KSA / Kuwaiti tabular) and a
 Hijri offset dropdown (`hijri_offset_days`: -3 to +3 days), so a mosque's
 announced Ramadan start can be matched from the browser.
 - **Factory-reset trigger (PR 4.5):** `POST /api/factory-reset` writes a one-shot flag to NVS namespace `boot_req` (key `flag`) and reboots. `boot_manager_init()` reads and clears that flag immediately after `init_nvs()` and runs the existing `do_factory_reset()` (NVS erase + /storage partition

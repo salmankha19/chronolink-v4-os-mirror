@@ -56,6 +56,33 @@
   <!-- Configuration -->
   <div class="card">
     <h2>Location & Calculation</h2>
+
+    <div style="background:#eafaf1; border:2px solid #16a085; border-radius:6px; padding:12px; margin:10px 0 4px;">
+      <label for="quick-setup-city" style="margin-top:0; color:#16a085;">Quick Setup: Select Your City</label>
+      <select id="quick-setup-city" onchange="applyQuickSetup()">
+        <option value="">&mdash; choose a city &mdash;</option>
+        <option value="0">Horsham, UK</option>
+        <option value="1">Crawley, UK</option>
+        <option value="2">London, UK</option>
+        <option value="3">Lahore, Pakistan</option>
+        <option value="4">Bahawalpur, Pakistan</option>
+        <option value="5">Penang, Malaysia</option>
+        <option value="6">Jeddah, Saudi Arabia</option>
+        <option value="7">Toronto, Canada</option>
+        <option value="8">New Jersey, USA</option>
+      </select>
+      <p style="font-size:0.85em; color:#666; margin-top:8px;">
+        Fills latitude, longitude, calculation method, madhab and Hijri options,
+        and applies the city preset on the device &mdash; which also sets the
+        timezone. Adhan margins and jamat times are never part of a preset: set
+        those for your mosque below, then Save.
+      </p>
+      <p id="quick-setup-tz" style="font-size:0.85em; color:#666; margin-top:0;">
+        Factory default: Horsham, UK &mdash; timezone GMT0BST,M3.5.0/1,M10.5.0.
+        Applying a preset needs the API token from Setup Authentication; without
+        it the device answers 403 and the fields stay filled but unsaved.
+      </p>
+    </div>
     <label>Location Name</label>
     <input type="text" id="loc_name" placeholder="e.g. Masjid">
     
@@ -309,19 +336,8 @@
 
     <button onclick="saveConfig()" style="margin-top:20px;">Save All Configuration</button>
 
-    <label style="margin-top:20px;">Or apply a named preset (overwrites method, madhab, jamat, season)</label>
-    <div class="row">
-      <div>
-        <select id="preset_select">
-          <option value="0">UK (MWL, Standard)</option>
-          <option value="1">Pakistan (Karachi, Hanafi)</option>
-          <option value="2">UK (Moonsighting, Standard)</option>
-        </select>
-      </div>
-      <div>
-        <button onclick="applyPreset()" style="margin-top:0;">Apply Preset</button>
-      </div>
-    </div>
+    <!-- Quick Setup above supersedes the old region-wide preset buttons. -->
+    <!-- The preset API still exists: POST /api/config/preset {preset: N}. -->
   </div>
 
   <!-- Prayer Times Display (three tiers) -->
@@ -372,11 +388,17 @@
   <div class="card" style="border: 2px solid #8e44ad;">
     <h2 style="color:#8e44ad;">Prayer Timetable</h2>
     <p style="font-size:0.9em; color:#666;">
-      The device generates a full-year timetable automatically. You can
-      upload your mosque's own timetable JSON to override. Missing fields
-      in an uploaded file are filled from config on read.
+      You can upload your mosque's own timetable JSON to override the
+      calculated times. Missing fields in an uploaded file are filled from
+      your current configuration on read.
     </p>
     <p style="font-size:0.85em; color:#999;" id="tt_meta">&mdash;</p>
+    <p style="font-size:0.85em; color:#7d3c98; border-left:3px solid #8e44ad; padding:6px 0 6px 10px; margin:12px 0 0;">
+      <strong>Note:</strong> Please save your configuration settings before
+      uploading a file. Any settings saved after uploading will apply to the
+      uploaded timetable. To preserve a custom timetable, finalize your
+      settings first, then upload the file.
+    </p>
     <label>Timetable File (.json)</label>
     <input type="file" id="tt_file" accept=".json,application/json"
            style="width:100%;padding:10px;margin-top:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
@@ -744,32 +766,93 @@
         .catch(() => { /* expected: connection dies when device reboots */ });
     }
 
-    function applyPreset() {
-      const preset = parseInt(document.getElementById('preset_select').value, 10);
-      const names = ['UK', 'Pakistan', 'UK (Moonsighting)'];
-      const name = names[preset] || 'Unknown';
-      if (!confirm('Apply preset "' + name + '"?\n\nThis overwrites method, madhab, jamat configuration, and season dates. Location and display preferences are preserved.')) {
-        return;
+    /* Mirrors k_city_presets in components/svc_config/src/svc_config.c.
+       high_lat is svc_prayer_highlat_t: 0 = Auto, 1 = None.
+       tz is informational here; the device applies its own copy. */
+    const CITY_PRESETS = [
+      { name: 'Horsham, UK',          lat: 51.062, lon: -0.3273,  method: 6, high_lat: 0, madhab: 0, hijri_method: 0, hijri_offset: 0, tz: 'GMT0BST,M3.5.0/1,M10.5.0' },
+      { name: 'Crawley, UK',          lat: 51.131, lon: -0.1865,  method: 6, high_lat: 0, madhab: 0, hijri_method: 0, hijri_offset: 0, tz: 'GMT0BST,M3.5.0/1,M10.5.0' },
+      { name: 'London, UK',           lat: 51.507, lon: -0.1276,  method: 0, high_lat: 0, madhab: 0, hijri_method: 0, hijri_offset: 0, tz: 'GMT0BST,M3.5.0/1,M10.5.0' },
+      { name: 'Lahore, Pakistan',     lat: 31.520, lon: 74.3587,  method: 3, high_lat: 1, madhab: 1, hijri_method: 0, hijri_offset: 0, tz: 'PKT-5' },
+      { name: 'Bahawalpur, Pakistan', lat: 29.395, lon: 71.6833,  method: 3, high_lat: 1, madhab: 1, hijri_method: 0, hijri_offset: 0, tz: 'PKT-5' },
+      { name: 'Penang, Malaysia',     lat: 5.4164, lon: 100.3327, method: 3, high_lat: 1, madhab: 0, hijri_method: 0, hijri_offset: 0, tz: 'MYT-8' },
+      { name: 'Jeddah, Saudi Arabia', lat: 21.485, lon: 39.1925,  method: 4, high_lat: 1, madhab: 0, hijri_method: 1, hijri_offset: 0, tz: 'AST-3' },
+      { name: 'Toronto, Canada',      lat: 43.653, lon: -79.3832, method: 1, high_lat: 0, madhab: 0, hijri_method: 0, hijri_offset: 0, tz: 'EST5EDT,M3.2.0,M11.1.0' },
+      { name: 'New Jersey, USA',      lat: 40.058, lon: -74.4057, method: 1, high_lat: 0, madhab: 1, hijri_method: 0, hijri_offset: 0, tz: 'EST5EDT,M3.2.0,M11.1.0' }
+    ];
+
+    /* Brief green flash so the installer can see which fields the preset wrote.
+       Takes a field id (existing call sites, e.g. the forEach in
+       applyQuickSetup) or an element reference. */
+    function flashField(idOrEl) {
+      const el = (typeof idOrEl === 'string') ? document.getElementById(idOrEl) : idOrEl;
+      if (!el) return;
+      el.style.transition = 'background-color 0.6s';
+      el.style.backgroundColor = '#d5f5e3';
+      setTimeout(() => { el.style.backgroundColor = ''; }, 900);
+    }
+
+    function applyQuickSetup() {
+      const sel    = document.getElementById('quick-setup-city');
+      const idx    = parseInt(sel.value, 10);
+      const preset = CITY_PRESETS[idx];
+      if (!preset) return;   /* placeholder selected */
+
+      /* 1. Fill the form from the table above, so the values are visible and
+            editable even when the device request below is rejected. */
+      document.getElementById('lat').value          = preset.lat;
+      document.getElementById('lon').value          = preset.lon;
+      document.getElementById('method').value       = preset.method;
+      document.getElementById('high_lat').value     = preset.high_lat;
+      document.getElementById('madhab').value       = preset.madhab;
+      document.getElementById('hijri_method').value = preset.hijri_method;
+      document.getElementById('hijri_offset').value = preset.hijri_offset;
+
+      /* Location Name: the DOM id is `loc_name` (the JSON key is
+         location_name, which is NOT an element id). Seed the textbox from
+         the preset table -- never from the dropdown value, which is only an
+         index. An empty box is filled, and so is a box that still holds
+         another city's preset name, so switching cities updates the name.
+         A name the installer typed (e.g. "Masjid") is preserved. */
+      const nameEl = document.getElementById('loc_name');
+      if (nameEl) {
+        const cur = nameEl.value.trim();
+        const isPresetName = CITY_PRESETS.some(p => p.name === cur);
+        if (cur === '' || isPresetName) {
+          nameEl.value = preset.name;
+          flashField(nameEl);   /* visual feedback */
+        }
       }
+
+      toggleCustomAngles();
+      ['lat', 'lon', 'method', 'high_lat', 'madhab',
+       'hijri_method', 'hijri_offset'].forEach(flashField);
+
+      const tzLine = document.getElementById('quick-setup-tz');
+      if (tzLine) {
+        tzLine.innerText = preset.name + ' - timezone ' + preset.tz + ' (set by the preset).';
+      }
+
+      /* 2. Persist on the device: location, method, high-lat rule, madhab,
+            Hijri options and the timezone, then recalculate. Jamat and adhan
+            margins are deliberately left alone. */
       const headers = authHeaders();
       if (timetableMeta.source === 2 && timetableMeta.partial) {
         if (!confirm("You have an uploaded timetable with missing fields.\n\n" +
-                     "Applying a preset will affect the times shown for those fields.\n\n" +
-                     "Continue?")) {
+                     "Applying a city preset changes the calculation basis for " +
+                     "those fields.\n\nContinue?")) {
           return;
         }
         headers['X-Confirm-Timetable-Override'] = 'true';
       }
+
       fetch('/api/config/preset', {
         method: 'POST',
         headers: headers,
-        body: JSON.stringify({preset: preset})
+        body: JSON.stringify({preset: idx})
       }).then(r => {
-        if (handleResponse(r, 'Preset applied — reloading form…')) {
-          setTimeout(() => {
-            loadConfig();
-            if (typeof loadPrayers === 'function') loadPrayers();
-          }, 500);
+        if (handleResponse(r, preset.name + ' applied - adjust jamat and adhan, then Save')) {
+          setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
         }
       });
     }
