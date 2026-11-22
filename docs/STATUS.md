@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-15 at commit `HEAD` (PRs: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-22 at commit `HEAD` (recent PRs: #157 bounded retry slow path; #158 slow-path threshold 24; #159 unified WPA2-PSK provisioning AP plus reason 205 in the auth-class set; #160 RTC write-verify compares UTC epoch seconds; #161 test harness restores the board's pre-run location/method. Earlier: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -265,9 +265,9 @@ Pre-push check: `.\test_harness\pre_push_check.ps1` (~3 min, no hardware wait).
   actually served, not from `start_utc`. Every exit path that got as far as
   the `/debug/ntp` write then restores slot 0 to `time.google.com` via
   `restore_ntp_host()` (single shot, 12 s timeout), so a test session no
-  longer leaves the board syncing from the PC. The same request also puts the
-  board's own latitude/longitude/method back: before seeding, the runner
-  snapshots them through the unauthenticated `GET /api/config`
+  longer leaves the board syncing from the PC. Since PR #161 the same request
+  also puts the board's own latitude/longitude/method back: before seeding, the
+  runner snapshots them through the unauthenticated `GET /api/config`
   (`DeviceController.get_config()`) and passes the values to
   `restore_ntp_host(config=...)`, so the seed no longer permanently overwrites
   a real mosque configuration. A board whose snapshot reports `location_valid`
@@ -404,7 +404,8 @@ Code: `components/svc_network` (public header `svc_network.h`, source
 from the NVS namespace `wifi`, connects, and retries with a 1 s -> 30 s
 exponential backoff (#131 R1 -- a disconnect never drops straight to AP mode).
 Since PR #157 the retry is bounded for a *configured* device: 24 consecutive
-failures of any reason raise the provisioning AP instead of retrying forever. A
+failures of any reason (the value set by PR #158) raise the provisioning AP
+instead of retrying forever. A
 missing or empty SSID takes the same provisioning AP from boot. Publishes `EVENT_NETWORK_STARTING`,
 `EVENT_NETWORK_CONNECTED` (on `IP_EVENT_STA_GOT_IP`, not on
 `WIFI_EVENT_STA_CONNECTED`), `EVENT_NETWORK_DISCONNECTED` and
@@ -424,8 +425,8 @@ escape hatch: `docs/boot.md`.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class disconnects (202/15/204/2/205) that raise the recovery AP |
-| `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive disconnects of **any** reason that raise the recovery AP (slow path, PR #157) |
+| `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class disconnects (202/15/204/2/205; 205 added in PR #159) that raise the recovery AP |
+| `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive disconnects of **any** reason that raise the recovery AP (slow path from PR #157; the value is 24 since PR #158) |
 | `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
 | `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
 | `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, auth failures are not counted |
@@ -641,7 +642,7 @@ Verify each against hardware or datasheet before fixing.
 
 - **Scheduler marker could regress on dropped rearm (CR #6, 2026-11-15):** the "too late" branch in `scheduler_evaluate()` set `last_fired_epoch[p] = epoch` unconditionally. If a config change moved a prayer earlier and then back within 2 minutes, and BOTH `EVENT_PRAYER_TIMES_UPDATED` events were dropped (bus full), the marker could regress and the prayer could double-fire on the next legitimate fire. Fixed: the marker only ever advances. Regression test in `test_scheduler::test_marker_never_regresses`.
 
-- **Failed RTC write could revert NTP time (CR #5, 2026-11-15):** if `hil_rtc_set_time()` reported success but the write did not land (I2C glitch, partial BCD write, misbehaving RTC), `tick_snapshot()` would then prefer the stale RTC over the fresh NTP snapshot within one second, silently reverting the clock. The hourly RTC correction would then push the system clock back too. Fixed: the RTC write is now verified by reading it back; a `s_rtc_write_failed` file-scope flag is set on any write that does not read back correctly, and both `tick_snapshot()` and `run_hourly_rtc_correction()` skip RTC while it is set. Cleared only on a verified successful write. `rtc_roughly_equal()` tolerates 1 s drift to allow for the second boundary rolling during write+readback. The comparison is now UTC-epoch-based, so a rollover of the minute, hour, day or year during write+readback also compares equal (the earlier field-by-field check did not), and an invalid date fails closed because `utc_to_epoch()` returns false. Note: the flag's declaration comment says "Guarded by `s_state_lock`"; writers (in `do_ntp_sync`) and the `tick_snapshot` reader are under the lock, but the `run_hourly_rtc_correction` read is not. On Xtensa single-byte access is atomic, so the race is benign (worst case: one hour-key check reads the pre-sync value). Flagged for a future comment correction or wrap-in-lock fix.
+- **Failed RTC write could revert NTP time (CR #5, 2026-11-15):** if `hil_rtc_set_time()` reported success but the write did not land (I2C glitch, partial BCD write, misbehaving RTC), `tick_snapshot()` would then prefer the stale RTC over the fresh NTP snapshot within one second, silently reverting the clock. The hourly RTC correction would then push the system clock back too. Fixed: the RTC write is now verified by reading it back; a `s_rtc_write_failed` file-scope flag is set on any write that does not read back correctly, and both `tick_snapshot()` and `run_hourly_rtc_correction()` skip RTC while it is set. Cleared only on a verified successful write. `rtc_roughly_equal()` tolerates 1 s drift to allow for the second boundary rolling during write+readback. Since PR #160 (2026-11-22) the comparison converts both readings to UTC epoch seconds with `utc_to_epoch()` instead of comparing fields, so a write that started at 10:59:59 and read back as 11:00:00 compares equal, as does a rollover of the minute, hour, day or year during write+readback (the earlier field-by-field check did not), and an invalid date fails closed. Note: the flag's declaration comment says "Guarded by `s_state_lock`"; writers (in `do_ntp_sync`) and the `tick_snapshot` reader are under the lock, but the `run_hourly_rtc_correction` read is not. On Xtensa single-byte access is atomic, so the race is benign (worst case: one hour-key check reads the pre-sync value). Flagged for a future comment correction or wrap-in-lock fix.
 
 - **Silent missed adhan on a full event bus (CR #1, 2026-11-17):**
   `svc_scheduler.c` recorded the prayer as fired (inside
