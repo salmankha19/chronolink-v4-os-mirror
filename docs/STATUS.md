@@ -415,9 +415,9 @@ Public API: `svc_network_start()`, `svc_network_stop()`,
 `svc_network_is_connected()`, `svc_network_is_ap_mode()`,
 `svc_network_get_ip_str()`, `svc_network_set_credentials()`, plus the unified
 provisioning-AP accessors listed below (`svc_network_get_ap_ssid()`,
-`svc_network_get_ap_passphrase()`, `svc_network_touch_recovery_idle_timeout()`).
+`svc_network_get_ap_passphrase()`, `svc_network_touch_provisioning_idle_timeout()`).
 
-### WiFi provisioning mode (CR #2 recovery path + CR #4 unified AP; hardware verification pending)
+### WiFi provisioning mode (CR #2 recovery path + CR #4 unified AP + Setup-AP timeout parity; hardware verification pending)
 
 Full design: `docs/sessions/cr2-wifi-lockout-design.md`. Architecture summary:
 `docs/Architecture.md` section 4.3. Boot-time behaviour and the power-cycle
@@ -427,9 +427,9 @@ escape hatch: `docs/boot.md`.
 |---|---|---|
 | `SVC_NETWORK_AUTH_FAIL_THRESHOLD` | 5 | consecutive auth-class disconnects (202/15/204/2/205; 205 added in PR #159) that raise the recovery AP |
 | `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive disconnects of **any** reason that raise the recovery AP (slow path from PR #157; the value is 24 since PR #158) |
-| `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
-| `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
-| `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, auth failures are not counted |
+| `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request (Setup **and** Recovery AP) |
+| `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity (Setup **and** Recovery AP) |
+| `SVC_NETWORK_COOLDOWN_US` | 10 min | after an AP exit, failures are not counted; for a Setup AP exit it is also the re-entry delay |
 
 - Slow path (PR #157): `s_consecutive_fail` counts disconnects of **any** reason
   under the same `recovery_guards_active()` guard, so a configured clock whose AP
@@ -448,6 +448,28 @@ escape hatch: `docs/boot.md`.
   arms the bring-up retry ladder before `svc_network_start()` returns
   `ESP_FAIL`. The failure path leaves `s_started` set so the retry worker's
   `stop()` can `esp_wifi_deinit()` before `start()` runs again.
+- Timeout parity (Setup + Recovery AP): both entry paths arm the same
+  `SVC_NETWORK_RECOVERY_*` one-shot through `arm_ap_timeout()` -- 15 min with no
+  exempted HTTP request (the renamed
+  `svc_network_touch_provisioning_idle_timeout()` restarts the window for
+  either AP) or 30 min from entry, whichever comes first.
+  `recovery_timeout_cb()` then spawns the shared exit worker, which resolves the
+  two modes differently. A Recovery exit calls `svc_network_start()` (STA with
+  the possibly corrected credentials) and arms the 10 min cooldown. A Setup exit
+  does **not** call `start()`: with no credentials the empty-SSID branch would
+  raise the AP again on the spot, i.e. a 1 s entry/exit loop. It snapshots
+  `s_setup_mode` before `stop()`, sets `s_setup_cooldown_active` (which freezes
+  both failure counters) and arms `s_setup_reentry_timer` for
+  `SVC_NETWORK_COOLDOWN_US`; that timer's worker clears the flag and calls
+  `svc_network_stop()` + `svc_network_start()`, which re-enters the Setup AP.
+  So an unconfigured device shows the setup screen for at most 15 min idle /
+  30 min absolute, goes link-down for a deterministic 10 min, then returns with
+  a rotated passphrase. It is a timer rather than "let STA fail until the
+  24-strike slow path" because an empty SSID cannot associate: the only STA
+  outcomes are a config rejection or a `NO_AP_FOUND` storm, and neither is a
+  predictable countdown. `svc_network_start()` checks the same flag in its
+  empty-SSID branch, so a stray start during the cooldown defers to the timer
+  instead of bouncing the AP.
 - Provisioning AP (CR #4): one identity for both entry paths, so nothing over
   the air distinguishes an unconfigured boot from a lockout -- SSID
   `ChronoLink-<MAC4>` (last two STA MAC bytes, 15 chars), WPA2-PSK on channel 1,
@@ -490,9 +512,10 @@ escape hatch: `docs/boot.md`.
   `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`
   (`ESP_ERR_INVALID_ARG` for a too-small buffer, `ESP_ERR_INVALID_STATE` when
   no AP is up or the identity is not ready -- both fail closed rather than
-  truncating), and `svc_network_touch_recovery_idle_timeout()` (called by
+  truncating), and `svc_network_touch_provisioning_idle_timeout()` (called by
   `svc_http` on each exempted request; writes a timestamp only, and only while
-  the recovery AP -- the one with an idle timer -- is up).
+  a provisioning AP -- Setup or Recovery, both of which now carry an idle
+  timer -- is up).
 - The security invariants are recorded in `docs/Architecture.md` section 4.3.
   CR #4 inverted the old invariant 1: the exemption now keys on
   `is_ap_mode()`, which is only sound because **every** provisioning AP is
@@ -798,7 +821,7 @@ readers.
 The design intent is that all user configuration goes through a web UI.
 
 - **`svc_http` (PR 4.1):** HTTP server on port 80 with JSON REST APIs.
-- **AP Setup Mode (PR 4.2; #131 removed fallback; PR #157 empty-SSID):** If no WiFi credentials are saved **or the saved SSID is empty**, `svc_network` drops into Access Point mode (`ChronoLink-<MAC4>`, WPA2-PSK, IP `192.168.4.1`). An empty SSID can never associate, so it is treated as unconfigured rather than fed to the STA ladder; an empty password with a non-empty SSID stays a valid open network. `ui_producer` displays these setup instructions on the screen instead of the clock. **(CR #2, implemented — hardware verification checklist in the design doc is still open; see `docs/sessions/cr2-wifi-lockout-design.md`; CR #4 unified both APs into one)** The same provisioning AP is also entered after `SVC_NETWORK_AUTH_FAIL_THRESHOLD` (5) consecutive auth-class disconnects (reason 2/15/202/204/205) with no guard active, **or after `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) consecutive disconnects of any reason** (PR #157 slow path, so a router that is off or out of range also ends in a reachable AP). Implemented in `svc_network`: the state machine, the three workers, the four timers (entry trigger, idle/absolute timeout, bring-up retry, cooldown), the bring-up retry ladder, and the accessors `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`, `svc_network_touch_recovery_idle_timeout()`. **httpd exemption implemented (step 2, widened by CR #4):** `svc_http.c` has a static `provisioning_exempt()`, called first from `require_auth()`. While the provisioning AP is up it lets `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` through without the `X-Chronolink-Auth` token; on those paths a non-GET request must also carry a `Content-Type` of `application/json` (strict, case-sensitive; a `<form>` cannot produce it, so form-based CSRF stays blocked), and an exempt request then touches the recovery idle timer. GET is exempt from the content-type requirement because a GET must be side-effect free and no browser attaches one. **Reads are open, writes require auth:** no GET handler calls `require_auth()` at all, so `/`, `/api/config`, `/api/timetable`, `/api/prayers` and `/debug/ntp` answer without the token in every mode, not only in AP mode — the method guard in `provisioning_exempt()` is defensive only. Every write outside that list — `/api/ota`, `/api/factory-reset`, `/api/config/preset`, `/api/timetable/regenerate` — still requires the token (the two sub-paths are not covered: `uri_path_equals()` matches a full path only), and no AP mode means no exemption at all. **Timing:** the recovery AP exits after 15 min idle / 30 min absolute, then observes a 10 min cooldown during which auth failures are not counted. **Provisioning screen (step 3, unified by CR #4):** `ui_producer` has a single `svc_network_is_ap_mode()` branch — there is no second predicate any more, because both entry paths share one identity. It draws a 9-command screen (clear, then `WiFi Provisioning Mode`, `Connect to:` + SSID, `Password:` + passphrase, `Open Browser:` + `192.168.4.1`, `Auto-exits when idle`). The identity is re-read every 250 ms through `svc_network_get_ap_ssid()` / `svc_network_get_ap_passphrase()` and folded into the draw key `AP_<ssid>_<passphrase>`, so a rotation on re-entry forces a redraw; a failed getter — AP mode ended between the predicate and the read — skips the frame rather than drawing stale or partial strings, and the key is only stored after a successful submit. Leaving AP mode re-runs the full clear-and-redraw path, so none of the AP lines survive under the clock. The passphrase is still never logged and never exposed over HTTP (the single exception is the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag described above, which is absent from shipped images), and no API token has to be shown on the panel any more: the exemption covers every commissioning endpoint, so nothing now remains between a lockout and a working setup session.
+- **AP Setup Mode (PR 4.2; #131 removed fallback; PR #157 empty-SSID):** If no WiFi credentials are saved **or the saved SSID is empty**, `svc_network` drops into Access Point mode (`ChronoLink-<MAC4>`, WPA2-PSK, IP `192.168.4.1`). An empty SSID can never associate, so it is treated as unconfigured rather than fed to the STA ladder; an empty password with a non-empty SSID stays a valid open network. `ui_producer` displays these setup instructions on the screen instead of the clock. **(CR #2, implemented — hardware verification checklist in the design doc is still open; see `docs/sessions/cr2-wifi-lockout-design.md`; CR #4 unified both APs into one)** The same provisioning AP is also entered after `SVC_NETWORK_AUTH_FAIL_THRESHOLD` (5) consecutive auth-class disconnects (reason 2/15/202/204/205) with no guard active, **or after `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` (24) consecutive disconnects of any reason** (PR #157 slow path, so a router that is off or out of range also ends in a reachable AP). Implemented in `svc_network`: the state machine, the four workers (entry, exit, bring-up retry, setup re-entry), the five timers (entry trigger, idle/absolute timeout, bring-up retry, cooldown, setup re-entry), the bring-up retry ladder, and the accessors `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`, `svc_network_get_ap_passphrase()`, `svc_network_touch_provisioning_idle_timeout()`. **httpd exemption implemented (step 2, widened by CR #4):** `svc_http.c` has a static `provisioning_exempt()`, called first from `require_auth()`. While the provisioning AP is up it lets `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` through without the `X-Chronolink-Auth` token; on those paths a non-GET request must also carry a `Content-Type` of `application/json` (strict, case-sensitive; a `<form>` cannot produce it, so form-based CSRF stays blocked), and an exempt request then touches the provisioning idle timer (either AP). GET is exempt from the content-type requirement because a GET must be side-effect free and no browser attaches one. **Reads are open, writes require auth:** no GET handler calls `require_auth()` at all, so `/`, `/api/config`, `/api/timetable`, `/api/prayers` and `/debug/ntp` answer without the token in every mode, not only in AP mode — the method guard in `provisioning_exempt()` is defensive only. Every write outside that list — `/api/ota`, `/api/factory-reset`, `/api/config/preset`, `/api/timetable/regenerate` — still requires the token (the two sub-paths are not covered: `uri_path_equals()` matches a full path only), and no AP mode means no exemption at all. **Timing (both APs, Setup-AP timeout parity):** every provisioning AP exits after 15 min idle / 30 min absolute, whichever comes first, and an exempted HTTP request restarts the idle window. A recovery exit returns to STA with the (possibly corrected) credentials and then observes a 10 min cooldown during which failures are not counted; a setup exit instead holds the link down for the same 10 min with both failure counters frozen, then re-enters the setup AP deterministically from `s_setup_reentry_timer()`, so an unconfigured clock cycles screen -> 10 min down -> screen instead of staying in setup mode until a power cycle. **Provisioning screen (step 3, unified by CR #4):** `ui_producer` has a single `svc_network_is_ap_mode()` branch — there is no second predicate any more, because both entry paths share one identity. It draws a 9-command screen (clear, then `WiFi Provisioning Mode`, `Connect to:` + SSID, `Password:` + passphrase, `Open Browser:` + `192.168.4.1`, `Auto-exits when idle`). The identity is re-read every 250 ms through `svc_network_get_ap_ssid()` / `svc_network_get_ap_passphrase()` and folded into the draw key `AP_<ssid>_<passphrase>`, so a rotation on re-entry forces a redraw; a failed getter — AP mode ended between the predicate and the read — skips the frame rather than drawing stale or partial strings, and the key is only stored after a successful submit. Leaving AP mode re-runs the full clear-and-redraw path, so none of the AP lines survive under the clock. The passphrase is still never logged and never exposed over HTTP (the single exception is the bench-only `CHRONOLINK_DEBUG_PRINT_TOKEN` build flag described above, which is absent from shipped images), and no API token has to be shown on the panel any more: the exemption covers every commissioning endpoint, so nothing now remains between a lockout and a working setup session.
 - **Web UI (PR 4.3, extended PR 5.1b):** Embedded HTML portal (`components/svc_http/www/index.html`) served at `GET /`. Provides forms for WiFi, Location, Calculation Method, live Prayer Times (`GET /api/prayers`), and a Factory Reset button. Includes reboot (`POST /api/reboot`) and factory-reset (`POST /api/factory-reset`) endpoints. **PR 5.1b additions:** editable jamat configuration — adhan safety margins per prayer, seasonal jamat table (5 prayers × winter/summer anchor + offset + rounding), season transition dates, and a preset selector that calls `POST /api/config/preset`. Full prayer-times configuration is now settable from the browser without
 recompiling. **Hijri calendar:** the config card carries a Hijri method
 dropdown (`hijri_calc_method`: Umm al-Qura KSA / Kuwaiti tabular) and a

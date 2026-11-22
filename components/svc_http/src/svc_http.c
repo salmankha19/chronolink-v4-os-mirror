@@ -273,8 +273,9 @@ static bool provisioning_exempt(httpd_req_t *req)
         if (!(boundary == '\0' || boundary == ';' || boundary == ' ')) return false;
     }
 
-    /* D7: touch the idle timer. Single-writer per E2. */
-    svc_network_touch_recovery_idle_timeout();
+    /* D7: touch the idle timer (both provisioning APs; setup-AP timeout
+       parity widened this from the recovery AP only). Single-writer per E2. */
+    svc_network_touch_provisioning_idle_timeout();
     return true;
 }
 
