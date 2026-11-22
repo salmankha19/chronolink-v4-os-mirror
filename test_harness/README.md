@@ -69,9 +69,10 @@ Builds test firmware, runs `--quick`, exits non-zero on any failure.
    The clock origin is the epoch the mock actually served (printed as
    `<peer>@<epoch>`), so a stray early request cannot skew deadlines.
 5. PASS = all patterns matched within deadlines, no unexpected fires.
-6. Runner restores NVS slot 0 to the firmware default before closing the
+6. Runner restores NVS slot 0 -- and, when the scenario seeded one, the
+   board's own pre-run latitude/longitude/method -- before closing the
    port, so neither the next test boot nor a production boot syncs from
-   this PC (see **NVS cleanup**).
+   this PC or keeps the scenario's location (see **NVS cleanup**).
 
 ## NVS cleanup
 
@@ -87,8 +88,22 @@ The runner undoes the write itself. `ScenarioRunner.run()` sets a local
 the flag first matters: the injection call can raise on a read timeout
 after the host is already in NVS, and that path still has to be undone.
 
-- `restore_ntp_host()` GETs `/debug/ntp?host=time.google.com` with
-  `timeout_s=12.0` and no retries. The endpoint blocks up to 10 s on the
+The same request also puts the location back. Just before the seed call,
+the runner reads the board's own `latitude`/`longitude`/`method` with
+`controller.get_config()`, a plain GET on `/api/config` that calls no
+`require_auth()` -- no token is involved, and the harness has none -- and
+keeps them as one `(latitude, longitude, method)` tuple. Host and config
+then travel in the same `/debug/ntp` GET: the hook seeds config *before*
+it writes the host and runs the sync, so both halves are in NVS whenever
+the handler answers at all, `500 sync_failed` included.
+
+- `restore_ntp_host()` GETs `/debug/ntp` exactly once, with
+  `timeout_s=12.0` and no retries. The URL is `?host=time.google.com`
+  alone, or -- when a config snapshot was taken --
+  `?host=time.google.com&lat=<f>&lon=<f>&method=<n>`. Lat/lon go out at
+  6 decimal places, the microdegree precision `svc_config` persists as
+  `int32`, which keeps the query far inside the firmware's 160-byte
+  `DEBUG_NTP_QUERY_MAX`. The endpoint blocks up to 10 s on the
   follow-up sync (`svc_time_sync_ntp_once`), and the previous sync is
   normally older than the 60 s resync floor by the time a scenario ends,
   so that sync does run — a 5 s timeout would warn about a restore that
@@ -102,19 +117,38 @@ after the host is already in NVS, and that path still has to be undone.
   `500 set_ntp_server_failed`) and never raises, so a failed cleanup
   cannot replace the run's real `status`/`reasons`/`error`.
 
-Either outcome leaves the scenario result unchanged; only the log line
-differs — `restored NVS slot 0 to time.google.com`, or
-`WARN: could not restore NVS slot 0`. Pre-push runs and single-scenario
-runs both go through `ScenarioRunner.run()`, so both restore; no manual
-step is needed after a test session.
+Three cases leave the snapshot `None`, and the restore is then host-only,
+exactly as it was before config restore existed:
 
-If you do see `WARN: could not restore NVS slot 0`, the board answered
-but the write was not confirmed. Restore it by hand with
-`curl http://<esp32>/debug/ntp?host=time.google.com`, or wipe NVS with
+- the scenario declares no `latitude`/`longitude`/`method`, so nothing was
+  seeded;
+- the snapshot request failed -- logged as `WARN: could not read prior
+  config; location/method will NOT be restored`;
+- the board answered `location_valid: false` -- logged as `board had no
+  location before this run; seeded location/method will be left in
+  place`. Such a board reports `0.0` / `0.0` / method `0`, and sending
+  those back would call `svc_config_set_location()` and flip
+  `location_valid` to true, inventing a `0,0` location that never
+  existed. Keeping the seeded values is the smaller change.
+
+Either outcome leaves the scenario result unchanged; only the log line
+differs — `restored NVS slot 0 to time.google.com`,
+`restored NVS slot 0 and location/method to the board's pre-run values`,
+`board had no location before this run; seeded location/method will be
+left in place`, or a `WARN:`/`non-fatal` variant of a restore line.
+Pre-push runs and single-scenario runs both go through
+`ScenarioRunner.run()`, so both restore; no manual step is needed after
+a test session.
+
+If you do see `WARN: could not restore NVS slot 0` (or the `... and
+location/method` variant), the board answered but the write was not
+confirmed. Restore the host by hand with
+`curl "http://<esp32>/debug/ntp?host=time.google.com"`, re-enter the
+location in the web UI at `http://<esp32>/`, or wipe NVS with
 `pio run -e single_mcu -t erase` when the board is unreachable.
 
 A run that never reaches its `finally:` block — Ctrl-C, adapter
-unplugged, board losing Wi-Fi mid-run — needs the same manual command.
+unplugged, board losing Wi-Fi mid-run — needs the same manual steps.
 
 ## Config seed for prayer-time scenarios
 
@@ -129,6 +163,11 @@ The firmware seeds these into `svc_config` BEFORE triggering the NTP
 sync, so both boots of a scenario use the scenario's own location.
 Scenarios that omit the three attributes keep the pre-Session-B
 behaviour: host-only injection, no config change.
+
+When a scenario does seed config, the runner first snapshots the board's
+own values from `/api/config` and passes them to the teardown request, so
+a run does not leave the scenario's location on the board either (see
+**NVS cleanup**).
 
 **All three or none.** Partial (`lat` without `lon`) returns
 `400 partial_config`. Invalid values return `400 bad_lat` / `bad_lon` /
