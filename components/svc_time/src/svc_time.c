@@ -242,15 +242,15 @@ static bool utc_to_local(rtc_time_t *out, const rtc_time_t *utc)
 
 /* Seconds-tolerant comparison for RTC write verification. A BCD write
    completes in a few ms; a same-second readback may straddle a rollover
-   from :59 to :00, so allow 1 second of drift. Anything else is a real
-   mismatch. */
+   (:59 -> :00, and for :59:59 also the minute, hour or even day), so the
+   two values are compared as UTC epoch seconds, not field by field, and
+   allow 1 second of drift. Anything else is a real mismatch. */
 static bool rtc_roughly_equal(const rtc_time_t *a, const rtc_time_t *b)
 {
+    time_t ea, eb;
     if (!a || !b) return false;
-    if (a->year != b->year || a->month != b->month || a->day != b->day ||
-        a->hours != b->hours || a->minutes != b->minutes) return false;
-    int diff = (int)a->seconds - (int)b->seconds;
-    if (diff < 0) diff = -diff;
+    if (!utc_to_epoch(a, &ea) || !utc_to_epoch(b, &eb)) return false;
+    time_t diff = (ea > eb) ? (ea - eb) : (eb - ea);
     return diff <= 1;
 }
 
