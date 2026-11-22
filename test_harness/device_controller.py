@@ -32,7 +32,7 @@ import json
 import logging
 import socket
 import time
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Tuple
 
 import requests
 import serial
@@ -239,8 +239,12 @@ class DeviceController:
             )
             return
 
-    def restore_ntp_host(self, default_host: str = "time.google.com",
-                         timeout_s: float = 12.0) -> bool:
+    def restore_ntp_host(
+        self,
+        default_host: str = "time.google.com",
+        timeout_s: float = 12.0,
+        config: Optional[Tuple[float, float, int]] = None,
+    ) -> bool:
         """Single-shot NVS slot 0 restore. No retry, no backoff.
 
         Returns True on 200 OK OR 500 sync_failed (both imply NVS was
@@ -262,11 +266,29 @@ class DeviceController:
         alone keeps syncing from this PC on every later boot -- including
         boots of production firmware, which has no /debug/ntp to undo it.
         This is the undo.
+
+        config, when supplied, is restored in the SAME request as the host:
+        the test hook seeds svc_config with it before it writes the host and
+        runs the sync, so both the host and the location/method are in NVS by
+        the time the handler answers -- a 500 sync_failed therefore still
+        leaves both restored. config is one (lat, lon, method) tuple rather
+        than three independent optionals because /debug/ntp answers a partial
+        config with 400 and writes nothing, which would make "lat but no lon"
+        a state this class could enter and only fail at the far end. When
+        config is None the request is host-only, exactly as it was before
+        config restore existed.
         """
         if self.esp_ip is None:
             return False
 
-        url = f"http://{self.esp_ip}/debug/ntp?host={default_host}"
+        query = f"host={default_host}"
+        if config is not None:
+            lat, lon, method = config
+            # 6 dp is exactly the microdegree precision svc_config persists
+            # as int32, so this round-trips losslessly and keeps the query
+            # well inside the firmware's 160-byte DEBUG_NTP_QUERY_MAX.
+            query += f"&lat={lat:.6f}&lon={lon:.6f}&method={method}"
+        url = f"http://{self.esp_ip}/debug/ntp?{query}"
         try:
             response = requests.get(url, timeout=timeout_s)
         except Exception as exc:      # noqa: BLE001 -- never raise from cleanup
@@ -279,18 +301,23 @@ class DeviceController:
 
         if response.status_code == 200:
             LOG.info(
-                "NTP host restored to %s (device said: %s)",
+                "NTP host restored to %s%s (device said: %s)",
                 default_host,
+                " (config restored)" if config is not None else "",
                 response.text[:100],
             )
             return True
 
         if response.status_code == 500 and _reports_busy_sync(response.text):
-            # The host is already in NVS; only the follow-up sync was
-            # skipped because svc_time's automatic one still held the lock.
+            # The host -- and, when config was given, the location/method --
+            # is already in NVS; only the follow-up sync was skipped because
+            # svc_time's automatic one still held the lock.
             LOG.info(
-                "NTP host restored to %s (follow-up sync skipped)",
+                "NTP host restored to %s%s",
                 default_host,
+                " (config restored, follow-up sync skipped)"
+                if config is not None
+                else " (follow-up sync skipped)",
             )
             return True
 
@@ -300,6 +327,38 @@ class DeviceController:
             response.text[:200],
         )
         return False
+
+    def get_config(self, timeout_s: float = 5.0) -> Optional[dict]:
+        """Snapshot latitude/longitude/method via the open GET /api/config.
+
+        Read-only and best-effort: returns None on any failure and never
+        raises, because the caller uses it to decide what to put back during
+        teardown. GET /api/config calls no require_auth(), so no token is
+        needed -- the harness has none.
+
+        Returns a dict with keys latitude, longitude, method, location_valid.
+        A board that has never had a location set reports 0.0/0.0/method 0
+        with location_valid False; the flag is the only way to tell that
+        apart from a genuine 0,0 fix, so it is carried through.
+        """
+        if self.esp_ip is None:
+            return None
+        url = f"http://{self.esp_ip}/api/config"
+        try:
+            response = requests.get(url, timeout=timeout_s)
+            if response.status_code != 200:
+                LOG.warning("get_config: HTTP %d", response.status_code)
+                return None
+            body = response.json()
+            return {
+                "latitude": float(body["latitude"]),
+                "longitude": float(body["longitude"]),
+                "method": int(body["method"]),
+                "location_valid": bool(body["location_valid"]),
+            }
+        except Exception as exc:      # noqa: BLE001 -- best-effort snapshot
+            LOG.warning("get_config failed: %s", exc)
+            return None
 
     # -- serial console ----------------------------------------------------
 

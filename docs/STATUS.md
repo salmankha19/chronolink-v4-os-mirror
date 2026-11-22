@@ -265,7 +265,14 @@ Pre-push check: `.\test_harness\pre_push_check.ps1` (~3 min, no hardware wait).
   actually served, not from `start_utc`. Every exit path that got as far as
   the `/debug/ntp` write then restores slot 0 to `time.google.com` via
   `restore_ntp_host()` (single shot, 12 s timeout), so a test session no
-  longer leaves the board syncing from the PC.
+  longer leaves the board syncing from the PC. The same request also puts the
+  board's own latitude/longitude/method back: before seeding, the runner
+  snapshots them through the unauthenticated `GET /api/config`
+  (`DeviceController.get_config()`) and passes the values to
+  `restore_ntp_host(config=...)`, so the seed no longer permanently overwrites
+  a real mosque configuration. A board whose snapshot reports `location_valid`
+  false is skipped with a logged notice instead of being handed a `0,0`
+  location -- the seeded values stay in place, which is the smaller change.
 - **Reference scenario (`scenarios/01_single_prayer_fire.py`):** boots at
   11:49:30, asserts exactly one `Dhuhr adhan due` at 11:50:00 and zero Fajr
   fires. The `sync` assertion is anchored to the mock's known UTC

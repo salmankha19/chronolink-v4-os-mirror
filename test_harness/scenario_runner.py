@@ -254,6 +254,10 @@ class ScenarioRunner:
         # True once set_ntp_host() has written this PC's address into NVS
         # slot 0, so the finally block below knows it has to put it back.
         ntp_host_set = False
+        # Pre-seed lat/lon/method, captured before set_ntp_host() overwrites
+        # them. None means "nothing to put back" -- either the scenario does
+        # not seed config, or the board had no location, or the read failed.
+        config_snapshot = None
 
         self._log(
             "scenario %s: start %s UTC, %gx, timeout %.0fs"
@@ -295,6 +299,42 @@ class ScenarioRunner:
                 controller.esp_ip = board_ip
                 self._wait_for_auto_sync(controller, raw_log)
 
+                # Snapshot the board's own lat/lon/method BEFORE the seed
+                # below overwrites them. The restore has to put back what the
+                # board had, not the firmware defaults, and this is the only
+                # source for it: GET /api/config is unauthenticated, so no
+                # token is involved (the harness has none).
+                #
+                # location_valid False means the board never had a location;
+                # the JSON then reports 0.0/0.0/method 0, which is
+                # indistinguishable from a genuine 0,0 fix. Pushing those
+                # numbers back through /debug/ntp would call
+                # svc_config_set_location() and flip location_valid to True --
+                # inventing a location where none existed. Leaving the seeded
+                # values in place is the lesser change, so that case is
+                # logged and skipped.
+                #
+                # The attributes are read once, here, and reused for the seed
+                # so the snapshot decision and the seed cannot drift apart.
+                seed_lat = getattr(scenario, "latitude", None)
+                seed_lon = getattr(scenario, "longitude", None)
+                seed_method = getattr(scenario, "method", None)
+                if (
+                    seed_lat is not None
+                    and seed_lon is not None
+                    and seed_method is not None
+                ):
+                    prior = controller.get_config()
+                    if prior is None:
+                        self._log("WARN: could not read prior config; "
+                                  "location/method will NOT be restored")
+                    elif not prior["location_valid"]:
+                        self._log("board had no location before this run; "
+                                  "seeded location/method will be left in place")
+                    else:
+                        config_snapshot = (prior["latitude"],
+                                           prior["longitude"],
+                                           prior["method"])
                 # Set the gate BEFORE the call: set_ntp_host() can raise after
                 # the NVS write already landed (read timeout while the handler
                 # blocks on the follow-up sync), and that path must still be
@@ -310,9 +350,9 @@ class ScenarioRunner:
                 # fails loudly.
                 controller.set_ntp_host(
                     ntp_host,
-                    lat=getattr(scenario, "latitude", None),
-                    lon=getattr(scenario, "longitude", None),
-                    method=getattr(scenario, "method", None),
+                    lat=seed_lat,
+                    lon=seed_lon,
+                    method=seed_method,
                 )
                 self._log("device NTP host set to %s" % ntp_host)
 
@@ -384,12 +424,19 @@ class ScenarioRunner:
                 # already frozen, and the try/except is belt-and-braces on
                 # top of restore_ntp_host()'s own never-raise contract.
                 if ntp_host_set:
+                    # Name what was actually put back. The config half only
+                    # exists when a pre-run snapshot was taken and accepted.
+                    if config_snapshot is not None:
+                        ok_msg = ("restored NVS slot 0 and location/method "
+                                  "to the board's pre-run values")
+                        fail_msg = ("WARN: could not restore NVS slot 0 "
+                                    "and location/method")
+                    else:
+                        ok_msg = "restored NVS slot 0 to time.google.com"
+                        fail_msg = "WARN: could not restore NVS slot 0"
                     try:
-                        ok = controller.restore_ntp_host()
-                        self._log(
-                            "restored NVS slot 0 to time.google.com" if ok
-                            else "WARN: could not restore NVS slot 0"
-                        )
+                        ok = controller.restore_ntp_host(config=config_snapshot)
+                        self._log(ok_msg if ok else fail_msg)
                     except Exception as exc:      # noqa: BLE001
                         self._log("restore exception (non-fatal): %s" % exc)
                 try:
