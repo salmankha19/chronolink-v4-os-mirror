@@ -135,18 +135,32 @@ uses for the API token) makes `start_ap_mode()` also log
 for either entry path. The line is compiled out entirely when the flag is
 undefined.
 
-**Exit conditions (lockout path only -- see the caveat below).** One timer
-enforces two bounds: 15 min with no HTTP activity (any exempted request restarts
-the idle window) or 30 min from entry regardless of activity, whichever comes
-first. The exit worker then runs
-`svc_network_stop()` followed by `svc_network_start()`, i.e. back to STA with
-the (now corrected) credentials, and arms the cooldown. Nothing is rebooted and
-timekeeping never stops -- `svc_time` keeps ticking and the display returns to
-the clock face. The timer is armed by the lockout entry worker only, so a device
-that booted unconfigured stays on the provisioning AP until credentials are
-written and it reboots; giving the setup AP the same bounds needs a re-arm rule
-for an unconfigured device (whose exit would otherwise re-enter the AP at once),
-which is a separate change.
+**Exit conditions (both APs).** One timer enforces two bounds: 15 min with no
+HTTP activity (any exempted request restarts the idle window, on either AP) or
+30 min from entry regardless of activity, whichever comes first. The bounds are
+armed by `arm_ap_timeout()`, which the lockout entry worker and
+`start_ap_mode()` both call, so a first boot and a lockout are timed the same
+way. How the exit resolves depends on which AP was up.
+
+On the **lockout path** the exit worker runs `svc_network_stop()` followed by
+`svc_network_start()`, i.e. back to STA with the (now corrected) credentials,
+and arms the cooldown. Nothing is rebooted and timekeeping never stops --
+`svc_time` keeps ticking and the display returns to the clock face.
+
+On the **setup path** there are no credentials to return to, and the
+empty-SSID branch of `svc_network_start()` would raise the setup AP again on
+the spot -- an exit/entry loop. The exit worker therefore does **not** call
+`start()`. It holds the link down for a deterministic 10 min
+(`SVC_NETWORK_COOLDOWN_US`, armed as `s_setup_reentry_timer`, with both failure
+counters frozen while it runs); when that one-shot fires, a worker calls
+`svc_network_stop()` + `svc_network_start()` and the setup AP comes back with a
+rotated passphrase. Net effect: an unconfigured clock shows the setup screen
+for at most 15 min of inactivity (30 min absolute), is off the air for 10 min,
+then returns. That is a timer rather than "let STA fail until the 24-strike
+slow path" because an empty SSID cannot associate: the only STA outcomes are a
+config rejection or a `NO_AP_FOUND` storm, and neither is a predictable
+countdown. `svc_network_start()` checks the same flag, so a stray start during
+the cooldown defers to the timer instead of bouncing the AP.
 
 **Cooldown.** For 10 min after exit, auth-class failures are not counted, so a
 still-wrong password cannot bounce the device straight back into recovery. The
@@ -167,8 +181,8 @@ immediately. It also means the device is never permanently unreachable: the
 worst case is always "power-cycle and try again".
 
 **Residual risk.** The token exemption is bounded to four endpoints
-(`/api/wifi`, `/api/config`, `/api/timetable`, `/api/reboot`) and, on the
-lockout path, to the 30-minute absolute cap. An actor who passes it already
+(`/api/wifi`, `/api/config`, `/api/timetable`, `/api/reboot`) and, on either AP,
+to the 30-minute absolute cap. An actor who passes it already
 knows the WPA2 passphrase, i.e. is physically present -- which `svc_http.c`
 already declares out of scope for CSRF. But a rogue-AP override via
 `POST /api/wifi` pivots through `svc_time`'s NTP to prayer times, so it is not

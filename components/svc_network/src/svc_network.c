@@ -104,16 +104,26 @@ static char                         s_ip_str[16]   = {0};
 /* --- CR #2 recovery state -------------------------------------------
  * s_recovery_active  : held ONLY across svc_network_stop() from a worker;
  *                      never across svc_network_start() (invariant 3).
- * s_recovery_mode    : true while the recovery AP is up (the credential
- *                      lockout path). CR #4 gave both APs a single identity
- *                      and moved the httpd exemption to s_ap_mode, so this
- *                      flag now gates only the recovery idle timeout and the
- *                      exit worker. Cleared first in stop(), set last in
+ * s_recovery_mode    : true while the AP in front of us is the recovery AP
+ *                      (the credential-lockout path). CR #4 gave both APs a
+ *                      single identity and moved the httpd exemption to
+ *                      s_ap_mode, so this flag now records WHICH AP is up;
+ *                      the idle/absolute timeout is armed for both (see
+ *                      s_setup_mode). Cleared first in stop(), set last in
  *                      start_ap_mode() (invariant 2).
+ * s_setup_mode       : sibling of s_recovery_mode for AP_MODE_SETUP, set and
+ *                      cleared the same way. The timeout callback is shared,
+ *                      so the exit worker needs it to choose between "back to
+ *                      STA" (recovery) and "cooldown, then re-enter the AP"
+ *                      (setup).
  * s_force_recovery   : makes the next svc_network_start() take the
  *                      recovery-AP branch instead of STA.
- * s_cooldown_active  : 10 min after exit; suppresses the auth-fail counter
- *                      but not the STA retry.
+ * s_cooldown_active  : 10 min after an AP exit; suppresses the failure
+ *                      counters but not the STA retry.
+ * s_setup_cooldown_active : true between a setup AP's timeout and its
+ *                      re-entry timer. Freezes both failure counters and is
+ *                      what stops a stray svc_network_start() from bouncing
+ *                      the setup AP straight back up.
  * s_generation       : bumped by svc_network_stop(); a worker compares its
  *                      snapshot to detect a restart it must not overrule.
  * s_consecutive_fail : consecutive STA disconnects of ANY reason, counted
@@ -126,8 +136,10 @@ static char                         s_ip_str[16]   = {0};
  * -------------------------------------------------------------------- */
 static bool                             s_recovery_active        = false;
 static bool                             s_recovery_mode          = false;
+static bool                             s_setup_mode             = false;
 static bool                             s_force_recovery         = false;
 static bool                             s_cooldown_active        = false;
+static bool                             s_setup_cooldown_active  = false;
 static uint8_t                          s_consecutive_auth_fail  = 0;
 static uint8_t                          s_consecutive_fail       = 0;
 static uint32_t                         s_generation             = 0;
@@ -142,6 +154,7 @@ static esp_timer_handle_t               s_recovery_entry_trigger_timer = NULL;
 static esp_timer_handle_t               s_recovery_timeout_timer       = NULL;
 static esp_timer_handle_t               s_bringup_retry_timer          = NULL;
 static esp_timer_handle_t               s_cooldown_timer               = NULL;
+static esp_timer_handle_t               s_setup_reentry_timer          = NULL;
 
 /* ------------------------------------------------------------------ */
 /* Recovery helpers (CR #2)                                           */
@@ -177,12 +190,17 @@ static bool reason_is_auth_class(uint8_t reason)
  * counter. The reconnect decision is a SEPARATE test: a non-auth reason
  * must still call schedule_reconnect().
  * Only s_recovery_active also suppresses schedule_reconnect();
- * s_recovery_mode and s_cooldown_active suppress the counter but not the
- * STA retry (during recovery the STA driver is not running anyway, and
- * during cooldown STA is retrying normally). */
+ * the mode flags and the two cooldowns suppress the counters but not the
+ * STA retry (during an AP the STA driver is not running anyway, and during
+ * a cooldown STA is retrying normally).
+ * s_setup_mode / s_setup_cooldown_active came with setup-AP timeout parity:
+ * a disconnect can then only arrive from a race with the teardown, and during
+ * the setup cooldown the link is deliberately down -- neither may advance the
+ * 24-strike slow path. */
 static bool recovery_guards_active(void)
 {
-    return s_recovery_active || s_recovery_mode || s_cooldown_active;
+    return s_recovery_active || s_recovery_mode || s_setup_mode ||
+           s_cooldown_active || s_setup_cooldown_active;
 }
 
 /* CR #4 -- 16 uppercase hex chars, regenerated at every AP entry.
@@ -541,10 +559,112 @@ static void bringup_retry_cb(void *arg)
     }
 }
 
+/* Setup-AP timeout parity -- arm the one-shot that ends the setup cooldown.
+ * The exit worker calls this after a setup AP times out instead of calling
+ * svc_network_start(): with no credentials that start() would take the
+ * empty-SSID branch and raise the AP again on the spot, turning every exit
+ * into a 1 s entry/exit loop.
+ *
+ * Deliberately a timer and not "let STA fail until the 24-strike slow path":
+ * an empty SSID cannot associate, so the only STA outcomes are a config
+ * rejection or a NO_AP_FOUND storm, and neither is a predictable countdown.
+ * The delay is SVC_NETWORK_COOLDOWN_US, the same 10 min the exit cooldown
+ * uses, so the two never disagree.
+ *
+ * Never pulls a pending re-entry forward: if the one-shot is already running
+ * it owns the next transition and this call is a no-op, so a stray start()
+ * cannot postpone the re-entry forever. */
+static bool arm_setup_reentry(uint64_t delay_us)
+{
+    if (!s_setup_reentry_timer) {
+        ESP_LOGE(TAG, "setup re-entry timer missing");
+        return false;
+    }
+    if (esp_timer_is_active(s_setup_reentry_timer)) {
+        return true;
+    }
+    esp_err_t err = esp_timer_start_once(s_setup_reentry_timer, delay_us);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to arm setup re-entry: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+/* Runs when the setup cooldown expires. stop() first for the same reason every
+ * other worker does it: it is normally a no-op here (the exit worker already
+ * stopped everything), but a sticky s_started would make the start() below a
+ * silent no-op instead of a fresh bring-up. */
+static void setup_reentry_worker(void *arg)
+{
+    (void)arg;
+
+    s_setup_cooldown_active = false;   /* released before start() re-enters */
+    svc_network_stop();
+    s_recovery_active = false;         /* invariant 3 */
+
+    esp_err_t err = svc_network_start();   /* empty SSID -> AP_MODE_SETUP */
+
+    /* Only a non-ESP_OK return is a failure. ESP_OK with s_ap_mode false is not:
+       credentials may have been written during the AP session (the installer
+       using /api/wifi), in which case start() correctly takes the STA path and
+       the empty-SSID branch is never reached. Testing !s_ap_mode here would arm
+       the bring-up ladder and turn that case into a stop/start loop. */
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "setup AP re-entry failed (%s, free heap=%u)",
+                 esp_err_to_name(err), (unsigned)esp_get_free_heap_size());
+        publish_error(SVC_NETWORK_STAGE_CONNECT, err);
+        arm_bringup_retry();
+    } else if (s_ap_mode) {
+        s_bringup_backoff_ms = SVC_NETWORK_BACKOFF_MIN_MS;   /* E1 */
+    } else {
+        ESP_LOGI(TAG, "setup re-entry: credentials now present, STA path taken");
+    }
+    vTaskDelete(NULL);
+}
+
+static void setup_reentry_cb(void *arg)
+{
+    (void)arg;
+    if (xTaskCreatePinnedToCore(setup_reentry_worker, "svc_net_ap_re",
+                                4096, NULL, tskIDLE_PRIORITY + 5, NULL, 0)
+        != pdPASS) {
+        /* The one-shot already fired, so nothing is pending. Arm a short retry
+         * instead of stranding the device with no link and no AP. */
+        ESP_LOGE(TAG, "setup re-entry worker spawn failed, retrying in 30 s");
+        if (!arm_setup_reentry(30LL * 1000000LL)) {
+            ESP_LOGE(TAG, "setup re-entry lost; next reboot re-enters the AP");
+        }
+    }
+}
+
 static void cooldown_cb(void *arg)
 {
     (void)arg;
     s_cooldown_active = false;
+}
+
+/* Design section 6.5 -- seed the entry/activity timestamps and arm the single
+ * one-shot that enforces both bounds (the absolute cap needs no second timer:
+ * recovery_timeout_cb() re-arms for the shorter of the two remainders).
+ *
+ * Shared since setup-AP timeout parity: the recovery entry worker calls it once
+ * its AP is up, start_ap_mode() calls it for AP_MODE_SETUP. One timer, one
+ * decision callback and one set of bounds for both APs is what keeps the two
+ * paths identical.
+ *
+ * The error is returned rather than handled here: the callers have different
+ * safe fallbacks (roll back to STA vs. keep the AP up). */
+static esp_err_t arm_ap_timeout(void)
+{
+    if (!s_recovery_timeout_timer) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    int64_t now                 = esp_timer_get_time();
+    s_recovery_entry_us         = now;
+    s_last_recovery_activity_us = now;
+    return esp_timer_start_once(s_recovery_timeout_timer,
+                                SVC_NETWORK_RECOVERY_IDLE_WINDOW_US);
 }
 
 /* Design section 6.3 -- recovery entry worker. Spawned from
@@ -586,12 +706,10 @@ static void recovery_entry_worker(void *arg)
         return;
     }
 
-    /* Recovery AP is up. Arm the idle + absolute timeout (design section 6.5). */
-    s_recovery_entry_us         = esp_timer_get_time();
-    s_last_recovery_activity_us = s_recovery_entry_us;
-    uint32_t gen                = s_generation;
-    err = esp_timer_start_once(s_recovery_timeout_timer,
-                               SVC_NETWORK_RECOVERY_IDLE_WINDOW_US);
+    /* Recovery AP is up. Arm the idle + absolute timeout (design section 6.5);
+       the setup AP arms the same one-shot through the same helper. */
+    uint32_t gen = s_generation;   /* D6: snapshot before the arm */
+    err = arm_ap_timeout();
     if (err != ESP_OK) {
         /* No timer = no exit = permanent stranding. Roll back to STA. */
         ESP_LOGE(TAG, "failed to arm recovery timeout (%s), rolling back",
@@ -611,12 +729,22 @@ static void recovery_entry_worker(void *arg)
 }
 
 /* Design section 6.6 -- exit worker. Runs when the idle window or the absolute
- * cap expires, and is the only writer of the cooldown (D5). */
+ * cap expires (for either AP), and is the only writer of the cooldowns (D5).
+ * A recovery exit returns to STA with the possibly corrected credentials; a
+ * setup exit has no credentials to return to, so it holds the link down for
+ * SVC_NETWORK_COOLDOWN_US and lets the re-entry timer raise the AP again
+ * (setup-AP timeout parity). */
 static void recovery_exit_worker(void *arg)
 {
     (void)arg;
 
-    svc_network_stop();          /* clears s_recovery_mode FIRST, under the mutex */
+    /* Snapshot the mode BEFORE stop(): stop() clears both flags first, under
+       the identity mutex (invariant 2). A plain bool read is enough here -- the
+       AP is up, so s_started is true and no worker can be inside
+       start_ap_mode() rewriting it. */
+    bool setup_ap = s_setup_mode;
+
+    svc_network_stop();          /* clears s_recovery_mode / s_setup_mode FIRST, under the mutex */
     s_recovery_active = false;   /* invariant 3: after stop() returns, before start() */
 
     /* start() below must take the STA path. Design section 6.6 assumes the
@@ -624,6 +752,24 @@ static void recovery_exit_worker(void *arg)
      * well makes that true by construction -- if a latent bug left it set,
      * this exit would silently re-enter recovery. */
     s_force_recovery = false;
+
+    /* Setup AP: do NOT call start(). The empty-SSID branch would raise the
+     * setup AP on the spot, so every exit would be a 1 s entry/exit loop. The
+     * re-entry timer owns the next transition instead. Nothing is started in
+     * the meantime: STA cannot associate without an SSID, so the link is
+     * deliberately down rather than spinning (and s_setup_cooldown_active
+     * freezes both failure counters while it is). */
+    if (setup_ap) {
+        s_setup_cooldown_active = true;
+        if (!arm_setup_reentry(SVC_NETWORK_COOLDOWN_US)) {
+            /* No timer = no re-entry = no AP until the next reboot. Fail open:
+               put the setup AP back now and accept the entry/exit cycle. */
+            s_setup_cooldown_active = false;
+            (void)svc_network_start();
+        }
+        vTaskDelete(NULL);
+        return;
+    }
 
     esp_err_t err = svc_network_start();   /* STA path */
 
@@ -652,8 +798,10 @@ static void recovery_exit_worker(void *arg)
 }
 
 /* Design section 6.5 -- single writer, single decision point (D7 + E3). The
- * activity timestamp is written by svc_network_touch_recovery_idle_timeout()
- * only; this callback never stops a timer another task may re-arm. */
+ * activity timestamp is written by
+ * svc_network_touch_provisioning_idle_timeout() only; this callback never
+ * stops a timer another task may re-arm. Serves both APs: the timestamps it
+ * reads are seeded by arm_ap_timeout() at every entry. */
 static void recovery_timeout_cb(void *arg)
 {
     (void)arg;
@@ -706,11 +854,12 @@ static void recovery_entry_trigger_cb(void *arg)
     }
 }
 
-/* D8 sibling of ensure_recovery_lock(): create the four recovery timers once.
+/* D8 sibling of ensure_recovery_lock(): create the five AP timers once.
  * esp_timer_create() allocates from the heap, so this runs from
  * svc_network_start() -- never from a Wi-Fi event handler or a timer callback.
  * Idempotent and partial-safe; the timers are never deleted, only stopped in
- * svc_network_stop(), so a stop()/start() cycle costs no allocation.
+ * svc_network_stop() (except the cooldown and the setup re-entry, which must
+ * outlive a stop()), so a stop()/start() cycle costs no allocation.
  * esp_timer names are capped at 15 characters (ESP_TIMER_MAX_NAME_LEN - 1). */
 static bool ensure_recovery_timers(void)
 {
@@ -755,6 +904,17 @@ static bool ensure_recovery_timers(void)
         };
         if (esp_timer_create(&a, &s_cooldown_timer) != ESP_OK) {
             ESP_LOGE(TAG, "esp_timer_create(rec_cooldown) failed");
+            return false;
+        }
+    }
+    if (!s_setup_reentry_timer) {
+        const esp_timer_create_args_t a = {
+            .callback = &setup_reentry_cb,
+            .arg      = NULL,
+            .name     = "ap_reentry",
+        };
+        if (esp_timer_create(&a, &s_setup_reentry_timer) != ESP_OK) {
+            ESP_LOGE(TAG, "esp_timer_create(ap_reentry) failed");
             return false;
         }
     }
@@ -921,9 +1081,10 @@ static void ip_event_handler(void *arg, esp_event_base_t base,
 /* ------------------------------------------------------------------ */
 
 /* CR #2: which AP the parameterised start_ap_mode() brings up. CR #4 gives
-   both entries the same SSID and the same WPA2 treatment; the value still
-   selects the entry path's bookkeeping (s_recovery_mode and the idle
-   timeout armed by the recovery entry worker). */
+   both entries the same SSID and the same WPA2 treatment; since setup-AP
+   timeout parity the value also selects only the exit behaviour
+   (recovery_exit_worker(): back to STA vs. cooldown + re-entry), because both
+   paths arm the same idle/absolute timeout via arm_ap_timeout(). */
 typedef enum {
     AP_MODE_SETUP    = 0,  /* no credentials at boot: ChronoLink-<MAC4>,
                               WPA2-PSK, passphrase shown on the display      */
@@ -1009,22 +1170,50 @@ static void start_ap_mode(ap_mode_t mode)
     s_connected = false;
     s_ip_str[0] = '\0';
 
-    /* Invariant 2: s_recovery_mode is set LAST -- under the mutex, and only
-       once esp_wifi_start() returned ESP_OK and s_ap_mode is true. A reader
-       that observes recovery mode therefore observes a live AP. If the mutex
-       is not available the flag stays false, so no idle timeout is ever armed:
-       that fails closed toward "stay up", never toward "exit early".
+    /* Invariant 2: the mode flag is set LAST -- under the mutex, and only once
+       esp_wifi_start() returned ESP_OK and s_ap_mode is true. A reader that
+       observes either mode therefore observes a live AP. If the mutex is not
+       available the flag stays false: the recovery path then rolls back to STA
+       (the entry worker reads the flag), and the setup path re-enters the AP
+       every 15/30 min instead of taking the cooldown -- a lost optimisation,
+       never a lost AP.
 
-       CR #4: both APs share one identity, but only the recovery entry arms the
-       idle/absolute timers, so this flag stays recovery-specific. */
-    if (recovery) {
-        if (!s_ap_identity_lock ||
-            xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
-            ESP_LOGE(TAG, "AP up but recovery mode not published (no mutex)");
-            return;
+       Setup-AP timeout parity: both APs now arm the same idle/absolute
+       one-shot, so an unconfigured device is no longer stranded in the AP
+       forever. The flag still records WHICH AP is up, because the shared exit
+       worker resolves the two differently (STA vs. cooldown + re-entry). */
+    bool published = false;
+    if (s_ap_identity_lock &&
+        xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) == pdTRUE) {
+        if (recovery) {
+            s_recovery_mode = true;
+        } else {
+            s_setup_mode = true;
         }
-        s_recovery_mode = true;
+        published = true;
         xSemaphoreGive(s_ap_identity_lock);
+    } else {
+        ESP_LOGE(TAG, "AP up but %s mode not published (no mutex)",
+                 recovery ? "recovery" : "setup");
+    }
+
+    if (recovery) {
+        /* Unchanged: the entry worker arms the timeout after this returns, and
+           rolls back to STA when s_recovery_mode stayed false. */
+        return;
+    }
+
+    /* Setup AP: arm the timeout here. The AP is already up and is the only way
+       in for an unconfigured device, so a missing timer is logged and the AP
+       stays up -- a lost bound is better than a lost AP. */
+    if (!published) {
+        /* Without the flag the exit worker cannot tell this AP apart from a
+           recovery one, so it will call start() and re-enter at once: a 15/30
+           min cycle instead of the 10 min cooldown. Degraded, not stranded. */
+        ESP_LOGW(TAG, "setup AP will cycle every 15/30 min: mode not published");
+    }
+    if (arm_ap_timeout() != ESP_OK) {
+        ESP_LOGE(TAG, "setup AP timeout not armed; AP stays up");
     }
 }
 
@@ -1114,6 +1303,19 @@ esp_err_t svc_network_start(void)
        on a guaranteed failure. An empty PASSWORD with a non-empty SSID stays
        valid: that is an open network (see the authmode line below). */
     if (cred_err != ESP_OK || ssid[0] == '\0') {
+        /* Setup-AP cooldown: between a setup AP's timeout and its re-entry
+           timer the AP must not come back, or every exit would be undone on the
+           spot. A start() in that window (bring-up retry, an external caller)
+           is deferred to the timer rather than bounced into a fresh entry/exit
+           cycle; arm_setup_reentry() never pulls a pending re-entry forward.
+           s_started stays false, so the caller's stop() is a harmless no-op and
+           the timer's worker starts from a clean driver state. */
+        if (s_setup_cooldown_active) {
+            ESP_LOGW(TAG, "Setup AP cooling down; re-entry already armed");
+            (void)arm_setup_reentry(SVC_NETWORK_COOLDOWN_US);
+            return ESP_OK;   /* not started: the re-entry timer owns the link */
+        }
+
         if (cred_err != ESP_OK) {
             ESP_LOGW(TAG, "No WiFi credentials found. Starting AP mode.");
         } else {
@@ -1289,7 +1491,7 @@ esp_err_t svc_network_stop(void)
         return ESP_OK;
     }
 
-    /* Invariant 2 (design section 5): clear s_recovery_mode FIRST, under the
+    /* Invariant 2 (design section 5): clear the mode flags FIRST, under the
        AP identity mutex, before any teardown begins, and clear the AP identity
        with it -- it is ephemeral and regenerated at every entry (CR #4). The
        getters gate on s_ap_mode and on the identity itself, so they fail
@@ -1305,6 +1507,7 @@ esp_err_t svc_network_stop(void)
     bool locked = (s_ap_identity_lock != NULL) &&
                   (xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) == pdTRUE);
     s_recovery_mode = false;
+    s_setup_mode = false;
     s_ap_ssid[0] = '\0';
     s_ap_pass[0] = '\0';
     if (locked) {
@@ -1332,6 +1535,10 @@ esp_err_t svc_network_stop(void)
        half-torn-down stack. s_cooldown_timer is deliberately NOT stopped: the
        cooldown must survive stop/start cycles (section 6.6), otherwise the
        exit worker's re-trigger protection dies on the next stop.
+       s_setup_reentry_timer is NOT stopped either, for the same reason and
+       more strongly: the setup exit worker arms it right after calling this
+       function, and stopping it here would let any later stop() (bring-up
+       retry, a caller) cancel the only path back to a usable AP.
        esp_timer_stop() reporting ESP_ERR_INVALID_STATE (not armed) is the
        normal case and is ignored. */
     if (s_reconnect_timer) {
@@ -1373,7 +1580,9 @@ esp_err_t svc_network_stop(void)
        NOT touched here: both are owned by the workers (section 6.3, section
        5 invariant 3) and s_force_recovery in particular must survive this
        call for the entry worker's stop() -> start() to reach the recovery
-       branch. s_cooldown_active is likewise left alone (section 6.6). */
+       branch. s_cooldown_active is likewise left alone (section 6.6), and so
+       is s_setup_cooldown_active: the setup exit worker sets it after this
+       function returns and only the re-entry worker clears it. */
     s_generation++;
 
     ESP_LOGI(TAG, "WiFi stopped");
@@ -1448,23 +1657,26 @@ esp_err_t svc_network_get_ap_passphrase(char *out, size_t cap)
     return ESP_OK;
 }
 
-void svc_network_touch_recovery_idle_timeout(void)
+void svc_network_touch_provisioning_idle_timeout(void)
 {
-    /* E2: this function and the entry worker (which seeds the value) are the
-       only writers of s_last_recovery_activity_us, and both hold
-       s_ap_identity_lock. Never stop or start a timer from here: re-arming is
-       the timeout callback's job (D7), and doing it from an HTTP request would
-       let a request storm push the absolute cap out indefinitely.
-       No-op unless the recovery AP is up: CR #4 unified the identity, but the
-       idle/absolute timers are still armed only by the recovery entry worker,
-       so touching them during a setup AP would only write a timestamp nothing
-       reads. */
+    /* E2: this function and arm_ap_timeout() (which seeds the value at every
+       entry) are the only writers of s_last_recovery_activity_us, and both
+       hold s_ap_identity_lock. Never stop or start a timer from here:
+       re-arming is the timeout callback's job (D7), and doing it from an HTTP
+       request would let a request storm push the absolute cap out
+       indefinitely.
+       Covers BOTH provisioning APs (setup-AP timeout parity): start_ap_mode()
+       publishes s_recovery_mode / s_setup_mode only after esp_wifi_start()
+       succeeded, so the flag pair is exactly "an AP with an armed idle timeout
+       is up". Without the setup half, a request during a setup session would
+       not extend the 15 min window and the panel's "Auto-exits when idle"
+       would be untrue. */
     if (!s_ap_identity_lock ||
         xSemaphoreTake(s_ap_identity_lock, portMAX_DELAY) != pdTRUE) {
         ESP_LOGW(TAG, "idle-timeout touch dropped (no mutex)");
         return;
     }
-    if (s_recovery_mode) {
+    if (s_recovery_mode || s_setup_mode) {
         s_last_recovery_activity_us = esp_timer_get_time();
     }
     xSemaphoreGive(s_ap_identity_lock);

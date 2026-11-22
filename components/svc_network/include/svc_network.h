@@ -93,13 +93,13 @@ esp_err_t svc_network_get_ap_ssid(char *out, size_t cap);
 esp_err_t svc_network_get_ap_passphrase(char *out, size_t cap);
 
 /*
- * httpd-side activity marker: extends the recovery idle timeout so a setup
- * session in progress is not cut off (design D7). No-op unless the recovery
- * AP is up -- CR #4 unified the identity, but the idle/absolute timers are
- * still armed only by the recovery entry worker.
+ * httpd-side activity marker: extends the provisioning AP's idle timeout so a
+ * setup session in progress is not cut off (design D7). Covers BOTH APs --
+ * first-boot setup and the credential-recovery lockout -- because both now arm
+ * the same 15 min idle / 30 min absolute one-shot.
  * Writes one timestamp; never stops or starts a timer.
  */
-void svc_network_touch_recovery_idle_timeout(void);
+void svc_network_touch_provisioning_idle_timeout(void);
 
 #ifdef __cplusplus
 }

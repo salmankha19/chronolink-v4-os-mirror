@@ -346,15 +346,18 @@ driver before `start()` runs again; without that the retry would die on
 
 - `svc_network.c` -- reason classification, the two streak counters, the
   single guarded entry helper `arm_recovery_entry()` (both triggers use it),
-  entry and exit workers, the four timers (entry trigger, idle/absolute
-  timeout, bring-up retry, cooldown), the bring-up retry ladder
-  (1 s -> 30 s, never gives up; also armed from a cold-boot bring-up failure),
-  the unified identity (`generate_ap_identity()`, `s_ap_ssid` / `s_ap_pass`
-  under `s_ap_identity_lock`, called by `start_ap_mode()` for both
+  the entry, exit, bring-up-retry and setup-re-entry workers, the five timers
+  (entry trigger, idle/absolute timeout, bring-up retry, cooldown, setup
+  re-entry), `arm_ap_timeout()` (arms the shared 15 min idle / 30 min absolute
+  one-shot, called by the lockout entry worker and by `start_ap_mode()` for
+  `AP_MODE_SETUP`, so both APs carry the same bounds), the bring-up retry
+  ladder (1 s -> 30 s, never gives up; also armed from a cold-boot bring-up
+  failure), the unified identity (`generate_ap_identity()`, `s_ap_ssid` /
+  `s_ap_pass` under `s_ap_identity_lock`, called by `start_ap_mode()` for both
   `AP_MODE_SETUP` and `AP_MODE_RECOVERY`), and the accessors
   `svc_network_is_ap_mode()`, `svc_network_get_ap_ssid()`,
   `svc_network_get_ap_passphrase()`,
-  `svc_network_touch_recovery_idle_timeout()`.
+  `svc_network_touch_provisioning_idle_timeout()`.
 - `svc_http.c` -- the static `provisioning_exempt()`, called first from
   `require_auth()`. While the provisioning AP is up it accepts
   `/api/wifi`, `/api/config`, `/api/timetable` and `/api/reboot` without the
