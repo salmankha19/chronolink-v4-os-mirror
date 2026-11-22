@@ -307,12 +307,29 @@ Fajr/Isha angles. Congregational times are mosque-specific: the installer
 sets them after choosing a city, so applying a preset can never silently
 overwrite a published timetable.
 
+**Quick Setup in the web UI.** The control at the top of the Prayer Times
+card (`#quick-setup-city`) is labelled "Quick Setup: Select Your City" and
+lists the same nine cities in the same order as `k_city_presets[]`, so its
+value *is* the preset index. Selecting a city fills the form client-side
+(latitude, longitude, location name, method, high-latitude rule, madhab,
+Hijri options) and then calls `POST /api/config/preset`, so the device
+persists the fields and applies that city's POSIX timezone. A rejected
+request (missing or wrong API token) leaves the form filled but unsaved, so
+the installer can still press Save by hand. The selection itself is not
+stored: a preset index is not a config field, so the control
+returns to its placeholder when the page reloads and `/api/config` stays the
+authoritative source. The name box is rewritten only when it is empty or
+still holds another preset's name -- a name the installer typed is never
+overwritten.
+
 **Factory default** (`set_defaults()`): the Horsham preset, so an
 NVS-erased board boots with `location_valid == true` and produces prayer
 times as soon as the RTC is trusted. Jamat anchors are `DISABLED` and
 adhan margins are 0 until the installer configures them. The timezone is
 `svc_time`'s own default, which is already the UK POSIX string, so the
-default location and the default zone agree.
+default location and the default zone agree. `location_name` is empty at
+that point, so the preset seeds it too: a fresh board reports
+"Horsham, UK" until the installer renames it.
 
 Presets are not templates in the `Method.hpp` sense. `Method` captures
 *which algorithm to run* (angles, intervals). A preset captures

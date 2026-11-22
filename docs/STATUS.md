@@ -1,6 +1,6 @@
 # Project Status
 
-Snapshot reviewed 2026-11-22 at commit `HEAD` (recent PRs: #157 bounded retry slow path; #158 slow-path threshold 24; #159 unified WPA2-PSK provisioning AP plus reason 205 in the auth-class set; #160 RTC write-verify compares UTC epoch seconds; #161 test harness restores the board's pre-run location/method. Earlier: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). In review: Quick Setup city presets (nine cities, Horsham default; presets no longer carry jamat/season) -- see the Quick Setup bullet below. Update this file in the same change that alters any item below.
+Snapshot reviewed 2026-11-22 at commit `HEAD` (recent PRs: #157 bounded retry slow path; #158 slow-path threshold 24; #159 unified WPA2-PSK provisioning AP plus a 16-char API token and reason `205` in the auth-class set; #160 RTC write-verify compares UTC epoch seconds; #161 test harness restores the board's pre-run location/method. Merged on 2026-11-22 after those: `feat/setup-ap-timeout-parity` and `feat/city-presets-quick-setup` — see "Completed 2026-11-22 (follow-up review closed)" below. Earlier: `hijri_offset_days` algorithmic Kuwaiti-tabular offset #146; `hijri_calc_method` Umm al-Qura KSA bitmask with confirmed 1447/1448 AH windows #147). Update this file in the same change that alters any item below.
 
 **This is the authoritative list of what is implemented vs. what is
 not.** Where another doc mentions a gap, this file has the detail.
@@ -19,6 +19,20 @@ not.** Where another doc mentions a gap, this file has the detail.
 ---
 
 ## Implemented (working code)
+
+**Completed 2026-11-22 (follow-up review closed).** The Claude follow-up review
+of 21 Nov 2026 is fully addressed: every finding is merged and documented, and
+`docs/sessions/RESUME_6.8_1511.md` records each item as DONE. What remains open
+is hardware verification only — see "Open verification" in that ledger.
+
+| Item | Scope | Status |
+|---|---|---|
+| **Setup AP timeout parity** | One `arm_ap_timeout()` gives the Setup **and** Recovery AP the same bounds — 15 min idle (any exempted HTTP request restarts the window) or 30 min absolute, whichever first. A Setup exit holds the link down for a deterministic 10 min (`SVC_NETWORK_COOLDOWN_US`, both failure counters frozen) and then re-enters through `svc_network_stop()` + `svc_network_start()` with a rotated passphrase, instead of looping or staying up forever. Details: §`svc_network` below, `docs/Architecture.md` §4.3, `docs/boot.md` | ✅ DONE 2026-11-22 |
+| **Quick Setup city presets** | Nine-city `k_city_presets[]` in `svc_config.c` (Horsham, Crawley, London, Lahore, Bahawalpur, Penang, Jeddah, Toronto, New Jersey); Horsham, UK is the factory default, so an erased board boots with `location_valid == true` and `location_name == "Horsham, UK"`. The "Quick Setup: Select Your City" dropdown in `www/index.html` fills the form client-side (nine mirrored entries) and then calls `POST /api/config/preset`. Details: the bullet below and `docs/prayer-times-model.md` §5 | ✅ DONE 2026-11-22 |
+| Power-cut slow path (PR #158) | `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` 8 -> 24, so an ordinary outage no longer strands the clock on the provisioning AP while the router is still booting | ✅ DONE 2026-11-21 |
+| CR #4 unified provisioning AP (PR #159) | WPA2-PSK for both entry paths, 16-char API token, reason `205` in the auth-class set | ✅ DONE 2026-11-22 |
+| RTC write-verify fix (PR #160) | `rtc_roughly_equal()` compares UTC epoch seconds with a 1 s tolerance, so a readback that straddles `:59 -> :00` is not a false mismatch | ✅ DONE 2026-11-22 |
+| Harness config restore (PR #161) | The scenario runner snapshots the board's own latitude/longitude/method through the open `GET /api/config` before seeding, and restores it via `/debug/ntp` in the same request | ✅ DONE 2026-11-22 |
 
 - **Boot:** logging, factory reset (parameter flag or
   `POST /api/factory-reset` persistent request), NVS, FATFS `/storage`,
@@ -108,6 +122,11 @@ not.** Where another doc mentions a gap, this file has the detail.
   timezone is `svc_time`'s UK POSIX string, which matches the default
   location. `svc_config_apply_preset()` persists the new fields (including
   the microdegree lat/lon) to NVS; the preset index itself is never stored.
+  The web control (`#quick-setup-city`) is therefore a **UI-only index**: it
+  returns to its placeholder after a reload, and `GET /api/config` remains the
+  authoritative source. Picking a city writes its name into `loc_name` when the
+  box is empty or still holds another preset's name, so switching cities
+  updates it while a name the installer typed (e.g. "Masjid") is preserved.
 - **Hijri date display (2026-11-15, numeric format):** `svc_config_get_hijri_date()`
   exposes the Islamic calendar to other layers; `svc_prayer_engine_service`
   populates `svc_prayer_engine_times_t.hijri_{year,month,day}` plus full
@@ -438,7 +457,7 @@ Public API: `svc_network_start()`, `svc_network_stop()`,
 provisioning-AP accessors listed below (`svc_network_get_ap_ssid()`,
 `svc_network_get_ap_passphrase()`, `svc_network_touch_provisioning_idle_timeout()`).
 
-### WiFi provisioning mode (CR #2 recovery path + CR #4 unified AP + Setup-AP timeout parity; hardware verification pending)
+### WiFi provisioning mode (CR #2 recovery path + CR #4 unified AP + Setup-AP timeout parity; code complete 2026-11-22, hardware verification open)
 
 Full design: `docs/sessions/cr2-wifi-lockout-design.md`. Architecture summary:
 `docs/Architecture.md` section 4.3. Boot-time behaviour and the power-cycle

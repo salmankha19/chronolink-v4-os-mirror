@@ -239,6 +239,22 @@ presets, tomorrow's jamat, and the pre-5.1a migration path — is in
 [prayer-times-model.md](prayer-times-model.md). This section is only
 the pointer; the domain model lives there.
 
+**City presets (2026-11-22).** A preset is data, not an algorithm: the
+nine-city `k_city_presets[]` table in `svc_config.c` maps a preset id to
+latitude, longitude, POSIX timezone, method, high-latitude rule, madhab and
+Hijri options. `svc_config_apply_preset()` copies those fields into the
+config (seeding `location_name` only when it is empty), persists them to NVS
+and never stores the preset id itself, so a preset is a one-shot seed rather
+than a mode the device stays in. It deliberately does not touch `jamat[]`,
+`season`, adhan offsets or display preferences, which keeps congregational
+times mosque-specific. `set_defaults()` applies preset 0 (Horsham, UK), so an
+NVS-erased board is location-valid at first boot. `POST /api/config/preset`
+applies a preset and its timezone at runtime; `www/index.html` mirrors the
+same table so the "Quick Setup: Select Your City" dropdown can fill the form
+without a round trip, and the dropdown's value is an index only — nothing
+about the selection is persisted. Domain detail:
+[prayer-times-model.md](prayer-times-model.md) §5.
+
 ### 4.3 WiFi provisioning mode (CR #2 recovery path, unified by CR #4)
 
 A clock whose saved Wi-Fi credentials stop working used to retry forever, with
@@ -264,15 +280,25 @@ flowchart TB
     RETRYO -->|"total < 24: backoff 1 s to 30 s"| STA
     RETRYA -->|"auth >= 5: 250 ms trigger"| RECOVERY["AP_UP (WPA2-PSK, ChronoLink-MAC4)"]
     RETRYO -->|"total >= 24: 250 ms trigger"| RECOVERY
+    SETUP -->|"idle 15 min OR absolute 30 min"| HOLDDOWN["link down 10 min (counters frozen)"]
+    HOLDDOWN -->|"re-entry worker: stop then start, new passphrase"| SETUP
     RECOVERY -->|"idle 15 min OR absolute 30 min"| EXIT["stop then start; arm 10 min cooldown"]
     EXIT -->|STA_CONNECT| STA
 ```
 
 Because CR #4 gives both entry paths one identity, `SETUP` and `RECOVERY` are
-the same AP on the air and in the UI. The only difference is bookkeeping: the
-`RECOVERY` node is the one that arms the idle/absolute timers and the exit
-worker. `SETUP` is a terminal state -- an unconfigured device stays in its AP
-until credentials are written and it reboots.
+the same AP on the air and in the UI. They differ in how the exit resolves, not
+in whether one exists: since Setup-AP timeout parity both nodes arm the same
+`arm_ap_timeout()` bounds (15 min idle / 30 min absolute), and `RECOVERY` exits
+to `STA_CONNECT` with the possibly corrected credentials plus the 10 min
+cooldown, while `SETUP` — which has no credentials to return to — holds the link
+down for the same `SVC_NETWORK_COOLDOWN_US` (10 min, both failure counters
+frozen) and is then re-entered by the `s_setup_reentry_timer` worker through
+`svc_network_stop()` + `svc_network_start()` with a rotated passphrase. Calling
+`svc_network_start()` directly on that exit would re-raise the AP on the spot
+(the empty-SSID branch), i.e. an entry/exit loop, so re-entry is deferred to the
+timer; a stray `start()` during the cooldown defers the same way. Power-cycling
+clears all of it, because no recovery state is persisted.
 
 `AP_UP` covers both "no credentials at boot" and "an empty SSID stored" -- an
 empty SSID can never associate, so `svc_network_start()` treats it as
@@ -292,7 +318,7 @@ precedent as `SVC_NETWORK_BACKOFF_MAX_MS`), not Kconfig entries:
 | `SVC_NETWORK_UNREACHABLE_FAIL_THRESHOLD` | 24 | consecutive failures of **any** reason that trigger recovery (slow path) |
 | `SVC_NETWORK_RECOVERY_IDLE_WINDOW_US` | 15 min | exit after 15 min with no exempted HTTP request |
 | `SVC_NETWORK_RECOVERY_ABSOLUTE_CAP_US` | 30 min | hard exit regardless of activity |
-| `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, window in which auth failures are not counted |
+| `SVC_NETWORK_COOLDOWN_US` | 10 min | after exit, window in which auth failures are not counted; for a Setup AP exit it is also the deterministic link-down delay before re-entry |
 | entry-trigger one-shot | 250 ms | delay before the entry worker is spawned |
 
 **Reason whitelist.** Only these `WIFI_EVENT_STA_DISCONNECTED` reasons count
