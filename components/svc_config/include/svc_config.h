@@ -111,11 +111,28 @@ typedef struct {
     uint8_t winter_start_day;
 } season_cfg_t;
 
+/* Quick Setup city presets. A preset seeds the fields that are a property
+   of the *region*: location, calculation method, high-latitude rule, Asr
+   madhab and the Hijri options. It deliberately does NOT set adhan margins
+   or jamat times -- those belong to the mosque, not the city, and a preset
+   must never overwrite a published timetable
+   (docs/prayer-times-model.md section 5).
+
+   The numeric order is both the JSON `preset` field of
+   POST /api/config/preset and the option order of the Quick Setup
+   dropdown in www/index.html. HORSHAM_UK is the factory default; see
+   set_defaults() in svc_config.c. */
 typedef enum {
-    SVC_CONFIG_PRESET_UK                = 0,
-    SVC_CONFIG_PRESET_PAKISTAN          = 1,
-    SVC_CONFIG_PRESET_UK_MOONSIGHTING   = 2,
-    SVC_CONFIG_PRESET_COUNT             = 3,
+    SVC_CONFIG_PRESET_HORSHAM_UK    = 0,
+    SVC_CONFIG_PRESET_CRAWLEY_UK    = 1,
+    SVC_CONFIG_PRESET_LONDON_UK     = 2,
+    SVC_CONFIG_PRESET_LAHORE_PK     = 3,
+    SVC_CONFIG_PRESET_BAHAWALPUR_PK = 4,
+    SVC_CONFIG_PRESET_PENANG_MY     = 5,
+    SVC_CONFIG_PRESET_JEDDAH_SA     = 6,
+    SVC_CONFIG_PRESET_TORONTO_CA    = 7,
+    SVC_CONFIG_PRESET_NEW_JERSEY_US = 8,
+    SVC_CONFIG_PRESET_COUNT         = 9,
 } svc_config_preset_t;
 
 /* Valid values for jamat_per_prayer_cfg_t.round_min. The setter rejects
@@ -239,10 +256,16 @@ esp_err_t svc_config_set_jamat_round(svc_config_prayer_t p, uint8_t round_min);
 esp_err_t svc_config_set_season(uint8_t summer_m, uint8_t summer_d,
                                 uint8_t winter_m, uint8_t winter_d);
 
-/* Apply a named preset. Overwrites method, madhab, high_lat_rule,
-   jamat[], season. Does NOT touch location_name, latitude, longitude,
-   adhan_mode, adhan_volume, brightness_mode, auto_brightness,
-   night_lamp_enable, zawal_buffer_min, or per-prayer adhan_offset_min.
+/* Apply a city preset. Overwrites latitude, longitude, location_valid,
+   method, madhab, high_lat_rule, hijri_calc_method and
+   hijri_offset_days. location_name is seeded from the city name ONLY when
+   it is currently empty, so an existing mosque name survives a preset
+   change.
+
+   Does NOT touch jamat[], season, adhan_mode, adhan_volume,
+   brightness_mode, auto_brightness, night_lamp_enable, zawal_buffer_min,
+   custom_fajr_angle, custom_isha_angle, or per-prayer adhan_offset_min[]:
+   congregational times are mosque-specific and are configured separately.
    Persists the affected fields to NVS. */
 esp_err_t svc_config_apply_preset(svc_config_preset_t preset);
 
@@ -253,9 +276,16 @@ esp_err_t svc_config_apply_preset(svc_config_preset_t preset);
    Returns NULL for any unrecognized preset, so a caller can skip the
    TZ application.
 
-   UK and UK_MOONSIGHTING -> "GMT0BST,M3.5.0/1,M10.5.0" (GMT + BST).
-   PAKISTAN -> "PKT-5" (Pakistan Standard Time, UTC+5, no DST).
-   POSIX TZ strings use inverted sign: -5 means 5 hours east of UTC. */
+   Horsham / Crawley / London -> "GMT0BST,M3.5.0/1,M10.5.0" (GMT + BST).
+   Lahore / Bahawalpur -> "PKT-5" (Pakistan Standard Time, UTC+5, no DST).
+   Penang -> "MYT-8" (UTC+8, no DST).
+   Jeddah -> "AST-3" (UTC+3, no DST).
+   Toronto / New Jersey -> "EST5EDT,M3.2.0,M11.1.0" (US DST rules).
+   POSIX TZ strings use inverted sign: -5 means 5 hours east of UTC.
+
+   Note: set_defaults() cannot set the timezone (svc_time owns it), but
+   svc_time's own factory default is already the UK string, so a fresh
+   device boots on Horsham time correctly. */
 const char *svc_config_preset_timezone(svc_config_preset_t preset);
 
 esp_err_t svc_config_set_adhan_mode(svc_config_adhan_mode_t mode);

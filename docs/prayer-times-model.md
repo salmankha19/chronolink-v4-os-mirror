@@ -20,7 +20,7 @@ Covers:
 - the five time concepts (astronomical, adhan, jamat, auxiliary, Ramadan)
 - the seasonal jamat model (anchors, offsets, rounding)
 - the season split (two fixed dates)
-- named presets (UK, Pakistan)
+- city presets (nine cities; Horsham, UK is the factory default)
 - tomorrow's jamat (for change-notification)
 - the layer responsibilities and the published API shape
 - the pre-5.1a migration path
@@ -279,25 +279,44 @@ the jamat shift by an hour, together, exactly as the mosque expects.
 
 A preset is a **bundle of configuration values** that seeds a fresh
 device (or reconfigures an existing one) to a known-good baseline for a
-region. Presets live in `svc_config.c`, applied via
-`svc_config_apply_preset()`.
+city. Presets live in `svc_config.c` (`k_city_presets[]`), applied via
+`svc_config_apply_preset()`, and are mirrored in `www/index.html` so the
+Quick Setup dropdown can fill the form without a round trip.
 
-| Preset | Method | Madhab | Notes |
-|---|---|---|---|
-| `SVC_CONFIG_PRESET_UK` (factory default) | MWL | Standard | Fajr `SUNRISE_MINUS` 45 winter / disabled summer. Dhuhr +70 / +25. |
-| `SVC_CONFIG_PRESET_PAKISTAN` | Karachi | Hanafi | Fajr +20 both seasons. Dhuhr +70 both. |
-| `SVC_CONFIG_PRESET_UK_MOONSIGHTING` | Moonsighting | Standard | Same jamat rules as UK, but Moonsighting method (adhan-js parity). |
+| # | Preset | Location (lat, lon) | TZ (POSIX) | Method | High-lat | Madhab | Hijri |
+|---|---|---|---|---|---|---|---|
+| 0 | `SVC_CONFIG_PRESET_HORSHAM_UK` (factory default) | 51.062, -0.3273 | `GMT0BST,M3.5.0/1,M10.5.0` | Moonsighting | Auto | Standard | Kuwaiti |
+| 1 | `SVC_CONFIG_PRESET_CRAWLEY_UK` | 51.131, -0.1865 | `GMT0BST,M3.5.0/1,M10.5.0` | Moonsighting | Auto | Standard | Kuwaiti |
+| 2 | `SVC_CONFIG_PRESET_LONDON_UK` | 51.507, -0.1276 | `GMT0BST,M3.5.0/1,M10.5.0` | MWL | Auto | Standard | Kuwaiti |
+| 3 | `SVC_CONFIG_PRESET_LAHORE_PK` | 31.520, 74.3587 | `PKT-5` | Karachi | None | Hanafi | Kuwaiti |
+| 4 | `SVC_CONFIG_PRESET_BAHAWALPUR_PK` | 29.395, 71.6833 | `PKT-5` | Karachi | None | Hanafi | Kuwaiti |
+| 5 | `SVC_CONFIG_PRESET_PENANG_MY` | 5.4164, 100.3327 | `MYT-8` | Karachi | None | Standard | Kuwaiti |
+| 6 | `SVC_CONFIG_PRESET_JEDDAH_SA` | 21.485, 39.1925 | `AST-3` | Umm al-Qura | None | Standard | Umm al-Qura |
+| 7 | `SVC_CONFIG_PRESET_TORONTO_CA` | 43.653, -79.3832 | `EST5EDT,M3.2.0,M11.1.0` | ISNA | Auto | Standard | Kuwaiti |
+| 8 | `SVC_CONFIG_PRESET_NEW_JERSEY_US` | 40.058, -74.4057 | `EST5EDT,M3.2.0,M11.1.0` | ISNA | Auto | Hanafi | Kuwaiti |
 
-**A preset touches:** `method`, `madhab`, `high_lat_rule`, `jamat[]`,
-`season`. **A preset does not touch:** `location_name`, `latitude`,
-`longitude`, `adhan_mode`, `adhan_volume`, `brightness_mode`,
-`auto_brightness`, `night_lamp_enable`, `zawal_buffer_min`, or the
-per-prayer `adhan_offset_min[]`. Location data and display preferences
-survive a preset change.
+**A preset touches:** `latitude`, `longitude`, `location_valid`, `method`,
+`madhab`, `high_lat_rule`, `hijri_calc_method`, `hijri_offset_days`, and
+`location_name` **only when it is empty** (a stored mosque name survives a
+preset change).
+
+**A preset does not touch:** `jamat[]`, `season`, `adhan_offset_min[]`,
+`iqamah_offset_min[]`, `adhan_mode`, `adhan_volume`, `brightness_mode`,
+`auto_brightness`, `night_lamp_enable`, `zawal_buffer_min`, or the custom
+Fajr/Isha angles. Congregational times are mosque-specific: the installer
+sets them after choosing a city, so applying a preset can never silently
+overwrite a published timetable.
+
+**Factory default** (`set_defaults()`): the Horsham preset, so an
+NVS-erased board boots with `location_valid == true` and produces prayer
+times as soon as the RTC is trusted. Jamat anchors are `DISABLED` and
+adhan margins are 0 until the installer configures them. The timezone is
+`svc_time`'s own default, which is already the UK POSIX string, so the
+default location and the default zone agree.
 
 Presets are not templates in the `Method.hpp` sense. `Method` captures
 *which algorithm to run* (angles, intervals). A preset captures
-*reasonable starting values for a region* across several unrelated
+*reasonable starting values for a city* across several unrelated
 fields. There is no preset registry in the engine — presets are pure
 data in `svc_config.c`.
 
@@ -391,6 +410,15 @@ user saves config, the server returns 409 unless the client sends
 other value, including an over-length value that triggers
 `ESP_ERR_HTTPD_RESULT_TRUNC`, returns 400. The web UI shows a
 `confirm()` before that POST and sends `true` on confirmation.
+
+**Web UI wording.** The Prayer Timetable card asks the operator to save the
+configuration **before** uploading a file, states that any settings saved
+after an upload apply to the uploaded timetable (fields the file omits are
+computed on read, per the paragraph above), and repeats the ordering advice
+so a custom timetable is preserved. The card deliberately does not expose
+internal distinctions (firmware vs. user file, regeneration triggers); those
+are recorded here. The text is plain HTML in `www/index.html`; no endpoint
+behaviour depends on it.
 
 **Concurrency (PR 4).** All state reads and writes go through a mutex
 internal to `svc_timetable`; the public accessors are safe to call from
@@ -739,9 +767,18 @@ request returns 400 with `partial_apply`. Exposed in the web UI
 
 ### 10.3 `POST /api/config/preset`
 
-Body `{"preset": 0}` (UK, MWL), `{"preset": 1}` (Pakistan, Karachi), or
-`{"preset": 2}` (UK Moonsighting). Applies preset, triggers immediate
-recalculation, returns `{"status":"ok"}`.
+Body `{"preset": N}` where N is 0..8 (see the table in section 5; 0 is
+Horsham, UK, the factory default). Applies the city preset, applies the
+preset's POSIX timezone (`svc_config_preset_timezone()` ->
+`svc_time_set_timezone_posix()`), triggers immediate recalculation, and
+returns `{"status":"ok"}`. A missing, non-integral or out-of-range value
+returns 400 `Invalid preset`. The web UI calls this from the Quick Setup
+dropdown (`#quick-setup-city`).
+
+The index order is an API contract: appending a city is safe, reordering
+or removing one is not. It is not persisted anywhere -- only the resulting
+field values are stored in NVS -- so a renumbering survives a reboot
+without migration, but breaks clients holding old indices.
 
 ---
 
@@ -777,6 +814,7 @@ reference this document rather than re-deriving the model.
 | **5.1b** | Editable web UI (per-prayer winter/summer columns, season date pickers, preset dropdown) | Implemented in this PR |
 | **5.2** | Moonsighting Committee method (port adhan-js seasonal tables) | Implemented in this PR |
 | **5.3** | `SVC_PRAYER_METHOD_CUSTOM` with user-editable Fajr/Isha angles | Implemented in this PR |
+| **quick-setup** | City presets (nine cities), Horsham factory default, Quick Setup dropdown; presets no longer carry jamat/season | Implemented 2026-11-22 |
 
 ---
 

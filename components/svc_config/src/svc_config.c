@@ -68,104 +68,99 @@ static const char *const k_iqamah_keys[SVC_CONFIG_PRAYER_COUNT] = {
     "iqamah_isha",
 };
 
-/* Helper: set one prayer's jamat for both seasons. */
-static void preset_jamat_both(jamat_per_prayer_cfg_t *j,
-                              svc_config_jamat_anchor_t w_anchor, uint16_t w_off,
-                              svc_config_jamat_anchor_t s_anchor, uint16_t s_off,
-                              uint8_t round_min)
-{
-    j->winter.anchor     = (uint8_t)w_anchor;
-    j->winter.offset_min = w_off;
-    j->summer.anchor     = (uint8_t)s_anchor;
-    j->summer.offset_min = s_off;
-    j->round_min         = round_min;
-}
+/* Quick Setup city presets. See docs/prayer-times-model.md section 5 and
+   the enum comment in svc_config.h.
 
-/* UK preset. Fajr uses SUNRISE_MINUS (45 min before sunrise) in winter
-   and is DISABLED in summer (sunrise too early). Dhuhr winter +70,
-   summer +25 so jamat lands ~13:15-13:30 year-round. Maghrib round 2. */
-static void apply_uk_preset(svc_config_t *c)
-{
-    c->method        = SVC_CONFIG_METHOD_MWL;
-    c->madhab        = SVC_CONFIG_MADHAB_STANDARD;
-    c->high_lat_rule = 0;
+   A preset seeds the fields that are a property of the *region*: location,
+   calculation method, high-latitude rule, Asr madhab and the Hijri options.
+   It deliberately does NOT set adhan_offset_min[] or jamat[]/season: those
+   belong to the mosque, not to the city, and a preset must never silently
+   overwrite a published timetable.
 
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_FAJR],
-                      SVC_CONFIG_JAMAT_SUNRISE_MINUS, 45,
-                      SVC_CONFIG_JAMAT_DISABLED,      0, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_DHUHR],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 70,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 25, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_ASR],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_MAGHRIB],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 3,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 3, 2);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_ISHA],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15, 5);
+   high_lat_rule uses svc_prayer_highlat_t: 0 = AUTO (fall back to
+   middle-of-the-night when twilight is absent), 1 = NONE. High-latitude
+   cities get AUTO; the low-latitude ones need no rule.
 
-    c->season.summer_start_month = 3;
-    c->season.summer_start_day   = 25;
-    c->season.winter_start_month = 10;
-    c->season.winter_start_day   = 25;
+   posix_tz is what svc_config_preset_timezone() hands to svc_time.
 
-    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
-        c->iqamah_offset_min[i] = c->jamat[i].winter.offset_min;
-    }
-}
+   Keep this table in sync with CITY_PRESETS in
+   components/svc_http/www/index.html, which mirrors it so the Quick Setup
+   dropdown can fill the form before (and without) a round trip. */
+typedef struct {
+    const char         *name;         /* seeds an empty location_name */
+    double              latitude;
+    double              longitude;
+    const char         *posix_tz;
+    svc_config_method_t method;
+    svc_config_madhab_t madhab;
+    uint8_t             high_lat_rule;
+    uint8_t             hijri_method;      /* 0 = Kuwaiti, 1 = Umm al-Qura */
+    int8_t              hijri_offset_days;
+} city_preset_t;
 
-/* Pakistan preset. Karachi method, Hanafi madhab. Dhuhr jamat is a
-   fixed 13:30 clock time in practice; expressed here as ADHAN_PLUS +70
-   because astronomical Dhuhr is ~12:20 there. Same offset both seasons
-   (Pakistan has no DST, so the mosque notice doesn't switch). */
-static void apply_pakistan_preset(svc_config_t *c)
-{
-    c->method        = SVC_CONFIG_METHOD_KARACHI;
-    c->madhab        = SVC_CONFIG_MADHAB_HANAFI;
-    c->high_lat_rule = 0;
+static const city_preset_t k_city_presets[SVC_CONFIG_PRESET_COUNT] = {
+    [SVC_CONFIG_PRESET_HORSHAM_UK] = {
+        "Horsham, UK", 51.062, -0.3273, "GMT0BST,M3.5.0/1,M10.5.0",
+        SVC_CONFIG_METHOD_MOONSIGHTING, SVC_CONFIG_MADHAB_STANDARD, 0, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_CRAWLEY_UK] = {
+        "Crawley, UK", 51.131, -0.1865, "GMT0BST,M3.5.0/1,M10.5.0",
+        SVC_CONFIG_METHOD_MOONSIGHTING, SVC_CONFIG_MADHAB_STANDARD, 0, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_LONDON_UK] = {
+        "London, UK", 51.507, -0.1276, "GMT0BST,M3.5.0/1,M10.5.0",
+        SVC_CONFIG_METHOD_MWL, SVC_CONFIG_MADHAB_STANDARD, 0, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_LAHORE_PK] = {
+        "Lahore, Pakistan", 31.520, 74.3587, "PKT-5",
+        SVC_CONFIG_METHOD_KARACHI, SVC_CONFIG_MADHAB_HANAFI, 1, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_BAHAWALPUR_PK] = {
+        "Bahawalpur, Pakistan", 29.395, 71.6833, "PKT-5",
+        SVC_CONFIG_METHOD_KARACHI, SVC_CONFIG_MADHAB_HANAFI, 1, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_PENANG_MY] = {
+        "Penang, Malaysia", 5.4164, 100.3327, "MYT-8",
+        SVC_CONFIG_METHOD_KARACHI, SVC_CONFIG_MADHAB_STANDARD, 1, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_JEDDAH_SA] = {
+        "Jeddah, Saudi Arabia", 21.485, 39.1925, "AST-3",
+        SVC_CONFIG_METHOD_UMM_AL_QURA, SVC_CONFIG_MADHAB_STANDARD, 1, 1, 0,
+    },
+    [SVC_CONFIG_PRESET_TORONTO_CA] = {
+        "Toronto, Canada", 43.653, -79.3832, "EST5EDT,M3.2.0,M11.1.0",
+        SVC_CONFIG_METHOD_ISNA, SVC_CONFIG_MADHAB_STANDARD, 0, 0, 0,
+    },
+    [SVC_CONFIG_PRESET_NEW_JERSEY_US] = {
+        "New Jersey, USA", 40.058, -74.4057, "EST5EDT,M3.2.0,M11.1.0",
+        SVC_CONFIG_METHOD_ISNA, SVC_CONFIG_MADHAB_HANAFI, 0, 0, 0,
+    },
+};
 
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_FAJR],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 20,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 20, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_DHUHR],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 70,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 70, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_ASR],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15, 5);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_MAGHRIB],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 3,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 3, 2);
-    preset_jamat_both(&c->jamat[SVC_CONFIG_PRAYER_ISHA],
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15,
-                      SVC_CONFIG_JAMAT_ADHAN_PLUS, 15, 5);
-
-    c->season.summer_start_month = 3;
-    c->season.summer_start_day   = 25;
-    c->season.winter_start_month = 10;
-    c->season.winter_start_day   = 25;
-
-    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
-        c->iqamah_offset_min[i] = c->jamat[i].winter.offset_min;
-    }
-}
-
-static void apply_uk_moonsighting_preset(svc_config_t *c)
-{
-    apply_uk_preset(c);
-    c->method = SVC_CONFIG_METHOD_MOONSIGHTING;
-}
-
+/* Copy one city preset into the cache. Caller holds the lock, or is still
+   single-threaded (set_defaults() from svc_config_start()). */
 static void apply_preset_unlocked(svc_config_t *c, svc_config_preset_t preset)
 {
-    switch (preset) {
-    case SVC_CONFIG_PRESET_PAKISTAN:        apply_pakistan_preset(c);        break;
-    case SVC_CONFIG_PRESET_UK_MOONSIGHTING: apply_uk_moonsighting_preset(c); break;
-    case SVC_CONFIG_PRESET_UK:
-    default:                                apply_uk_preset(c);              break;
+    const city_preset_t *p = &k_city_presets[preset];
+
+    c->latitude       = p->latitude;
+    c->longitude      = p->longitude;
+    c->location_valid = true;
+
+    /* A city name is a placeholder, not a mosque name: only seed it when
+       the installer has not chosen one. */
+    if (c->location_name[0] == '\0') {
+        snprintf(c->location_name, sizeof(c->location_name), "%s", p->name);
     }
+
+    c->method            = p->method;
+    c->madhab            = p->madhab;
+    c->high_lat_rule     = p->high_lat_rule;
+    c->hijri_calc_method = p->hijri_method;
+    c->hijri_offset_days = p->hijri_offset_days;
+
+    ESP_LOGI(TAG, "preset %d: %s, tz '%s'",
+             (int)preset, p->name, p->posix_tz);
 }
 
 /* The POSIX TZ string a preset implies. #132 (R4): svc_time owns the
@@ -176,21 +171,14 @@ static void apply_preset_unlocked(svc_config_t *c, svc_config_preset_t preset)
 
    POSIX TZ strings use inverted sign: "PKT-5" means UTC+5, no DST. UK
    gets "GMT0BST,M3.5.0/1,M10.5.0" (GMT + British Summer Time, last
-   Sunday of March 01:00 -> last Sunday of October). Pakistan Standard
-   Time has no DST -- one fixed offset all year. */
+   Sunday of March 01:00 -> last Sunday of October). The string lives in
+   k_city_presets[] so no preset can carry a location without a zone. */
 const char *svc_config_preset_timezone(svc_config_preset_t preset)
 {
-    switch (preset) {
-    case SVC_CONFIG_PRESET_UK:
-        return "GMT0BST,M3.5.0/1,M10.5.0";
-    case SVC_CONFIG_PRESET_PAKISTAN:
-        return "PKT-5";
-    case SVC_CONFIG_PRESET_UK_MOONSIGHTING:
-        return "GMT0BST,M3.5.0/1,M10.5.0";
-    case SVC_CONFIG_PRESET_COUNT:
-    default:
+    if ((unsigned)preset >= (unsigned)SVC_CONFIG_PRESET_COUNT) {
         return NULL;
     }
+    return k_city_presets[preset].posix_tz;
 }
 
 bool svc_config_round_min_is_valid(uint8_t round_min)
@@ -203,27 +191,35 @@ bool svc_config_round_min_is_valid(uint8_t round_min)
     }
 }
 
-/* Factory defaults = UK preset, on top of the non-jamat fields. */
+/* Factory defaults = the Horsham, UK city preset, so an unconfigured clock
+   has a valid location (location_valid) and produces prayer times as soon
+   as the RTC is trusted -- no input needed out of the box. The timezone is
+   svc_time's own default, which is already the UK POSIX TZ string.
+
+   Everything mosque-specific stays neutral: jamat anchors are DISABLED and
+   the adhan margins are 0, because a city preset must not invent
+   congregational times. The season dates keep the UK 25 Mar / 25 Oct
+   default (they only matter once a jamat anchor is configured) and match
+   the initial values of the web form. */
 static void set_defaults(svc_config_t *c)
 {
     memset(c, 0, sizeof(*c));
-    c->location_valid    = false;
-    c->method            = SVC_CONFIG_METHOD_MWL;
-    c->madhab            = SVC_CONFIG_MADHAB_STANDARD;
+
     c->custom_fajr_angle = 18.0;
     c->custom_isha_angle = 18.0;
     c->adhan_mode        = SVC_CONFIG_ADHAN_OFF;
     c->adhan_volume      = 70;
     c->brightness_mode   = 0;
-    c->high_lat_rule     = 0;
     c->zawal_buffer_min  = 10;
-    for (int i = 0; i < SVC_CONFIG_PRAYER_COUNT; i++) {
-        c->adhan_offset_min[i] = 0;
-    }
     c->auto_brightness   = false;
     c->night_lamp_enable = false;
-    c->hijri_calc_method = 1;
-    apply_preset_unlocked(c, SVC_CONFIG_PRESET_UK);
+
+    c->season.summer_start_month = 3;
+    c->season.summer_start_day   = 25;
+    c->season.winter_start_month = 10;
+    c->season.winter_start_day   = 25;
+
+    apply_preset_unlocked(c, SVC_CONFIG_PRESET_HORSHAM_UK);
 }
 
 /* --------------------------------------------------------------------------
@@ -260,6 +256,14 @@ static esp_err_t persist_i32(const char *key, int32_t v)
 {
     if (!s_nvs_open) return ESP_ERR_NVS_NOT_INITIALIZED;
     esp_err_t err = nvs_set_i32(s_nvs, key, v);
+    if (err == ESP_OK) err = nvs_commit(s_nvs);
+    return err;
+}
+
+static esp_err_t persist_i8(const char *key, int8_t v)
+{
+    if (!s_nvs_open) return ESP_ERR_NVS_NOT_INITIALIZED;
+    esp_err_t err = nvs_set_i8(s_nvs, key, v);
     if (err == ESP_OK) err = nvs_commit(s_nvs);
     return err;
 }
@@ -882,31 +886,28 @@ esp_err_t svc_config_apply_preset(svc_config_preset_t preset)
 
     apply_preset_unlocked(&s_cache, preset);
 
-    /* Persist everything the preset touches. Failures are non-fatal:
-       the RAM cache is already correct, and a subsequent svc_config_set_*
-       call will re-persist. */
+    /* Persist everything the preset touches -- location included, so the
+       choice survives a reboot. Failures are non-fatal: the RAM cache is
+       already correct, and a subsequent svc_config_set_* call will
+       re-persist. */
+    int32_t lat_udeg = (int32_t)(s_cache.latitude * 1000000.0 +
+                                 (s_cache.latitude >= 0 ? 0.5 : -0.5));
+    int32_t lon_udeg = (int32_t)(s_cache.longitude * 1000000.0 +
+                                 (s_cache.longitude >= 0 ? 0.5 : -0.5));
+
+    (void)persist_i32(NVS_KEY_LAT_UDEG, lat_udeg);
+    (void)persist_i32(NVS_KEY_LON_UDEG, lon_udeg);
+    (void)persist_str(NVS_KEY_LOCATION_NAME, s_cache.location_name);
+
     (void)persist_u8(NVS_KEY_METHOD,   (uint8_t)s_cache.method);
     (void)persist_u8(NVS_KEY_MADHAB,   (uint8_t)s_cache.madhab);
     (void)persist_u8(NVS_KEY_HIGH_LAT, s_cache.high_lat_rule);
 
-    for (int p = 0; p < SVC_CONFIG_PRAYER_COUNT; p++) {
-        char key[24];
-        snprintf(key, sizeof(key), "%s%d", NVS_KEY_JAMAT_ANCHOR_W, p);
-        (void)persist_u8(key, s_cache.jamat[p].winter.anchor);
-        snprintf(key, sizeof(key), "%s%d", NVS_KEY_JAMAT_ANCHOR_S, p);
-        (void)persist_u8(key, s_cache.jamat[p].summer.anchor);
-        snprintf(key, sizeof(key), "%s%d", NVS_KEY_JAMAT_OFF_W, p);
-        (void)persist_u16(key, s_cache.jamat[p].winter.offset_min);
-        snprintf(key, sizeof(key), "%s%d", NVS_KEY_JAMAT_OFF_S, p);
-        (void)persist_u16(key, s_cache.jamat[p].summer.offset_min);
-        snprintf(key, sizeof(key), "%s%d", NVS_KEY_JAMAT_ROUND, p);
-        (void)persist_u8(key, s_cache.jamat[p].round_min);
-        (void)persist_u16(k_iqamah_keys[p], s_cache.jamat[p].winter.offset_min);
-    }
-    (void)persist_u8(NVS_KEY_SEASON_SUMMER_M, s_cache.season.summer_start_month);
-    (void)persist_u8(NVS_KEY_SEASON_SUMMER_D, s_cache.season.summer_start_day);
-    (void)persist_u8(NVS_KEY_SEASON_WINTER_M, s_cache.season.winter_start_month);
-    (void)persist_u8(NVS_KEY_SEASON_WINTER_D, s_cache.season.winter_start_day);
+    (void)persist_u8(NVS_KEY_HIJRI_METHOD, s_cache.hijri_calc_method);
+    (void)persist_i8(NVS_KEY_HIJRI_OFFSET, s_cache.hijri_offset_days);
+
+    /* jamat[], season and the adhan margins are NOT part of a preset:
+       mosque timings survive a city change untouched (see svc_config.h). */
 
     lock_give();
     return ESP_OK;

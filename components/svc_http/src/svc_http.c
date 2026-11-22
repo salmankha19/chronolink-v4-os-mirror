@@ -1163,7 +1163,7 @@ static esp_err_t post_preset_handler(httpd_req_t *req)
     /* #128 (R7b): reject non-integral (1.5) and out-of-range before the
        enum cast; the previous valueint path silently truncated 1.5 -> 1.
        The upper bound tracks SVC_CONFIG_PRESET_COUNT automatically, so
-       adding a fourth preset needs no change here. */
+       adding a city needs no change here. */
     double preset_v = 0.0;
     if (json_get_uint_range(preset, 0,
                             (double)(SVC_CONFIG_PRESET_COUNT - 1), &preset_v)) {
