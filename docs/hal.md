@@ -46,9 +46,12 @@ typedef enum {
 
 1. `pdl_board_init` - **fatal on failure**
 2. `HAL_GPIO_Init()`
-3. `HAL_I2C_Init()` - skipped if pins invalid
+3. `HAL_I2C_Init()` - **fails cleanly if a `pdl_pins.h` pin is invalid**
+   (`-1`, or outside `0..GPIO_NUM_MAX-1`). No fallback pins are
+   substituted; the error is logged, the bus stays down, and the boot
+   continues with the RTC and I2C sensors skipped
 4. `HAL_SPI_Init()` - **fatal on failure**
-5. `HAL_RTC_Init()` - soft-fail if no DS3231M
+5. `HAL_RTC_Init()` - soft-fail if no DS3231M; skipped when I2C is down
 6. `HAL_Display_Init()` - **fatal on configured backend failure**
 7. Sensor registration (per `pdl_capabilities.h`) + `HAL_Sensors_Init()`
 8. `HAL_Audio_Init()` - failure logged and ignored

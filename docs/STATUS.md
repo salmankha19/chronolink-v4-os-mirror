@@ -589,12 +589,13 @@ Verify each against hardware or datasheet before fixing.
    gain / integration config. Verify against the datasheet.
 2. **I2C frequency** setting is ignored (driver defaults to 400 kHz,
    Kconfig says 100 kHz).
-3. **I2C fallback pins** (18/17) are a last-resort runtime bailout used
-   only if both BOARD_I2C_* and PDL_PIN_I2C_* resolve to invalid GPIOs.
-   The values now match pdl_pins.h, so a bailout lands on the correct
-   pads, but the correct long-term behavior is to fail cleanly instead
-   of silently substituting pins. Audio fallbacks were removed in PR 3
-   (they were dead -- the HAL audio driver reads pdl_pins.h directly).
+3. **I2C fallback pins are gone (resolved).** `HAL_I2C_Init()` used to substitute
+   GPIO 18/17 when both `BOARD_I2C_*` and `PDL_PIN_I2C_*` resolved to
+   invalid GPIOs. It now reads SDA/SCL from `pdl_pins.h` only and, when
+   either pin is invalid (`-1`, or outside `0..GPIO_NUM_MAX-1`), logs
+   with `ESP_LOGE`, marks the bus disabled and returns `HAL_ERR_INIT`.
+   `HAL_Init()` treats that as non-fatal: the clock boots, `HAL_RTC_Init()`
+   and `HAL_Sensors_Init()` are skipped, and time comes from NTP.
 4. **Backlight** is switched on in `pdl_board_init`, before the panel
    is initialised.
 5. **SD_CS (IO9)** is never driven high, so it may float on the
