@@ -308,10 +308,14 @@ to begin a 3 s hold. A factory reset is now requested only through
    pins, SPI pins, display DC/RST/BL, optional RTC INT).
    **Failure is fatal.**
 2. `HAL_GPIO_Init()`
-3. `HAL_I2C_Init()` — skipped with a warning if the pins are invalid.
+3. `HAL_I2C_Init()` — pins come from `pdl_pins.h` only. An invalid
+   SDA/SCL (`-1`, or outside `0..GPIO_NUM_MAX-1`) logs an error and
+   leaves the bus down; nothing is substituted. **Not fatal:** the boot
+   continues, and `HAL_RTC_Init()` / `HAL_Sensors_Init()` are skipped.
 4. `HAL_SPI_Init()` — sole owner of the shared SPI bus.
    **Fatal on failure.**
-5. `HAL_RTC_Init()` — soft-fails if no DS3231M answers.
+5. `HAL_RTC_Init()` — soft-fails if no DS3231M answers; skipped
+   entirely when the I2C bus is down.
 6. `HAL_Display_Init()` — headless build returns `HAL_OK`; a
    configured backend that fails to init is **fatal**.
 7. Register sensor drivers present on this board (per

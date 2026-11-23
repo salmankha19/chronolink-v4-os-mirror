@@ -22,8 +22,6 @@
 // #include "hal_gfx.h"
 #endif
 
-bool valid_gpio(int pin);
-
 #ifdef CONFIG_DEBUG_DISPLAY_CAPS
 #include "esp_log.h"
 
@@ -86,16 +84,14 @@ hal_status_t HAL_Init(void)
     /* GPIO is foundational; treat failure as fatal */
     HAL_GPIO_Init();
 
-    /* I2C */
-    if (valid_gpio(PDL_PIN_I2C_SCL) && valid_gpio(PDL_PIN_I2C_SDA)) {
-        hs = HAL_I2C_Init();
-        if (hs != HAL_OK) {
-            ESP_LOGE(TAG, "HAL_I2C_Init failed (%d)", (int)hs);
-            return hs;
-        }
-    } else {
-        ESP_LOGW(TAG, "Skipping I2C init due to invalid pins SCL=%d SDA=%d",
-                 PDL_PIN_I2C_SCL, PDL_PIN_I2C_SDA);
+    /* I2C. HAL_I2C_Init() takes SDA/SCL from pdl_pins.h and rejects invalid
+       pins itself -- no fallback pins are substituted. A failure here is
+       not fatal: the clock still runs (NTP supplies the time) and only the
+       RTC and the I2C sensors are left out below. */
+    hs = HAL_I2C_Init();
+    const bool i2c_ok = (hs == HAL_OK);
+    if (!i2c_ok) {
+        ESP_LOGE(TAG, "HAL_I2C_Init failed (%d) -- continuing without RTC/sensors", (int)hs);
     }
 
     /* SPI bus init. HAL_SPI_Init() is the single owner of the shared SPI
@@ -108,11 +104,16 @@ hal_status_t HAL_Init(void)
         return hs;
     }
 
-    /* RTC */
-    hs = HAL_RTC_Init();
-    if (hs != HAL_OK) {
-        ESP_LOGE(TAG, "HAL_RTC_Init failed (%d)", (int)hs);
-        return hs;
+    /* RTC (soft-fail: the system can run without one). Skipped when the
+       I2C bus never came up -- its probe would only repeat that failure. */
+    if (i2c_ok) {
+        hs = HAL_RTC_Init();
+        if (hs != HAL_OK) {
+            ESP_LOGE(TAG, "HAL_RTC_Init failed (%d)", (int)hs);
+            return hs;
+        }
+    } else {
+        ESP_LOGW(TAG, "Skipping HAL_RTC_Init: I2C bus unavailable");
     }
 
     /* ============================================================
@@ -184,10 +185,16 @@ hal_status_t HAL_Init(void)
     (void)HAL_Sensor_Register(&HAL_SENSOR_VEML7700_DRIVER);
 #endif
 
-    hs = HAL_Sensors_Init();
-    if (hs != HAL_OK) {
-        ESP_LOGE(TAG, "HAL_Sensors_Init failed (%d)", (int)hs);
-        return hs;
+    if (i2c_ok) {
+        hs = HAL_Sensors_Init();
+        if (hs != HAL_OK) {
+            ESP_LOGE(TAG, "HAL_Sensors_Init failed (%d)", (int)hs);
+            return hs;
+        }
+    } else {
+        /* Every driver registered above is an I2C part; probing them with
+           the bus down would only log one failure each. */
+        ESP_LOGW(TAG, "Skipping HAL_Sensors_Init: I2C bus unavailable");
     }
 
     /* Audio (optional). Not fatal if it fails — a clock without a working

@@ -1,7 +1,7 @@
 ﻿#include "hal_i2c.h"
-#include "board_pins.h"
 #include "pdl_pins.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -51,71 +51,50 @@ static inline void i2c_unlock(void)
 #define HAL_I2C_TIMEOUT_MS 100
 #endif
 
-/* Last-resort runtime fallback used only if both BOARD_I2C_* and
-   PDL_PIN_I2C_* resolve to invalid GPIOs (should never happen on this
-   PCB). Values match pdl_pins.h so that even a wrong-pin bailout
-   lands on the correct physical pads. The longer-term fix is to fail
-   cleanly instead of substituting different pins; tracked in
-   docs/STATUS.md. */
-
-#ifndef I2C_FALLBACK_SDA
-#define I2C_FALLBACK_SDA 18
-#endif
-
-#ifndef I2C_FALLBACK_SCL
-#define I2C_FALLBACK_SCL 17
-#endif
+/* The I2C pins come from the PDL (pdl_pins.h) and from nowhere else.
+   There is deliberately no runtime fallback: if the PDL reports the bus as
+   not populated (-1) or names a pad that cannot drive SDA/SCL, the HAL
+   reports the configuration error and leaves the bus down. Substituting
+   pins would mean driving a pad that belongs to another function on the
+   PCB. See docs/hal.md "Init order". */
 
 static bool is_valid_i2c_gpio(int pin)
 {
-    return GPIO_IS_VALID_GPIO(pin) && GPIO_IS_VALID_OUTPUT_GPIO(pin);
+    return pin >= 0 && pin < GPIO_NUM_MAX &&
+           GPIO_IS_VALID_GPIO(pin) && GPIO_IS_VALID_OUTPUT_GPIO(pin);
 }
 
-static bool hal_i2c_pins_valid(void)
+static bool hal_i2c_resolve_pins(void)
 {
-    if (is_valid_i2c_gpio(BOARD_I2C_SDA)) {
-        s_i2c_sda = BOARD_I2C_SDA;
-    } else if (is_valid_i2c_gpio(PDL_PIN_I2C_SDA)) {
-        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SDA=%d, fallback PDL_PIN_I2C_SDA=%d", BOARD_I2C_SDA, PDL_PIN_I2C_SDA);
-        s_i2c_sda = PDL_PIN_I2C_SDA;
-    } else {
-        ESP_LOGE("PINCHK", "Invalid BOARD/PDL I2C SDA (%d/%d), fallback to %d", BOARD_I2C_SDA, PDL_PIN_I2C_SDA, I2C_FALLBACK_SDA);
-        s_i2c_sda = I2C_FALLBACK_SDA;
-    }
-
-    if (is_valid_i2c_gpio(BOARD_I2C_SCL)) {
-        s_i2c_scl = BOARD_I2C_SCL;
-    } else if (is_valid_i2c_gpio(PDL_PIN_I2C_SCL)) {
-        ESP_LOGE("PINCHK", "Invalid BOARD_I2C_SCL=%d, fallback PDL_PIN_I2C_SCL=%d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL);
-        s_i2c_scl = PDL_PIN_I2C_SCL;
-    } else {
-        ESP_LOGI("PINDBG", "Invalid BOARD/PDL I2C SCL (%d/%d), fallback to %d", BOARD_I2C_SCL, PDL_PIN_I2C_SCL, I2C_FALLBACK_SCL);
-        s_i2c_scl = I2C_FALLBACK_SCL;
-    }
+    s_i2c_sda = PDL_PIN_I2C_SDA;
+    s_i2c_scl = PDL_PIN_I2C_SCL;
 
     if (!is_valid_i2c_gpio(s_i2c_sda) || !is_valid_i2c_gpio(s_i2c_scl)) {
-        ESP_LOGE("PINCHK", "Invalid effective I2C pins SDA=%d SCL=%d", s_i2c_sda, s_i2c_scl);
+        ESP_LOGE(TAG, "Invalid I2C pins from pdl_pins.h: SDA=%d SCL=%d "
+                      "(valid range 0..%d) -- refusing to initialise the bus",
+                 s_i2c_sda, s_i2c_scl, (int)(GPIO_NUM_MAX - 1));
         return false;
     }
 
-    ESP_LOGI("PINDBG", "I2C effective pins SDA=%d SCL=%d (BOARD_SDA=%d BOARD_SCL=%d)",
-             s_i2c_sda, s_i2c_scl, BOARD_I2C_SDA, BOARD_I2C_SCL);
+    ESP_LOGI(TAG, "I2C pins SDA=%d SCL=%d", s_i2c_sda, s_i2c_scl);
     return true;
 }
 
 hal_status_t HAL_I2C_Init(void)
 {
     if (i2c_disabled) {
-        return HAL_OK;
+        /* Pin validation failed on an earlier call. Stay failed: returning
+           HAL_OK here would tell callers a bus exists when it does not. */
+        return HAL_ERR_INIT;
     }
 
     if (i2c_ready) {
         return HAL_OK;
     }
 
-    if (!hal_i2c_pins_valid()) {
+    if (!hal_i2c_resolve_pins()) {
         i2c_disabled = true;
-        return HAL_OK;
+        return HAL_ERR_INIT;
     }
 
     if (!s_i2c_mutex) {
