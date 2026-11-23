@@ -598,52 +598,50 @@ Verify each against hardware or datasheet before fixing.
    and `HAL_Sensors_Init()` are skipped, and time comes from NTP.
 4. **Backlight** is switched on in `pdl_board_init`, before the panel
    is initialised.
-5. **SD_CS (IO9)** is never driven high, so it may float on the
-   shared SPI bus.
-6. **ST7796S backend** bypasses the `HAL_SPI` mutex and manages DC
+5. **ST7796S backend** bypasses the `HAL_SPI` mutex and manages DC
    itself.
-7. **Sensors:** failed probe is permanent; `HAL_Sensors_Init` always
+6. **Sensors:** failed probe is permanent; `HAL_Sensors_Init` always
    returns OK; SHT4x CRC not checked.
-8. **I2C** uses the legacy driver with deprecation checks
+7. **I2C** uses the legacy driver with deprecation checks
     suppressed, and lazy init is not under the lock. No bus recovery.
-9. **Audio:** stop/abort is cooperative only -- `HAL_Audio_Stop()` sets a
+8. **Audio:** stop/abort is cooperative only -- `HAL_Audio_Stop()` sets a
     flag that `HAL_Audio_Play()` polls between 1024-sample chunks (~23 ms
     at 44.1 kHz) -- and nothing calls it yet. `Play()` has no lock against
     `Stop()`/`Deinit()` on another task.
-10. **Display router:** custom SDK driver unreachable when a built-in
+9. **Display router:** custom SDK driver unreachable when a built-in
     backend is selected; mock replaces rather than adds; lock has no
     timeout.
-11. **HAL failure policy:** a display or SPI init failure aborts the
+10. **HAL failure policy:** a display or SPI init failure aborts the
     whole boot. Consider degrading instead (the clock should keep
     time).
-12. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
+11. **Build hygiene:** `IDF_PATH` include hacks in the HAL CMake,
     global `-I` in `platformio.ini`, coredump off.
-13. **main/Kconfig.projbuild `CONFIG_BOARD_AUDIO_*` entries are dead.**
+12. **main/Kconfig.projbuild `CONFIG_BOARD_AUDIO_*` entries are dead.**
     BOARD_AUDIO_I2S_BCLK, BOARD_AUDIO_I2S_WS, BOARD_AUDIO_I2S_DOUT,
     and BOARD_AUDIO_SD_MODE are not read by any driver. The HAL audio
     driver reads pins from pdl_pins.h (PDL_PIN_I2S_*), not from these
     Kconfig entries. Leave the entries in place for now (removing them
     changes the menuconfig menu tree and would need a migration note);
     either delete them or wire them into the HAL in a future PR.
-14. **NTP needs `CONFIG_LWIP_SNTP_MAX_SERVERS=3`.** `svc_time` configures
+13. **NTP needs `CONFIG_LWIP_SNTP_MAX_SERVERS=3`.** `svc_time` configures
     three servers (`time`/`ntp_server_0..2`); LwIP's SNTP keeps only
     `CONFIG_LWIP_SNTP_MAX_SERVERS` of them (default `1`) and drops the
     rest. Added to `sdkconfig.defaults` by PR 5b-2, but a stale
     `sdkconfig.single_mcu` silently keeps `1`; `svc_time` logs the clamp.
-15. **The `svc_time` tick relies on picolibc's `time()` / `localtime_r`**
+14. **The `svc_time` tick relies on picolibc's `time()` / `localtime_r`**
     (via the HRT systimer). DS3231M drift is not corrected during a boot
     unless NTP resyncs; the RTC is re-read every tick when present. A
     resync that IDF runs on its own 1 h cycle
     (`CONFIG_LWIP_SNTP_UPDATE_DELAY`) steps the system clock without
     updating the RTC, so the snapshot follows the RTC and does not see it;
     subscribe to `NETIF_SNTP_TIME_SYNC` or prefer `time()` if that matters.
-16. **HIL function names are unprefixed** (`rtc_*`, `i2c_*`, `spi_*`,
+15. **HIL function names are unprefixed** (`rtc_*`, `i2c_*`, `spi_*`,
     `gpio_*`, `display_*`, `audio_*`, `sensor_*`) and can collide with
     IDF internal symbols when first called. `rtc_init` collided with
     `esp_hw_support`'s `rtc_init` in PR 5b-2 and was renamed to
     `hil_rtc_init`. Rename the others with a `hil_` prefix when they are
     first called.
-17. **`DM_MAX_TEXT_LEN` was 8, which left no room for a NUL** on an 8-char
+16. **`DM_MAX_TEXT_LEN` was 8, which left no room for a NUL** on an 8-char
     string -- `"HH:MM:SS"` is exactly 8 -- so `font_engine_draw_text()`
     walked past the end of `arg.text.text` into the union and the next
     command. Latent, not theoretical: no caller of
@@ -652,11 +650,11 @@ Verify each against hardware or datasheet before fixing.
     accommodate the time-invalid banner text. Termination is still
     guaranteed (`dm_cmd_draw_text()` caps the copy at `DM_MAX_TEXT_LEN - 1`
     and always writes the NUL).
-18. **`display_manager/README.md` was stale** -- it claimed a lock-free
+17. **`display_manager/README.md` was stale** -- it claimed a lock-free
     queue and "8 slots x 512 bytes"; the code has a submit mutex and
     `DM_FRAME_QUEUE_DEPTH` 3 slots of `sizeof(dm_frame_t)`. Corrected in
     PR 6.
-19. **S1 ❌ WON'T FIX** -- `parse_file_at()`
+18. **S1 ❌ WON'T FIX** -- `parse_file_at()`
     (`components/svc_timetable/src/svc_timetable.c:222`) uses an
     unbounded `strstr(buf, "\"days\"")` to find the day array. It is
     theoretically fragile (a `"days"` literal inside an earlier value
@@ -781,6 +779,11 @@ Verify each against hardware or datasheet before fixing.
   latent-bug hardening. Build-verified only -- adding FreeRTOS stub
   headers to `prayer_host_tests` for a `static inline` in a header was
   judged not worth it.
+
+- **`SD_CS` (IO9) floating pin (Removed 2026-11-23):** Schematic
+  verification confirmed that R8 (10K pull-up to +3V3) holds the line high
+  by default. The previous "Known issues" entry was incorrect and has been
+  removed.
 
 ---
 
