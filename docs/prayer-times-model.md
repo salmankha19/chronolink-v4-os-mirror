@@ -317,10 +317,12 @@ persists the fields and applies that city's POSIX timezone. A rejected
 request (missing or wrong API token) leaves the form filled but unsaved, so
 the installer can still press Save by hand. The selection itself is not
 stored: a preset index is not a config field, so the control
-returns to its placeholder when the page reloads and `/api/config` stays the
-authoritative source. The name box is rewritten only when it is empty or
-still holds another preset's name -- a name the installer typed is never
-overwritten.
+returns to its placeholder when the page reloads, as soon as the installer
+edits any field the preset seeds (location name, latitude, longitude, method,
+high-latitude rule, madhab, Hijri options), or after a successful Save, and
+`/api/config` stays the authoritative source. The name box is rewritten only
+when it is empty or still holds another preset's name -- a name the installer
+typed is never overwritten.
 
 **Factory default** (`set_defaults()`): the Horsham preset, so an
 NVS-erased board boots with `location_valid == true` and produces prayer

@@ -656,6 +656,8 @@
         body: JSON.stringify(data)
       }).then(r => {
         if (handleResponse(r, "Configuration Saved!")) {
+          /* The saved values may differ from the selected city. */
+          clearPresetSelection();
           setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
         }
       });
@@ -790,6 +792,31 @@
       el.style.transition = 'background-color 0.6s';
       el.style.backgroundColor = '#d5f5e3';
       setTimeout(() => { el.style.backgroundColor = ''; }, 900);
+    }
+
+    /* Quick Setup dropdown hygiene. A preset name must not stay visible once
+       the installer edits a field the preset seeds, or once the form has been
+       saved, otherwise the dropdown claims a city that no longer describes
+       the stored configuration. These are exactly the ids applyQuickSetup()
+       writes; programmatic writes do not fire input/change events, so
+       loadConfig() and applyQuickSetup() never clear the dropdown themselves. */
+    const PRESET_SEEDED_INPUTS = ['loc_name', 'lat', 'lon', 'method', 'madhab',
+                                  'high_lat', 'hijri_method', 'hijri_offset'];
+
+    function clearPresetSelection() {
+      const sel = document.getElementById('quick-setup-city');
+      if (sel) sel.value = '';
+    }
+
+    /* 'input' covers text/number typing; 'change' covers <select> picks on
+       older browsers that do not emit input for selects. Both are idempotent. */
+    function watchPresetInputs() {
+      PRESET_SEEDED_INPUTS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', clearPresetSelection);
+        el.addEventListener('change', clearPresetSelection);
+      });
     }
 
     function applyQuickSetup() {
@@ -938,6 +965,7 @@
 
     // Load data on start
     updateTokenStatus();
+    watchPresetInputs();
     loadConfig();
     loadPrayers();
     loadTimetableMeta();

@@ -127,6 +127,10 @@ is hardware verification only — see "Open verification" in that ledger.
   authoritative source. Picking a city writes its name into `loc_name` when the
   box is empty or still holds another preset's name, so switching cities
   updates it while a name the installer typed (e.g. "Masjid") is preserved.
+  The dropdown also returns to its placeholder as soon as the installer edits
+  any field a preset seeds (`#loc_name`, latitude, longitude, method, madhab,
+  high-lat rule, Hijri method, Hijri offset) or saves the configuration
+  successfully, so a preset name never stays visible over manual overrides.
 - **Hijri date display (2026-11-15, numeric format):** `svc_config_get_hijri_date()`
   exposes the Islamic calendar to other layers; `svc_prayer_engine_service`
   populates `svc_prayer_engine_times_t.hijri_{year,month,day}` plus full
