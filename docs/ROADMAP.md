@@ -96,15 +96,20 @@ location and method, and does something at each.
 
 ## Phase 3 — Audio
 
-Goal: the adhan plays at prayer time.
+Goal: the adhan plays at prayer time. **Implemented (v1).**
 
-- `svc_audio` (new component): loads a WAV / raw PCM asset from
-  `/storage` and feeds `HAL_Audio_Play()` in chunks.
-- No MP3 decoder exists anywhere in the tree (`audio_play_mp3` returns
-  `false` by design). Either ship WAV assets or add a decoder
-  (Helix / minimp3) as its own PR.
-- Audio is already non-fatal: a failed `HAL_Audio_Init()` is logged and
-  boot continues.
+- `svc_audio` (new component): subscribes to `EVENT_PRAYER_TIME_REACHED`
+  (adhan tier only), decodes `/storage/adhan.mp3` and feeds
+  `audio_play_pcm()` in chunks. `adhan_mode` (OFF / FULL / SHORT) and
+  `adhan_volume` are read live from `svc_config` on every playback;
+  volume is applied as software PCM scaling because the MAX98357A has no
+  digital gain.
+- Decoder: `components/minimp3` (vendored, header-only, CC0). I2S is
+  initialised lazily per playback, so `HAL_Init()` no longer touches
+  audio. Design and failure classes: `docs/audio-adhan-design.md`.
+- Audio stays non-fatal: a missing asset, a dead amplifier or a corrupt
+  file is logged (and published as `EVENT_AUDIO_ERROR`) and never stops
+  the clock.
 
 ---
 

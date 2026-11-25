@@ -51,12 +51,23 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    defaults on failure), start `ui_producer`, start `svc_time` (reads
    the RTC, applies the POSIX timezone and subscribes to
    `EVENT_NETWORK_CONNECTED` -- it has to be up before `svc_network`
-   can publish one), start `svc_network` (non-fatal; a cold-boot
+   can publish one), load the year timetable, start
+   `svc_prayer_engine_service`, start `svc_network` (non-fatal; a cold-boot
    bring-up failure arms the bring-up retry ladder instead of leaving
-   the clock with no link -- see "WiFi recovery mode" below), optional
-   audio test, then idle. From then on `svc_time` ticks its snapshot once a
-   second (RTC when present, otherwise the libc clock once NTP has
-   synced), so the time it serves keeps advancing.
+   the clock with no link -- see "WiFi recovery mode" below), start
+   `svc_http`, then start `svc_audio` (only when `svc_http_start()`
+   returned `ESP_OK`, and before the scheduler so the first prayer event
+   already has a subscriber; non-fatal), then `svc_scheduler_init()` /
+   `svc_scheduler_start()`, then the optional audio test, then
+   `esp_ota_mark_app_valid_cancel_rollback()`, then idle. From then on
+   `svc_time` ticks its snapshot once a second (RTC when present,
+   otherwise the libc clock once NTP has synced), so the time it serves
+   keeps advancing.
+
+   **`svc_audio` does not touch audio during boot.** I2S is initialised
+   on its own task at the first adhan and deinitialised immediately
+   after, so the log line `MAX98357A I2S ready` belongs to the first
+   playback, not to the boot sequence (see "HAL_Init() order", step 8).
 
 Events can only be published after step 3.7; the event bus does not
 exist earlier. Steps 3.1–3.6 are observable on the serial log only.
@@ -321,7 +332,19 @@ to begin a 3 s hold. A factory reset is now requested only through
 7. Register sensor drivers present on this board (per
    `pdl_capabilities.h`), then `HAL_Sensors_Init()` (always returns
    `HAL_OK`; per-sensor failures are only logged).
-8. `HAL_Audio_Init()` — failure is logged and ignored.
+8. **Audio is NOT initialised here** (changed with `svc_audio` v1).
+   `HAL_Init()` used to call `HAL_Audio_Init()`, which left an enabled
+   I2S channel idle for the entire uptime. I2S is now brought up by
+   `svc_audio`'s task at the first playback and torn down as soon as the
+   playback ends, so there is no idle I2S instance and no
+   Play-vs-Deinit race between tasks. Consequences:
+   - `MAX98357A I2S ready` / `MAX98357A I2S deinitialized` appear around
+     an adhan, not at boot.
+   - A board with a dead amplifier fails at playback time
+     (`EVENT_AUDIO_ERROR`, stage=HAL_INIT) instead of logging a warning
+     during boot. Nothing in the boot path depends on audio.
+   - `CONFIG_AUDIO_TEST_ENABLE` (off by default) still drives the HAL
+     directly; it is a bench harness, not a boot step.
 
 ---
 

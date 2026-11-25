@@ -15,8 +15,8 @@
  *
  *   Stored only (no consumer yet -- persisted so the web UI can save
  *   them and a future component can honor them without a schema change):
- *     adhan_mode             -> svc_audio (Phase 3)
- *     adhan_volume           -> never on this PCB (fixed GAIN pin); future HW only
+ *     adhan_mode             -> svc_audio
+ *     adhan_volume           -> svc_audio (software PCM scaling)
  *     brightness_mode        -> backlight PWM HAL (separate PR)
  *     auto_brightness        -> backlight PWM + VEML7700 polling (separate PR)
  *     night_lamp_enable      -> full-screen warm fill + low backlight (separate PR)
@@ -159,7 +159,11 @@ typedef struct {
     season_cfg_t           season;
 
     svc_config_adhan_mode_t adhan_mode;
-    uint8_t  adhan_volume;          /* 0..100; no digital volume control on shipped PCB */
+    /* 0..100; software PCM scaling in svc_audio; 0=muted, 100=unity.
+       The MAX98357A has no digital volume control (fixed GAIN pin), so the
+       HAL reports HAL_ERR_DEV from HAL_Audio_SetVolume() and svc_audio scales
+       the decoded int16 samples itself. Sampled once per playback. */
+    uint8_t  adhan_volume;
     uint8_t  brightness_mode;       /* 0=daylight, 1=evening, 2=calm */
     /* 0=auto (default), 1=none, 2=middle, 3=seventh, 4=angle.
        AUTO uses seventh-of-night > 48° latitude (UK/Europe) to avoid

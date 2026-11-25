@@ -13,9 +13,10 @@
  *   7. svc_prayer_engine_service_start() — Prayer times + EVENT_PRAYER_TIMES_UPDATED
  *   8. svc_network_start()  — WiFi station; publishes EVENT_NETWORK_CONNECTED
  *   9. svc_http_start()     — HTTP server (REST + web UI + OTA)
- *  10. svc_scheduler_init/start() — 1 Hz prayer poll, EVENT_PRAYER_TIME_REACHED
- *  11. audio_test_init()    — Initialize audio (if enabled)
- *  12. esp_ota_mark_app_valid_cancel_rollback() — mark new OTA image valid
+ *  10. svc_audio_start()    — Adhan playback (after svc_http success)
+ *  11. svc_scheduler_init/start() — 1 Hz prayer poll, EVENT_PRAYER_TIME_REACHED
+ *  12. audio_test_init()    — Initialize audio (if enabled)
+ *  13. esp_ota_mark_app_valid_cancel_rollback() — mark new OTA image valid
  *      only after all services above are running (#129 R2: was previously
  *      called inside boot_manager_init(), before any service started).
  *
@@ -35,6 +36,7 @@
 #include "svc_timetable.h"
 #include "svc_scheduler.h"
 #include "svc_http.h"
+#include "svc_audio.h"
 
 #ifdef CONFIG_AUDIO_TEST_ENABLE
 #include "audio_test.h"
@@ -121,6 +123,22 @@ void app_main(void)
     esp_err_t http_err = svc_http_start();
     if (http_err != ESP_OK) {
         ESP_LOGW(TAG, "svc_http_start failed: %s", esp_err_to_name(http_err));
+    }
+
+    /* Adhan playback (svc_audio v1). Started on svc_http_start()'s SUCCESS
+       path and BEFORE svc_scheduler_init(), so the very first
+       EVENT_PRAYER_TIME_REACHED already has a subscriber (the same ordering
+       argument as svc_time -> svc_network). Non-fatal, exactly like
+       svc_scheduler_start(): a missing asset or a dead amp must never stop
+       the clock. No rollback gate here -- the CR #3 gate below stays on
+       http_err alone, because every other service degrades gracefully and
+       this one has no recovery role. */
+    if (http_err == ESP_OK) {
+        esp_err_t audio_err = svc_audio_start();
+        if (audio_err != ESP_OK) {
+            ESP_LOGW(TAG, "svc_audio_start failed: %s -- no adhan playback",
+                     esp_err_to_name(audio_err));
+        }
     }
 
     /* Prayer scheduler (PR 5.6). Runs after the prayer service so the first
