@@ -248,14 +248,15 @@ is hardware verification only — see "Open verification" in that ledger.
   `scheduler_logic.c` and its host tests are unchanged. The retry path fires
   only on a full bus, so it is CI build-verified only, not host-tested.
 - **`svc_audio` (v1, 2026-11-25):** adhan playback. One task
-  (`svc_audio`, 24 KB stack, `tskIDLE_PRIORITY + 3`, core 0) owns a
+  (`svc_audio`, 6 KB stack, `tskIDLE_PRIORITY + 3`, core 0) owns a
   4-slot queue and subscribes to `EVENT_PRAYER_TIME_REACHED` (97) via
   `event_bus_subscribe()`; it never drains the kernel queue. On an
   adhan-tier event it reads `adhan_mode` and `adhan_volume` live from
   `svc_config` (one snapshot per playback; volume is sampled once and
   never re-read mid-playback), decodes `/storage/adhan.mp3`
-  (44.1 kHz) with the vendored `minimp3`, downmixes stereo to mono,
-  applies software volume scaling (0 = muted, 100 = unity) and feeds
+  (44.1 kHz) with libhelix-mp3 (fixed-point, heap-resident state),
+  downmixes stereo to mono, applies software volume scaling (0 = muted,
+  100 = 0.70 of full scale; design AMEND-1) and feeds
   `audio_play_pcm()`. Modes: OFF (nothing touched), FULL (whole file),
   SHORT (`SVC_AUDIO_SHORT_DURATION_S` = 10 s of the same asset, counted
   in decoded samples; reaching the cap is a normal completion).
@@ -264,13 +265,19 @@ is hardware verification only — see "Open verification" in that ledger.
   I2S channel and no Play-vs-Deinit race. `HAL_Init()` no longer calls
   `HAL_Audio_Init()`; `MAX98357A I2S ready` now appears at the first
   adhan (PR changed `chronolink_hal/src/hal_init.c`, `docs/boot.md`).
-  **Failure classes:** 1 (asset absent) logs and emits nothing; 2a/2a'/2a''
-  (no frame, decode-context allocation, decoded rate != 44100) emit
-  `EVENT_AUDIO_ERROR` (stage=DECODE, partial=0) and deinit; 2b (read
-  error) stage=READ; 2c (mid-stream decode failure) stage=DECODE; 3a
-  (init failed) stage=HAL_INIT and **no deinit**; 3b
+  **Failure classes:** 1 (asset absent) logs and emits nothing; 1b
+  (`MP3InitDecoder()` returned NULL) and 2a' (decode-buffer allocation
+  failed) emit `EVENT_AUDIO_ERROR` (stage=DECODE, partial=0) with **no
+  deinit**, because both happen before `audio_init()`; 2a (no frame) and
+  2a'' (decoded rate != 44100) emit the same event and do deinit; 2b
+  (read error) stage=READ; 2c (mid-stream decode failure) stage=DECODE;
+  3a (init failed) stage=HAL_INIT and **no deinit**; 3b
   (`audio_play_pcm()` false) stage=HAL_WRITE. Deinit runs iff init
-  succeeded. Duplicate requests are logged and dropped after playback
+  succeeded; the per-playback decoder is freed iff `MP3InitDecoder()`
+  succeeded. Before deinit, >= 2 HAL DMA chunks of digital zeros are
+  written so the amplifier does not click (AMEND-2), and decode recovery
+  is bounded (8 non-productive decodes or 64 KB without a frame) so a
+  damaged file cannot hang the task. Duplicate requests are logged and dropped after playback
   (the queue is drained non-blocking), never played late. Publishes
   `EVENT_AUDIO_STARTED` (98) just before the first PCM write,
   `EVENT_AUDIO_COMPLETED` (99) after deinit, `EVENT_AUDIO_ERROR` (100)
@@ -610,7 +617,7 @@ escape hatch: `docs/boot.md`.
 | Remote display backend | returns `HAL_ERR_DEV`, sends nothing; Kconfig-gated behind `ALLOW_STUB_BACKENDS` |
 | `HAL_Audio_SetVolume` | returns `HAL_ERR_DEV`, does nothing. Volume is applied in software by `svc_audio` instead (see the `svc_audio` bullet above) |
 | `display_set_brightness` | always returns `false` |
-| `audio_play_mp3` (HIL) | always returns `false` — the HIL has no decoder. Adhan playback goes through `svc_audio` + `minimp3` + `audio_play_pcm()`; this stub stays so no caller believes the HIL decodes files |
+| `audio_play_mp3` (HIL) | always returns `false` — the HIL has no decoder. Adhan playback goes through `svc_audio` + libhelix-mp3 + `audio_play_pcm()`; this stub stays so no caller believes the HIL decodes files |
 | ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
 | Theme registry, web config | do not exist (the prayer scheduler landed in PR 5.6 -- see above) |
 | SD card | pin defined, no driver |

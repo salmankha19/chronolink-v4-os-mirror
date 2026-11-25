@@ -104,7 +104,9 @@ Goal: the adhan plays at prayer time. **Implemented (v1).**
   `adhan_volume` are read live from `svc_config` on every playback;
   volume is applied as software PCM scaling because the MAX98357A has no
   digital gain.
-- Decoder: `components/minimp3` (vendored, header-only, CC0). I2S is
+- Decoder: `chmorgan/esp-libhelix-mp3` ^1.0.3, declared in
+  `components/svc_audio/idf_component.yml` and fetched by the ESP component
+  manager (fixed-point Helix; no float in the playback path). I2S is
   initialised lazily per playback, so `HAL_Init()` no longer touches
   audio. Design and failure classes: `docs/audio-adhan-design.md`.
 - Audio stays non-fatal: a missing asset, a dead amplifier or a corrupt

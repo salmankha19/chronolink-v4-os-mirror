@@ -3,7 +3,8 @@
  *
  * ChronoLink V4 OS -- adhan playback service (v1)
  *
- * Plays ONE asset, /storage/adhan.mp3 (MP3, 44.1 kHz, mono), when
+ * Plays ONE asset, /storage/adhan.mp3 (MP3, 44.1 kHz; mono plays as-is and a
+ * stereo stream is downmixed to mono, because the I2S channel is mono), when
  * svc_scheduler publishes EVENT_PRAYER_TIME_REACHED (97) with
  * prayer_time_event_t.kind == PRAYER_KIND_ADHAN. Design and rationale:
  * docs/audio-adhan-design.md.
@@ -67,8 +68,8 @@ extern "C" {
    detail. These codes name the failing call. */
 #define SVC_AUDIO_ERR_INIT   (-1) /* audio_init() returned false              */
 #define SVC_AUDIO_ERR_WRITE  (-2) /* audio_play_pcm() returned false          */
-#define SVC_AUDIO_ERR_DECODE (-3) /* minimp3: no frame / corrupt / wrong rate */
-#define SVC_AUDIO_ERR_NO_MEM (-4) /* decode buffer allocation failed          */
+#define SVC_AUDIO_ERR_DECODE (-3) /* libhelix: no frame / corrupt / wrong rate */
+#define SVC_AUDIO_ERR_NO_MEM (-4) /* alloc failed: buffers or MP3InitDecoder  */
 #define SVC_AUDIO_ERR_READ   (-5) /* fread failed mid-playback                */
 
 /*

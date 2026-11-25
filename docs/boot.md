@@ -9,10 +9,11 @@
 Describes what the code does today, in order.
 Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
 
-> The module variant is documented elsewhere as both N16R2 and N16R8.
-> This is an open question (see STATUS.md) — it affects which GPIOs are
-> safe and whether PSRAM is available. PSRAM is currently **disabled**
-> in `sdkconfig`.
+> The module variant is documented in `docs/hardware.md`: the bench board is
+> an ESP32-S3-WROOM-1-N16R8, the production BOM is N16R2, and PSRAM is disabled
+> in `sdkconfig.defaults` so one image runs on both.
+> It affects which GPIOs are safe and whether PSRAM is available; the GPIO
+> question is tracked in `STATUS.md`.
 
 ---
 

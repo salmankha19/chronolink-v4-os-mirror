@@ -20,7 +20,7 @@ it, through their public headers.
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
 | 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `svc_audio`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
 | 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
-| — | Vendored library | `minimp3` | Third-party header-only MP3 decoder (CC0), used only by `svc_audio`. Not a layer: it sits beside `svc_audio` and touches no hardware. |
+| — | Managed library | `chmorgan/esp-libhelix-mp3` | Fixed-point Helix MP3 decoder, fetched by the ESP component manager (declared in `components/svc_audio/idf_component.yml`) and used only by `svc_audio`. Not a layer and not a `components/` directory: it touches no hardware. Licence: RPSL 1.0 / RCSL 1.0 on the decoder sources, Apache-2.0 on the packaging. |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
 runs once, before the kernel's tasks exist. See [boot.md](boot.md).
@@ -154,13 +154,13 @@ flowchart TB
   steps cannot double-fire. Details in `STATUS.md` (`svc_scheduler`).
 - `svc_audio_start()` runs on `svc_http_start()`'s success path and
   **before** the scheduler, so the first prayer event already has a
-  subscriber. One task (`svc_audio`, 24 KB stack,
+  subscriber. One task (`svc_audio`, 6 KB stack,
   `tskIDLE_PRIORITY + 3`, core 0) owns the queue it created and
   subscribes to `EVENT_PRAYER_TIME_REACHED` through
   `event_bus_subscribe()`; it never drains the kernel queue. For an
   adhan-tier event it re-reads `adhan_mode`/`adhan_volume` from
-  `svc_config`, decodes `/storage/adhan.mp3` with the vendored
-  `minimp3`, downmixes/scales the PCM in software and feeds
+  `svc_config`, decodes `/storage/adhan.mp3` with libhelix-mp3 (fixed
+  point; heap-resident state), downmixes/scales the PCM in software and feeds
   `audio_play_pcm()`. I2S is initialised on that task when playback
   starts and deinitialised before it returns to idle, so there is no
   idle I2S channel between adhans (the boot path no longer calls

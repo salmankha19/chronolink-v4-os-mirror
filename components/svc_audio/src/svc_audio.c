@@ -4,24 +4,39 @@
  * ChronoLink V4 OS -- adhan playback service (v1).
  *
  * One task, one owned event queue, one asset. Sequence per playback
- * (docs/audio-adhan-design.md section 3.2; THIS ORDER IS LOAD-BEARING):
+ * (docs/audio-adhan-design.md sections 3.2 / 4.1; THIS ORDER IS LOAD-BEARING):
  *
- *   1. svc_config_get()   -> adhan_mode read LIVE, adhan_volume sampled once
- *   2. fopen(asset)       -> class 1 failure: log + skip, NO event
- *   3. audio_init()       -> class 3a failure: ERROR(HAL_INIT,0), NO deinit
- *   4. first decode       -> class 2a failure: ERROR(DECODE,0), deinit
- *   5. EVENT_AUDIO_STARTED, immediately before the first PCM write
- *   6. fread -> decode -> downmix -> volume-scale -> audio_play_pcm()
- *   7. audio_deinit(), then EVENT_AUDIO_COMPLETED on a normal end
+ *   1. svc_config_get()  -> adhan_mode read LIVE, adhan_volume sampled once
+ *   2. fopen(asset)      -> class 1 failure: log + skip, NO event
+ *   3. decode buffers    -> resident, allocated on the first adhan
+ *   4. dec_open()        -> failure: ERROR(DECODE,0); I2S is not up yet
+ *   5. audio_init()      -> class 3a failure: ERROR(HAL_INIT,0), NO deinit
+ *   6. first frame       -> class 2a/2a'' failure: ERROR(DECODE,0), deinit
+ *   7. EVENT_AUDIO_STARTED, immediately before the first PCM write
+ *   8. find-sync -> decode -> downmix -> volume-scale -> audio_play_pcm()
+ *   9. silence flush -> audio_deinit() -> dec_close() -> fclose()
+ *  10. EVENT_AUDIO_COMPLETED on a normal end
  *
- * Deinit is called IF AND ONLY IF init succeeded, on this task, before
- * returning to idle. Deinit on a failed init is explicitly forbidden
- * (section 4.5) -- that is the bug this file exists to not have.
+ * TWO resources are acquired, and each is released if and only if it was
+ * acquired:
+ *
+ *   decoder   MP3InitDecoder() -> MP3FreeDecoder()   step 4 (per playback)
+ *   I2S       audio_init()     -> audio_deinit()      step 5 (per playback)
+ *
+ * Deinit on a failed init is explicitly forbidden (section 4.5) -- that is the
+ * bug this file exists to not have. Freeing a decoder that was never opened,
+ * or leaking one that was, is the same mistake one layer down.
  *
  * Services reach audio through the HIL adapter (components/hil/audio_api.c),
  * not the HAL directly, per docs/Architecture.md section 2 rule 2 and
  * docs/hil.md "Usage rules" 1. "I2S ownership" below therefore means
  * ownership of the init/deinit lifecycle, whichever adapter carries the call.
+ *
+ * Decoder: chmorgan/esp-libhelix-mp3 (RealNetworks Helix, fixed-point). There
+ * is no floating point in the playback path -- Xtensa has no SIMD, and float
+ * is slower than integer even on the S3's single-precision FPU. Every
+ * libhelix symbol in this file lives inside dec_open() / dec_frame() /
+ * dec_close(); nothing else knows the decoder exists.
  */
 #include "svc_audio.h"
 
@@ -30,10 +45,11 @@
 #include "event_bus.h"   /* EVENT_AUDIO_*, payload structs                   */
 #include "time_events.h" /* prayer_time_event_t, PRAYER_KIND_ADHAN           */
 
-#include "minimp3.h"
+#include "mp3dec.h"      /* libhelix-mp3: HMP3Decoder, MP3FrameInfo, ERR_*   */
 
 #include "esp_log.h"
 #include "esp_system.h"  /* esp_get_free_heap_size                           */
+#include "esp_timer.h"   /* esp_timer_get_time, per-frame decode timing      */
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -56,12 +72,13 @@ static const char *TAG = "svc_audio";
    which are dropped as stale afterwards. */
 #define AUDIO_QUEUE_LEN 4
 
-/* Task stack. mp3dec_decode_frame() puts an `mp3dec_scratch_t` on the
-   CALLER's stack: bs_t + maindata[511+2304] + gr_info[4] + grbuf[2][576]
-   floats + scf[40] + syn[33][64] floats + ist_pos = ~16.3 KB. 24 KB leaves
-   ~8 KB for ESP_LOG, stdio and the decode call chain. Confirm with the
-   high-water log after each playback; do not shrink this on a guess. */
-#define AUDIO_TASK_STACK 24576
+/* Task stack. NOTHING large lives on this stack: libhelix's decoder state is
+   heap (inside MP3InitDecoder) and the PCM / mono / compressed buffers are in
+   the resident decode context. No decoder API here puts a scratch structure
+   on the caller's stack. 6 KB is the starting point -- the "stack high-water"
+   line logged after each playback decides the final value (design section 7).
+   Do not tune it on a guess. */
+#define AUDIO_TASK_STACK 6144
 
 /* Above the 1 Hz services (tskIDLE_PRIORITY + 2): playback must refill the
    I2S DMA promptly when audio_play_pcm() returns. It only runs while an
@@ -70,33 +87,82 @@ static const char *TAG = "svc_audio";
 #define AUDIO_TASK_PRIO (tskIDLE_PRIORITY + 3)
 #define AUDIO_TASK_CORE 0
 
-/* Compressed-data buffer. Must stay well above AUDIO_FRAME_WINDOW so a
-   refill can always make progress. */
+/* Compressed-data buffer, held in the decode context (heap) and refilled by
+   memmove + fread -- never by reallocation, so the audio task never asks the
+   allocator for anything while it is playing. */
 #define AUDIO_READ_CHUNK 8192
 
-/* Never hand minimp3 a buffer that could end mid-frame: decode only while at
-   least this many bytes are queued. 2304 is minimp3's
-   MAX_FREE_FORMAT_FRAME_SIZE (its own "more than ISO spec's" bound), which
-   is above the largest Layer III frame at 44.1 kHz (1046 B at 320 kbps);
-   +4 covers the header minimp3 scans past. */
-#define AUDIO_FRAME_WINDOW (2304 + 4)
+/* Bytes that must be queued before MP3Decode() may run, while the file has
+   not ended. MAINBUF_SIZE (mp3dec.h, 1940) is libhelix's own
+   "largest possible main_data section" bound: up to 511 bytes of bit
+   reservoir (9-bit main_data_begin) plus the largest Layer III frame
+   (1428 slots), rounded up to 1940 for 4-byte alignment. With that much
+   available the decoder can always resolve the reservoir reference it is
+   about to unpack. Near EOF the rule is relaxed -- the loop tries with
+   whatever is left, because a final frame can still be complete. */
+#define AUDIO_MIN_DECODE_BYTES MAINBUF_SIZE
 
-_Static_assert(AUDIO_READ_CHUNK > (2 * AUDIO_FRAME_WINDOW),
-               "read chunk must hold more than one frame window");
+/* Interleaved 16-bit output for one MPEG1 Layer III frame:
+   2 granules x 576 samples x 2 channels = 2304 shorts = 4608 bytes.
+   MPEG2 / MPEG2.5 frames use one granule and report half of that. */
+#define AUDIO_PCM_MAX_SHORTS (MAX_NSAMP * MAX_NGRAN * MAX_NCHAN)
 
-/* The HIL takes int16_t PCM. MINIMP3_FLOAT_OUTPUT must stay undefined. */
-_Static_assert(sizeof(mp3d_sample_t) == sizeof(int16_t),
-               "minimp3 built with float output -- audio_play_pcm needs int16");
+/* Stereo is downmixed into this many mono samples (1152 for MPEG1). */
+#define AUDIO_MONO_MAX_SHORTS (AUDIO_PCM_MAX_SHORTS / MAX_NCHAN)
 
-/* Everything one playback needs, allocated ONCE on the first adhan and kept
-   resident (released only by a reboot). A ~22 KB malloc/free per adhan would
-   fragment the heap for no benefit, and the ~130 KB free-heap target in the
-   design's section 7 already budgets for it. */
+/* Bounded recovery (MANDATORY, design section 3.3). libhelix can report
+   "zero output samples" indefinitely on damaged input, and a false sync word
+   inside ID3 data would otherwise spin the audio task forever. Two hard
+   limits, either of which aborts as class 2c:
+     - consecutive decode attempts that consume nothing (a stall), and
+     - bytes scanned without producing a frame.
+   Reaching either bound is a decode failure, never "end of stream".
+   The attempt test is `stall > AUDIO_RESYNC_ATTEMPTS`: up to 8 consecutive
+   non-productive decodes are tolerated, the 9th aborts. The byte test is
+   `scanned > AUDIO_RESYNC_BYTES`: 64 KB may be scanned, the byte that takes it
+   past 64 KB aborts. Either way the loop terminates -- that is the property
+   that matters, and it is what stops libhelix's zero-sample loop. */
+#define AUDIO_RESYNC_ATTEMPTS 8
+#define AUDIO_RESYNC_BYTES    65536
+
+/* Silence flush before audio_deinit() (design AMEND-2). Two full HAL DMA
+   chunks of digital zeros; HAL_AUDIO_CHUNK_SAMPLES in
+   chronolink_hal/src/hal_audio_max98357a.c is 1024 samples, so
+   2 x 1024 satisfies "at least two full chunks" without this service having
+   to include a HAL header (layering). The MAX98357A datasheet recommends
+   ramping SDIN to zero before power-down; this is the v1 click/pop
+   mitigation. */
+#define AUDIO_SILENCE_CHUNK  1024
+#define AUDIO_SILENCE_CHUNKS 2
+
+/* Software volume ceiling: 0.70 * (adhan_volume / 100), in Q15. Volume 100 is
+   therefore about -3.1 dBFS, NOT digital full scale (design AMEND-1):
+   0 dBFS plus the board's 12 dB analog gain demands ~14.1 dBV while ~3.2 W
+   into 4 ohm is ~11 dBV, so digital full scale would clip. round(0.70 *
+   32768) = 22938. The multiplier is always < 32768, so no sample can leave
+   int16_t range and the inner loop needs no clamp. */
+#define AUDIO_VOLUME_MAX_Q15 22938
+
+_Static_assert(AUDIO_READ_CHUNK > AUDIO_MIN_DECODE_BYTES,
+               "read chunk must hold one full decode window plus a refill");
+_Static_assert(sizeof(int16_t) == sizeof(short),
+               "MP3Decode() writes shorts and audio_play_pcm() takes int16_t");
+_Static_assert(AUDIO_PCM_MAX_SHORTS == 2304,
+               "MPEG1 Layer III frame is 1152 samples x 2 channels");
+_Static_assert(AUDIO_SILENCE_CHUNK * AUDIO_SILENCE_CHUNKS <= AUDIO_PCM_MAX_SHORTS,
+               "silence flush reuses the PCM buffer");
+
+/* Everything one playback needs that is worth keeping between playbacks,
+   allocated ONCE on the first adhan and kept resident (released only by a
+   reboot). Buffers only: the decoder object is per-playback heap, so a
+   damaged stream can never leave a stale bit reservoir behind for the next
+   adhan. ~15 KB, of which 8 KB is the compressed-data buffer. A malloc/free
+   pair per adhan would fragment the heap for no benefit, and the free-heap
+   target in design section 7 already budgets for it. */
 typedef struct {
-    mp3dec_t dec;                                     /* ~6.7 KB           */
-    int16_t  pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];      /* 2304 interleaved  */
-    int16_t  mono[MINIMP3_MAX_SAMPLES_PER_FRAME / 2]; /* 1152 mono samples */
-    uint8_t  in[AUDIO_READ_CHUNK];                    /* 8 KB compressed   */
+    int16_t pcm[AUDIO_PCM_MAX_SHORTS];   /* 4608 B interleaved         */
+    int16_t mono[AUDIO_MONO_MAX_SHORTS]; /* 2304 B, 1152 mono samples  */
+    uint8_t in[AUDIO_READ_CHUNK];        /* 8 KB compressed            */
 } audio_decode_ctx_t;
 
 static const char *const kPrayerNames[SVC_CONFIG_PRAYER_COUNT] = {
@@ -156,30 +222,39 @@ static void publish_error(uint8_t prayer_id, uint8_t stage, uint8_t partial,
  * Sample processing
  * ----------------------------------------------------------------------- */
 
-/* Software volume: 0 = muted, 100 = unity. The MAX98357A has no digital gain
-   (HAL_Audio_SetVolume() honestly returns HAL_ERR_DEV), so svc_audio scales
-   the decoded int16 samples. `volume` is sampled ONCE at playback start, so a
-   change made mid-playback takes effect at the NEXT adhan (design H3). */
-static void apply_volume(int16_t *samples, size_t count, uint8_t volume)
+/* Q15 multiplier for one playback: 0.70 * volume / 100, computed once, with
+   integer math only. Nothing in the per-sample path multiplies by 100 or
+   touches a float. */
+static int32_t volume_q15(uint8_t volume)
+{
+    if (volume >= 100) {
+        return AUDIO_VOLUME_MAX_Q15;
+    }
+    return (int32_t)(((int32_t)volume * AUDIO_VOLUME_MAX_Q15) / 100);
+}
+
+/* Software volume: 0 = muted, 100 = 0.70 of full scale (see the Q15 constant).
+   The MAX98357A has no digital gain (HAL_Audio_SetVolume() honestly returns
+   HAL_ERR_DEV), so svc_audio scales the decoded int16 samples. `gain_q15` is
+   computed ONCE at playback start, so a volume change made mid-playback takes
+   effect at the NEXT adhan (design H3). */
+static void apply_volume(int16_t *samples, size_t count, int32_t gain_q15)
 {
     size_t i;
 
-    if (volume == 100) {
-        return;                       /* unity: no multiply, no rounding */
-    }
-
-    if (volume == 0) {
+    if (gain_q15 == 0) {
         memset(samples, 0, count * sizeof(int16_t));
         return;
     }
 
-    /* 100/100 scaling cannot exceed int16_t range, so no clamp is needed. */
+    /* gain_q15 <= 22938 < 32768, so |sample * gain| >> 15 can never exceed
+       the int16_t range: no clamp, no branch per sample. */
     for (i = 0; i < count; i++) {
-        samples[i] = (int16_t)(((int32_t)samples[i] * (int32_t)volume) / 100);
+        samples[i] = (int16_t)(((int32_t)samples[i] * gain_q15) >> 15);
     }
 }
 
-/* Stereo -> mono by averaging L/R before scaling (design section 3.1). The
+/* Stereo -> mono by averaging L/R BEFORE scaling (design section 3.1). The
    I2S channel is mono, and upload-time stereo rejection belongs to the
    deferred endpoint PR (section 1.3), so a stereo file must still play.
    Returns the number of mono samples written. */
@@ -196,27 +271,149 @@ static size_t downmix_stereo(const int16_t *interleaved, size_t frames,
 }
 
 /* --------------------------------------------------------------------------
- * Decoder context
+ * Decoder seam -- every libhelix symbol in this file lives in these three
+ * helpers. Nothing above them knows which MP3 decoder is linked in.
  * ----------------------------------------------------------------------- */
 
-/* Allocate the decode context on first use. Returns NULL on allocation
-   failure; the caller maps that to stage=DECODE, partial=0. */
+/* MP3InitDecoder() allocates its own state on the heap (MP3DecInfo plus the
+   frame-header / side-info / scale-factor / Huffman / dequant / IMDCT /
+   subband buffers). NULL therefore means "allocation failed"; libhelix
+   reports nothing finer, and SVC_AUDIO_ERR_NO_MEM is what it maps to. */
+static HMP3Decoder dec_open(void)
+{
+    return MP3InitDecoder();
+}
+
+static void dec_close(HMP3Decoder dec)
+{
+    if (dec) {
+        MP3FreeDecoder(dec);
+    }
+}
+
+typedef enum {
+    DEC_FRAME_OK = 0,     /* one frame decoded into the PCM buffer        */
+    DEC_FRAME_NEED_DATA,  /* more bytes needed, or the reservoir fills    */
+    DEC_FRAME_ERROR,      /* bad frame here: resync, bounded by the caller */
+} dec_frame_status_t;
+
+typedef struct {
+    dec_frame_status_t status;
+    size_t consumed;      /* bytes of input the decoder moved past      */
+    int    shorts;        /* interleaved 16-bit samples written to pcm  */
+    int    channels;      /* 1 or 2                                     */
+    int    sample_rate;   /* Hz                                         */
+    int    rc;            /* raw libhelix return, for the log line      */
+} dec_frame_result_t;
+
+/* Decode at most one frame. libhelix consumes input by advancing *inbuf and
+   decrementing *bytesLeft, so the caller learns the frame length from
+   `consumed` -- which is also how it skips garbage and ID3 data.
+ *
+ * The sync search is explicit instead of being left to MP3Decode: the
+ * component README documents this loop, because an ID3 tag routinely contains
+ * 0xFF 0xFB and a false sync there makes MP3Decode return an error rather
+ * than the frame. Skipping to the next real sync word and retrying recovers;
+ * treating that error as end of stream would truncate the adhan at the tag.
+ *
+ * `pcm` must hold AUDIO_PCM_MAX_SHORTS shorts: useSize = 0 tells libhelix the
+ * output buffer is its full MAX_NSAMP * MAX_NGRAN * MAX_NCHAN size.
+ */
+static void dec_frame(HMP3Decoder dec, const uint8_t *in, size_t avail,
+                      int16_t *pcm, dec_frame_result_t *out)
+{
+    const unsigned char *p = (const unsigned char *)in;
+    size_t left = avail;
+    int offset;
+    int rc;
+
+    memset(out, 0, sizeof(*out));
+
+    offset = MP3FindSyncWord(p, (int)avail);
+    if (offset < 0) {
+        /* No sync word anywhere in the window. Keep the last 3 bytes: the
+           next sync word can straddle the read boundary, and resuming the
+           search before them would drop a frame. */
+        out->consumed = (avail > 3) ? (avail - 3) : 0;
+        out->status   = DEC_FRAME_NEED_DATA;
+        return;
+    }
+    if (offset > 0) {
+        /* Garbage (or ID3 data) before the sync word: skip it, retry. */
+        out->consumed = (size_t)offset;
+        out->status   = DEC_FRAME_NEED_DATA;
+        return;
+    }
+
+    rc = MP3Decode(dec, &p, &left, (short *)pcm, 0);
+
+    out->rc       = rc;
+    out->consumed = (left <= avail) ? (avail - left) : 0;
+
+    if (rc == ERR_MP3_NONE) {
+        MP3FrameInfo info;
+
+        memset(&info, 0, sizeof(info));
+        MP3GetLastFrameInfo(dec, &info);
+
+        out->shorts      = info.outputSamps;
+        out->channels    = info.nChans;
+        out->sample_rate = info.samprate;
+        out->status      = (info.outputSamps > 0) ? DEC_FRAME_OK
+                                                  : DEC_FRAME_NEED_DATA;
+        return;
+    }
+
+    /* Underflow is NOT fatal:
+         ERR_MP3_INDATA_UNDERFLOW   the frame's bytes are not all here yet;
+         ERR_MP3_MAINDATA_UNDERFLOW normal while the bit reservoir fills over
+                                    the first frames of a stream;
+         ERR_MP3_FREE_BITRATE_SYNC  the bitrate needs one more frame header.
+       All three resolve by supplying more data. */
+    if (rc == ERR_MP3_INDATA_UNDERFLOW ||
+        rc == ERR_MP3_MAINDATA_UNDERFLOW ||
+        rc == ERR_MP3_FREE_BITRATE_SYNC) {
+        out->status = DEC_FRAME_NEED_DATA;
+        return;
+    }
+
+    /* Anything else (INVALID_FRAMEHEADER, INVALID_SIDEINFO, the other
+       INVALID_*, OUT_OF_MEMORY, NULL_POINTER) means "no frame here". It is
+       reported as a bad frame, not as end of stream: the caller resyncs past
+       it and the bounded-recovery counters decide when to give up. */
+    out->status = DEC_FRAME_ERROR;
+}
+
+/* --------------------------------------------------------------------------
+ * Decode context -- buffers only; the decoder object is dec_open()'s
+ * ----------------------------------------------------------------------- */
+
+/* Allocate the resident buffers on first use. Returns NULL on allocation
+   failure; the caller maps that to stage=DECODE, partial=0 and, because no
+   I2S resource has been acquired at that point, no deinit. */
 static audio_decode_ctx_t *decode_ctx_get(void)
 {
+    uint32_t heap_before;
+
     if (s_ctx) {
         return s_ctx;
     }
 
+    heap_before = esp_get_free_heap_size();
     s_ctx = (audio_decode_ctx_t *)malloc(sizeof(audio_decode_ctx_t));
     if (!s_ctx) {
-        ESP_LOGE(TAG, "decode context alloc failed (%u bytes)",
+        ESP_LOGE(TAG, "decode buffer alloc failed (%u bytes)",
                  (unsigned)sizeof(audio_decode_ctx_t));
         return NULL;
     }
 
-    ESP_LOGI(TAG, "decode context allocated: %u bytes (free heap %u)",
+    ESP_LOGI(TAG, "decode buffers: %u bytes (pcm %u B, mono %u B, in %u B); "
+                  "free heap %u -> %u (delta %d)",
              (unsigned)sizeof(audio_decode_ctx_t),
-             (unsigned)esp_get_free_heap_size());
+             (unsigned)sizeof(s_ctx->pcm), (unsigned)sizeof(s_ctx->mono),
+             (unsigned)sizeof(s_ctx->in), (unsigned)heap_before,
+             (unsigned)esp_get_free_heap_size(),
+             (int)((int32_t)heap_before - (int32_t)esp_get_free_heap_size()));
     return s_ctx;
 }
 
@@ -227,56 +424,56 @@ static audio_decode_ctx_t *decode_ctx_get(void)
 /* Decode the open asset and push PCM to the HIL.
  *
  * Publishes EVENT_AUDIO_STARTED immediately before the first write and
- * EVENT_AUDIO_ERROR on a class 2 / 3b failure. Never touches init or deinit:
- * the caller owns both.
+ * EVENT_AUDIO_ERROR on a class 2 / 3b failure. Never touches init, deinit or
+ * the two resource handles: the caller owns those.
  *
- * Returns true on a NORMAL completion -- end of file, the SHORT sample cap,
- * or a trailing partial frame at EOF -- and false when an error event was
- * published (the caller then deinits and goes idle).
+ * Returns true on a NORMAL completion -- end of file, the SHORT sample cap, or
+ * a trailing partial frame that cannot be completed -- and false when an error
+ * event was published (the caller then flushes, deinits and frees).
  */
-static bool stream_playback(FILE *f, audio_decode_ctx_t *ctx, uint8_t prayer_id,
-                            uint8_t mode, uint8_t volume,
+static bool stream_playback(FILE *f, audio_decode_ctx_t *ctx, HMP3Decoder dec,
+                            uint8_t prayer_id, uint8_t mode, uint8_t volume,
                             int64_t scheduled_epoch)
 {
     const size_t short_cap =
         (size_t)SVC_AUDIO_SAMPLE_RATE_HZ * (size_t)SVC_AUDIO_SHORT_DURATION_S;
-    size_t pos       = 0;   /* read position inside ctx->in                */
-    size_t used      = 0;   /* valid bytes in ctx->in                      */
-    size_t played    = 0;   /* mono samples successfully written           */
-    bool   eof       = false;
-    bool   need_data = false;
-    bool   started   = false;
+    const int32_t gain_q15 = volume_q15(volume);
+    size_t   pos       = 0;   /* read position inside ctx->in             */
+    size_t   used      = 0;   /* valid bytes in ctx->in                   */
+    size_t   played    = 0;   /* mono samples successfully written        */
+    size_t   scanned   = 0;   /* bytes consumed since the last good frame */
+    unsigned stall     = 0;   /* consecutive non-productive decodes       */
+    unsigned frames    = 0;   /* decoded frames, for the timing stats     */
+    int64_t  sum_us    = 0;
+    int64_t  max_us    = 0;
+    bool     eof       = false;
+    bool     started   = false;
+    bool     saw_frame = false;
 
     for (;;) {
-        mp3dec_frame_info_t info;
+        dec_frame_result_t res;
         int16_t *dst;
-        size_t n_samples;
-        int samples;
+        size_t   per_channel;
+        size_t   n_samples;
+        int64_t  t0;
+        int64_t  dt_us;
 
-        /* ---- refill ------------------------------------------------ */
-        if (!eof && (need_data || (used - pos) < AUDIO_FRAME_WINDOW)) {
+        /* ---- refill ---------------------------------------------------
+           Only while the file has not ended: at EOF the residual is all we
+           will ever get, and decoding is allowed to try with less than
+           AUDIO_MIN_DECODE_BYTES so a complete final frame still plays. */
+        if (!eof && (used - pos) < AUDIO_MIN_DECODE_BYTES) {
             size_t got;
 
             memmove(ctx->in, ctx->in + pos, used - pos);
             used -= pos;
             pos = 0;
-            need_data = false;
-
-            if (used == sizeof(ctx->in)) {
-                /* A full read buffer that still holds no usable frame: this
-                   is not MP3 (or is corrupt). */
-                ESP_LOGE(TAG, "no MP3 frame in %u bytes -- aborting",
-                         (unsigned)used);
-                publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE,
-                              (uint8_t)(played > 0), SVC_AUDIO_ERR_DECODE);
-                return false;
-            }
 
             got = fread(ctx->in + used, 1, sizeof(ctx->in) - used, f);
             if (got == 0) {
                 /* ferror() is the wear-levelling / I/O failure class 2b is
                    about. A clean fread()==0 with feof() set is simply the
-                   end of the asset. */
+                   end of the asset (design section 3.2). */
                 if (ferror(f)) {
                     ESP_LOGE(TAG, "read failed after %u samples -- aborting",
                              (unsigned)played);
@@ -285,77 +482,128 @@ static bool stream_playback(FILE *f, audio_decode_ctx_t *ctx, uint8_t prayer_id,
                     return false;
                 }
                 eof = true;
-                if (used == 0) {
-                    break;                  /* clean end of the asset */
-                }
             }
             used += got;
         }
 
-        /* ---- decode ------------------------------------------------ */
-        memset(&info, 0, sizeof(info));
-        samples = mp3dec_decode_frame(&ctx->dec, ctx->in + pos,
-                                      (int)(used - pos), ctx->pcm, &info);
+        if (used == pos) {
+            if (!saw_frame) {
+                /* Opened, but nothing decodable: zero-byte or non-MP3 file. */
+                ESP_LOGE(TAG, "no MP3 frame in the asset");
+                publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE, 0,
+                              SVC_AUDIO_ERR_DECODE);
+                return false;
+            }
+            break;                        /* clean end of the asset */
+        }
 
-        if (samples <= 0) {
-            /* Frame skipped (ID3v2 / trailing tag) or no complete frame yet.
-               minimp3 reports the bytes it walked past in info.frame_bytes. */
-            if ((size_t)info.frame_bytes > 0 &&
-                (size_t)info.frame_bytes < (used - pos)) {
-                pos += (size_t)info.frame_bytes;
-                continue;
+        /* ---- one frame ------------------------------------------------- */
+        t0 = esp_timer_get_time();
+        dec_frame(dec, ctx->in + pos, used - pos, ctx->pcm, &res);
+        dt_us = esp_timer_get_time() - t0;
+        frames++;
+        sum_us += dt_us;
+        if (dt_us > max_us) {
+            max_us = dt_us;
+        }
+
+        if (res.status != DEC_FRAME_OK) {
+            /* Progress accounting for the bounded recovery: skipping bytes
+               (ID3 tag, inter-frame garbage, a bad frame) is progress;
+               consuming nothing is a stall. */
+            if (res.consumed > 0) {
+                pos     += res.consumed;
+                scanned += res.consumed;
+                stall    = 0;
+            } else {
+                stall++;
+                if (res.status == DEC_FRAME_ERROR) {
+                    /* Forced resync: step over the byte that produced the
+                       pseudo-sync so the next pass cannot find it again. */
+                    pos++;
+                    scanned++;
+                }
             }
 
-            if (eof) {
-                if (played == 0) {
-                    /* Class 2a: opened but no first sync frame. */
+            if (stall > AUDIO_RESYNC_ATTEMPTS || scanned > AUDIO_RESYNC_BYTES) {
+                if (!saw_frame) {
+                    ESP_LOGE(TAG, "no MP3 frame in %u byte(s) -- aborting",
+                             (unsigned)scanned);
+                } else {
+                    ESP_LOGE(TAG, "decoder gave up after %u byte(s) without a "
+                                  "frame (rc=%d) -- aborting",
+                             (unsigned)scanned, res.rc);
+                }
+                publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE,
+                              (uint8_t)(played > 0), SVC_AUDIO_ERR_DECODE);
+                return false;
+            }
+
+            if (eof && (pos >= used ||
+                        (res.status == DEC_FRAME_NEED_DATA &&
+                         res.consumed == 0))) {
+                /* Nothing more will arrive and the decoder cannot make
+                   further progress (NEED_DATA with nothing consumed, or the
+                   window is exhausted). A tail that is not a complete frame
+                   is a truncated asset, not an error: everything the file
+                   contained has played. */
+                if (!saw_frame) {
                     ESP_LOGE(TAG, "no decodable MP3 frame in the asset");
                     publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE, 0,
                                   SVC_AUDIO_ERR_DECODE);
                     return false;
                 }
-                ESP_LOGW(TAG, "trailing %u byte(s) at EOF are not a frame -- "
-                              "ignored", (unsigned)(used - pos));
+                ESP_LOGW(TAG, "asset ends with %u byte(s) that do not form a "
+                              "complete frame -- ignored",
+                         (unsigned)(used - pos));
                 break;
             }
-
-            /* Need more data. If minimp3 rejected the whole buffer, keep one
-               frame window so a frame straddling the read boundary is not
-               lost, then read again. Progress is guaranteed: the buffer is
-               larger than two windows. */
-            if ((size_t)info.frame_bytes == (used - pos) &&
-                (used - pos) > AUDIO_FRAME_WINDOW) {
-                pos = used - AUDIO_FRAME_WINDOW;
-            }
-            need_data = true;
             continue;
         }
 
-        if (info.frame_bytes <= 0) {
-            /* Defensive: a decoded frame always reports its length. */
-            ESP_LOGE(TAG, "decoder returned %d samples with no frame length",
-                     samples);
+        /* ---- a decoded frame ------------------------------------------- */
+        if (res.consumed == 0) {
+            /* Defensive: a decoded frame always consumes input. Without this
+               guard a zero-length advance would replay the same frame for the
+               whole adhan. */
+            ESP_LOGE(TAG, "decoder produced audio without consuming input");
             publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE,
                           (uint8_t)(played > 0), SVC_AUDIO_ERR_DECODE);
             return false;
         }
-        pos += (size_t)info.frame_bytes;
+
+        saw_frame = true;
+        stall     = 0;      /* a frame resets both recovery counters */
+        scanned   = 0;
+        pos      += res.consumed;
+
+        if (res.channels < 1 || res.shorts <= 0 ||
+            (size_t)res.shorts > AUDIO_PCM_MAX_SHORTS) {
+            ESP_LOGE(TAG, "decoder reported %d sample(s) in %d channel(s) -- "
+                          "aborting", res.shorts, res.channels);
+            publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE,
+                          (uint8_t)(played > 0), SVC_AUDIO_ERR_DECODE);
+            return false;
+        }
 
         /* The HAL's I2S channel is fixed at 44.1 kHz and there is no
-           resampler (design D2), so any other rate is a failure. */
-        if (info.hz != SVC_AUDIO_SAMPLE_RATE_HZ) {
-            ESP_LOGE(TAG, "decoded sample rate %d Hz != %d Hz -- aborting",
-                     info.hz, (int)SVC_AUDIO_SAMPLE_RATE_HZ);
+           resampler (design D2), so any other rate is a failure -- the
+           message names the file's rate so the operator can re-encode it. */
+        if (res.sample_rate != SVC_AUDIO_SAMPLE_RATE_HZ) {
+            ESP_LOGE(TAG, "decoded sample rate %d Hz != %d Hz (no resampler) "
+                          "-- aborting",
+                     res.sample_rate, (int)SVC_AUDIO_SAMPLE_RATE_HZ);
             publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE,
                           (uint8_t)(played > 0), SVC_AUDIO_ERR_DECODE);
             return false;
         }
 
-        if (info.channels == 2) {
-            n_samples = downmix_stereo(ctx->pcm, (size_t)samples, ctx->mono);
+        per_channel = (size_t)res.shorts / (size_t)res.channels;
+        if (res.channels == 2) {
+            n_samples = downmix_stereo(ctx->pcm, per_channel, ctx->mono);
             dst = ctx->mono;
         } else {
-            n_samples = (size_t)samples;
+            n_samples = per_channel;
             dst = ctx->pcm;
         }
 
@@ -373,10 +621,11 @@ static bool stream_playback(FILE *f, audio_decode_ctx_t *ctx, uint8_t prayer_id,
             }
         }
 
-        apply_volume(dst, n_samples, volume);
+        apply_volume(dst, n_samples, gain_q15);
 
         if (!started) {
-            /* 98: init succeeded, playback is about to begin. */
+            /* 98: the decoder produced a valid, correctly-rated frame and
+               playback is about to begin. */
             publish_play_event(EVENT_AUDIO_STARTED, prayer_id, mode,
                                scheduled_epoch);
             started = true;
@@ -395,30 +644,61 @@ static bool stream_playback(FILE *f, audio_decode_ctx_t *ctx, uint8_t prayer_id,
     }
 
     if (played == 0) {
-        /* A zero-byte asset (or one that is only ID3 tags) reaches the clean
-           EOF above with nothing decoded. Class 2a: opened, no first frame. */
+        /* Reached only by a stream that decoded frames but never wrote a
+           sample (all frames empty). Class 2a in event terms: opened, and no
+           audio resulted. */
         ESP_LOGE(TAG, "asset produced no decodable audio samples");
         publish_error(prayer_id, SVC_AUDIO_STAGE_DECODE, 0,
                       SVC_AUDIO_ERR_DECODE);
         return false;
     }
 
+    /* Per-frame decode cost against the real-time budget: 44100 / 1152 =
+       ~38.3 frames per second, i.e. ~26 ms per frame available at 44.1 kHz.
+       The mean must stay far below that or the I2S DMA starves. */
+    ESP_LOGI(TAG, "%s decode: %u frame(s), mean %lld us, max %lld us "
+                  "(budget ~26000 us/frame)",
+             prayer_name(prayer_id), frames,
+             (long long)(frames ? (sum_us / (int64_t)frames) : 0),
+             (long long)max_us);
+
     return true;
 }
 
-/* One adhan request, start to finish. The I2S lifecycle lives entirely
-   inside this function so no other task can ever race a deinit against a
-   write (design section 5-I2). */
+/* AMEND-2: ramp SDIN to zero before the amplifier is powered down. Writes two
+   full HAL DMA chunks of digital zeros. Reuses the resident PCM buffer, so
+   nothing large touches the task stack, and a failed write is only logged:
+   the deinit that follows is what actually silences the amp. Only ever called
+   after audio_init() succeeded, so ctx is non-NULL by construction. */
+static void silence_flush(audio_decode_ctx_t *ctx)
+{
+    int i;
+
+    memset(ctx->pcm, 0, AUDIO_SILENCE_CHUNK * sizeof(int16_t));
+    for (i = 0; i < AUDIO_SILENCE_CHUNKS; i++) {
+        if (!audio_play_pcm(ctx->pcm, AUDIO_SILENCE_CHUNK)) {
+            ESP_LOGW(TAG, "silence flush write failed -- continuing to deinit");
+            return;
+        }
+    }
+}
+
+/* One adhan request, start to finish. The I2S lifecycle and the decoder
+   lifecycle both live entirely inside this function, so no other task can
+   ever race a deinit against a write (design section 5-I2). */
 static void play_adhan(const prayer_time_event_t *req)
 {
     svc_config_t cfg;
     audio_decode_ctx_t *ctx;
+    HMP3Decoder dec;
     FILE *f;
     uint8_t mode;
     uint8_t volume;
+    uint32_t heap_before;
+    uint32_t heap_after;
     bool completed;
 
-    /* (1)+(2) Config is read LIVE, once per playback: adhan_mode every time
+    /* (1) Config is read LIVE, once per playback: adhan_mode every time
        (I1 -- a mosque flipping OFF -> FULL must hear the next adhan) and
        adhan_volume sampled here, never re-read in the decode loop (H3). One
        svc_config_get() gives both from a single consistent snapshot. */
@@ -446,7 +726,7 @@ static void play_adhan(const prayer_time_event_t *req)
              (mode == SVC_AUDIO_MODE_SHORT) ? "SHORT" : "FULL",
              (unsigned)volume, (unsigned)esp_get_free_heap_size());
 
-    /* (3) Open. Class 1: log + skip, NO event and nothing initialised yet. */
+    /* (2) Open. Class 1: log + skip, NO event and nothing acquired yet. */
     f = fopen(AUDIO_ASSET_PATH, "rb");
     if (!f) {
         ESP_LOGW(TAG, "%s is absent or unreadable -- adhan skipped",
@@ -454,52 +734,84 @@ static void play_adhan(const prayer_time_event_t *req)
         return;
     }
 
-    /* (4) I2S comes up only now, on this task, for this playback. */
-    if (!audio_init()) {
-        /* Class 3a: init FAILED, so there is nothing to deinit. */
-        ESP_LOGE(TAG, "audio_init failed -- adhan skipped, I2S stays down");
-        publish_error(req->prayer_id, SVC_AUDIO_STAGE_HAL_INIT, 0,
-                      SVC_AUDIO_ERR_INIT);
-        fclose(f);
-        return;
-    }
-
-    /* (5) Decoder state. Allocation failure maps to stage=DECODE,
-       partial=0; init succeeded, so this path DOES deinit below. */
+    /* (3) Resident buffers, allocated on the first adhan only. Neither this
+       nor the decoder open below touches I2S, so a failure here leaves I2S
+       down and there is nothing to deinit. */
     ctx = decode_ctx_get();
     if (!ctx) {
         publish_error(req->prayer_id, SVC_AUDIO_STAGE_DECODE, 0,
                       SVC_AUDIO_ERR_NO_MEM);
-        audio_deinit();
         fclose(f);
         return;
     }
 
-    /* Per-playback reset of the bit reservoir / free-format state. */
-    mp3dec_init(&ctx->dec);
+    /* (4) A FRESH decoder per playback: no bit reservoir, no free-format
+       bitrate and no Huffman state can leak from the previous adhan. */
+    heap_before = esp_get_free_heap_size();
+    dec = dec_open();
+    if (!dec) {
+        /* libhelix allocates its state inside MP3InitDecoder(), so a NULL
+           handle is an allocation failure. I2S was never initialised. */
+        ESP_LOGE(TAG, "MP3InitDecoder failed -- adhan skipped, I2S stays down");
+        publish_error(req->prayer_id, SVC_AUDIO_STAGE_DECODE, 0,
+                      SVC_AUDIO_ERR_NO_MEM);
+        fclose(f);
+        return;
+    }
+    heap_after = esp_get_free_heap_size();
+    ESP_LOGI(TAG, "decoder opened: free heap %u -> %u (delta %d bytes)",
+             (unsigned)heap_before, (unsigned)heap_after,
+             (int)((int32_t)heap_before - (int32_t)heap_after));
 
-    completed = stream_playback(f, ctx, req->prayer_id, mode, volume,
+    /* (5) I2S comes up only now, on this task, for this playback. */
+    if (!audio_init()) {
+        /* Class 3a: init FAILED, so there is nothing to deinit -- but the
+           decoder WAS acquired and must be released. */
+        ESP_LOGE(TAG, "audio_init failed -- adhan skipped, I2S stays down");
+        publish_error(req->prayer_id, SVC_AUDIO_STAGE_HAL_INIT, 0,
+                      SVC_AUDIO_ERR_INIT);
+        dec_close(dec);
+        fclose(f);
+        return;
+    }
+
+    /* (6)-(8) Decode and write. stream_playback returns false only when it
+       published EVENT_AUDIO_ERROR itself. */
+    completed = stream_playback(f, ctx, dec, req->prayer_id, mode, volume,
                                 req->scheduled_epoch);
-    fclose(f);
 
-    /* (7) Deinit happens iff init succeeded, always on this task, before the
-       service returns to idle. */
+    /* (9) Shut both resources down in the safest order: zeros into the amp
+       first (AMEND-2), then the I2S channel, then the decoder. Reached only
+       because init succeeded above, so this deinit is always paired. */
+    silence_flush(ctx);
+
     if (!audio_deinit()) {
         ESP_LOGW(TAG, "audio_deinit failed -- Init refuses to run until a "
                       "retry succeeds");
     }
 
-    /* (8) Normal end: deinit is already done, so COMPLETED is published with
-       the device back down. Error paths published their own event above. */
+    dec_close(dec);
+    fclose(f);
+
+    /* (10) Normal end: both resources are down, so COMPLETED is published with
+       the device back in its idle state. Error paths published their own
+       event above. */
     if (completed) {
         publish_play_event(EVENT_AUDIO_COMPLETED, req->prayer_id, mode,
                            req->scheduled_epoch);
         ESP_LOGI(TAG, "%s adhan complete", prayer_name(req->prayer_id));
     }
 
-    /* Measurement for design section 7 -- do not tune the stack on a guess. */
+    /* Measurement for design section 7 -- do not tune the stack on a guess.
+       uxTaskGetStackHighWaterMark(), NOT the ...2 variant: ESP-IDF's
+       FreeRTOSConfig.h sets INCLUDE_uxTaskGetStackHighWaterMark to 1 and leaves
+       INCLUDE_uxTaskGetStackHighWaterMark2 at its 0 default (FreeRTOS.h), so
+       ...2 is not declared at all in this build. The base variant reports
+       configSTACK_DEPTH_TYPE in stack units, and this port's portSTACK_TYPE is
+       uint8_t -- which is why xTaskCreatePinnedToCore() above also takes bytes
+       -- so the count is already BYTES, not words. */
     ESP_LOGI(TAG, "stack high-water: %u bytes free of %d",
-             (unsigned)uxTaskGetStackHighWaterMark2(NULL), AUDIO_TASK_STACK);
+             (unsigned)uxTaskGetStackHighWaterMark(NULL), AUDIO_TASK_STACK);
 }
 
 /* Drop everything that queued up while we were playing.
@@ -573,10 +885,10 @@ esp_err_t svc_audio_start(void)
 
     /* Section 7 instrumentation: the build's real sizes, so the human can
        write measured numbers back into the doc after the first flash. */
-    ESP_LOGI(TAG, "minimp3: sizeof(mp3dec_t)=%u, decode context=%u, "
-                  "max samples/frame=%d, asset=%s",
-             (unsigned)sizeof(mp3dec_t), (unsigned)sizeof(audio_decode_ctx_t),
-             (int)MINIMP3_MAX_SAMPLES_PER_FRAME, AUDIO_ASSET_PATH);
+    ESP_LOGI(TAG, "libhelix: PCM %d shorts/frame, buffers %u bytes, "
+                  "decode window %d bytes, asset %s",
+             AUDIO_PCM_MAX_SHORTS, (unsigned)sizeof(audio_decode_ctx_t),
+             (int)AUDIO_MIN_DECODE_BYTES, AUDIO_ASSET_PATH);
 
     s_queue = xQueueCreate(AUDIO_QUEUE_LEN, sizeof(event_t));
     if (!s_queue) {

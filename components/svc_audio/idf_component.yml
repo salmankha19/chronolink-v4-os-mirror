@@ -1,0 +1,23 @@
+## ESP Component Manager manifest for svc_audio.
+##
+## The MP3 decoder is libhelix by chmorgan's packaging component, pinned to
+## the 1.0.3 line. It replaces the vendored minimp3 header: minimp3's core is
+## floating point and puts ~16.3 KB of scratch on the caller's stack, while
+## libhelix is a fixed-point 32-bit decoder (the profile this Xtensa target
+## wants) and keeps all of its state in the heap.
+##
+## LICENCE PROVENANCE -- two layers, review both before ship:
+##   * packaging (CMakeLists.txt, idf_component.yml, registry metadata):
+##     Apache-2.0
+##   * decoder sources (everything under the libhelix-mp3/ submodule, i.e.
+##     pub/ and real/): RPSL 1.0 / RCSL 1.0 headers, portions
+##     Copyright (c) 1995-2002 RealNetworks, Inc.
+## Nothing here is relicensed or vendored into this repository: the component
+## manager fetches it into managed_components/ (git-ignored) and
+## dependencies.lock, which IS committed, pins the exact resolved version.
+##
+## Do NOT substitute Lefucjusz/Helix-MP3-Decoder: that fork is GPL-3.0 and is
+## incompatible with this project.
+dependencies:
+  idf: ">=5.0"
+  chmorgan/esp-libhelix-mp3: "^1.0.3"
