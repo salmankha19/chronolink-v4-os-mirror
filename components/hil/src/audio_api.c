@@ -4,7 +4,8 @@
  * Thin adapter over chronolink_hal's HAL_Audio_* (hal_audio.h /
  * hal_audio_max98357a.c). See audio_api.h for why audio_play_mp3()
  * isn't implemented here -- decoding lives in svc_audio
- * (components/minimp3), and this file stays a pass-through so there is
+ * (chmorgan/esp-libhelix-mp3, declared in svc_audio's idf_component.yml),
+ * and this file stays a pass-through so there is
  * exactly one description of the audio lifecycle.
  */
 #include "audio_api.h"
@@ -37,7 +38,7 @@ bool audio_play_mp3(const char *filepath)
 {
     (void)filepath;
     ESP_LOGE(TAG, "audio_play_mp3: no decoder in the HIL -- svc_audio decodes "
-                  "/storage/adhan.mp3 with components/minimp3 and calls "
+                  "/storage/adhan.mp3 with libhelix-mp3 and calls "
                   "audio_play_pcm() per chunk. Use audio_play_pcm() here.");
     return false;
 }

@@ -19,7 +19,8 @@ bool audio_play_pcm(const int16_t *pcm, size_t samples);
 /* NOT IMPLEMENTED HERE: there is no decoder in the HIL. chronolink_hal's
    HAL_Audio_Play() only accepts raw PCM, so an .mp3 file has to be decoded
    to PCM in chunks and fed to audio_play_pcm(). That decoder now exists:
-   components/minimp3 (vendored, header-only) is driven by
+   chmorgan/esp-libhelix-mp3 (managed component, fixed-point; declared in
+   svc_audio's idf_component.yml) is driven by
    components/svc_audio, which is the ONE owner of the audio lifecycle
    (audio_init -> audio_play_pcm* -> audio_deinit, called on its own task).
    This function stays a documented failure so no caller believes the HIL

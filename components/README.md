@@ -14,7 +14,7 @@ nesting.
 | `state_manager`, `remote_bridge`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `svc_audio` | Services (5) |
 | `display_manager`, `font_engine`, `font`, `ui_producer` | Application (6) |
 | `boot_manager` | Orchestrator (not a layer) |
-| `minimp3` | Vendored library (CC0 MP3 decoder, used only by `svc_audio`) |
+| `chmorgan/esp-libhelix-mp3` | Managed library, fetched by the ESP component manager (fixed-point MP3 decoder, RPSL/RCSL sources; used only by `svc_audio`) |
 | `audio_test` | Dev/test (Kconfig-gated, not shipped) |
 
 ## Naming convention
