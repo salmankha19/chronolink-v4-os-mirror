@@ -8,7 +8,6 @@
 #include "hal_sensor_bme280.h"
 #include "hal_sensor_sht4x.h"
 #include "hal_sensor_veml7700.h"
-#include "hal_audio.h"
 #include "pdl_capabilities.h"
 #include "pdl_compat.h"
 #include "esp_log.h"
@@ -197,14 +196,21 @@ hal_status_t HAL_Init(void)
         ESP_LOGW(TAG, "Skipping HAL_Sensors_Init: I2C bus unavailable");
     }
 
-    /* Audio (optional). Not fatal if it fails — a clock without a working
-       amp should still boot and show the time. */
-#if PDL_HAS_AUDIO_MAX98357A
-    hs = HAL_Audio_Init();
-    if (hs != HAL_OK) {
-        ESP_LOGW(TAG, "HAL_Audio_Init failed (%d) — continuing without audio", (int)hs);
-    }
-#endif
+    /* Audio is deliberately NOT initialised here.
+     *
+     * svc_audio owns the I2S lifecycle: it calls audio_init() (HIL ->
+     * HAL_Audio_Init) only when a playback is requested, and audio_deinit()
+     * right after the last PCM buffer is written. Initialising at boot would
+     * leave an enabled I2S channel (and its DMA descriptors) idle for the
+     * whole uptime, which is exactly what the "no idle I2S instance"
+     * invariant in docs/audio-adhan-design.md section 5-I2 forbids, and it
+     * would make a Play-vs-Deinit race reachable from a second task.
+     *
+     * Consequence: "MAX98357A I2S ready" now appears at the first adhan, not
+     * during HAL_Init(). A board without a working amp therefore fails
+     * audibly-and-logged at playback time (EVENT_AUDIO_ERROR,
+     * stage=HAL_INIT) instead of at boot. Nothing else in the boot path
+     * depends on audio being up. See docs/boot.md "HAL_Init() order". */
 
     ESP_LOGI(TAG, "HAL initialized successfully");
     return HAL_OK;

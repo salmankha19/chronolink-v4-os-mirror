@@ -1582,6 +1582,97 @@ static esp_err_t get_debug_ntp_handler(httpd_req_t *req)
     httpd_resp_sendstr(req, body);
     return ESP_OK;
 }
+
+#include "event_bus.h"    /* EVENT_PRAYER_TIME_REACHED, event_init_payload   */
+#include "time_events.h"  /* prayer_time_event_t, PRAYER_KIND_ADHAN          */
+
+/* GET /debug/audio?prayer=<id>
+ *
+ * Test-harness hook: publish a synthetic EVENT_PRAYER_TIME_REACHED for the
+ * given prayer id, so the adhan path -- and every forced-failure row in
+ * docs/audio-adhan-design.md section 8 -- can be exercised on demand.
+ * Nothing else can trigger it: svc_scheduler fires at most once per prayer per
+ * day behind an epoch guard, so in practice an adhan cannot be observed
+ * without waiting for a real prayer time.
+ *
+ * Gated exactly like /debug/ntp. The production env (env:single_mcu) does not
+ * define CHRONOLINK_TEST_HOOKS, so neither this handler nor the
+ * "debug/audio" string exists in that image -- verify with
+ * `strings <elf> | findstr debug/audio` (CI does the same for debug/ntp).
+ *
+ * Unauthenticated on purpose: the harness runs on a closed LAN. Never ship.
+ *
+ * The hook only DELIVERS the event. Every policy decision stays in svc_audio:
+ * adhan_mode OFF, a missing asset and a busy device are all handled there, and
+ * a 200 here means "the kernel accepted the event", not "audio played".
+ */
+static esp_err_t get_debug_audio_handler(httpd_req_t *req)
+{
+    char query[64];
+    char idbuf[8];
+    char body[96];
+    char *end = NULL;
+    prayer_time_event_t ev;
+    event_t out;
+    time_t epoch = 0;
+    esp_err_t err;
+    long id;
+
+    err = httpd_req_get_url_query_str(req, query, sizeof(query));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "debug/audio: no query string: %s", esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"missing_query\"}");
+        return ESP_OK;
+    }
+
+    err = httpd_query_key_value(query, "prayer", idbuf, sizeof(idbuf));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "debug/audio: no prayer parameter: %s",
+                 esp_err_to_name(err));
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"missing_prayer\"}");
+        return ESP_OK;
+    }
+
+    /* strtol, not atoi: "3abc" and an empty value are rejected instead of
+       being silently read as 3 and 0 -- the same rule the JSON numeric fields
+       follow in the config handlers. */
+    id = strtol(idbuf, &end, 10);
+    if (end == idbuf || *end != '\0' || id < 0 ||
+        id >= (long)SVC_CONFIG_PRAYER_COUNT) {
+        ESP_LOGW(TAG, "debug/audio: rejected prayer '%s'", idbuf);
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"bad_prayer\"}");
+        return ESP_OK;
+    }
+
+    (void)svc_time_get_epoch(&epoch);
+
+    memset(&ev, 0, sizeof(ev));
+    ev.prayer_id       = (uint8_t)id;
+    ev.kind            = (uint8_t)PRAYER_KIND_ADHAN;
+    ev.scheduled_epoch = (int64_t)epoch;
+
+    event_init_payload(&out, EVENT_PRAYER_TIME_REACHED, &ev, sizeof(ev));
+
+    ESP_LOGW(TAG, "debug/audio: TEST HOOK -- synthetic adhan, prayer %ld "
+                  "(epoch %lld)", id, (long long)ev.scheduled_epoch);
+
+    if (!event_bus_publish_checked(&out)) {
+        ESP_LOGE(TAG, "debug/audio: the event queue rejected the event");
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"publish_failed\"}");
+        return ESP_OK;
+    }
+
+    snprintf(body, sizeof(body),
+             "{\"status\":\"ok\",\"prayer\":%ld,\"epoch\":%lld}",
+             id, (long long)ev.scheduled_epoch);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, body);
+    return ESP_OK;
+}
 #endif /* CONFIG_CHRONOLINK_TEST_HOOKS || CHRONOLINK_TEST_HOOKS */
 
 esp_err_t svc_http_start(void)
@@ -1597,8 +1688,9 @@ esp_err_t svc_http_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    /* 13 production routes + the /debug/ntp test hook (test env only)
-     * + headroom. */
+    /* 13 production routes + the /debug/ntp and /debug/audio test hooks
+     * (test env only) + headroom: 15 used of 16 when the hooks are compiled
+     * in, 13 in the production image. */
     config.max_uri_handlers = 16;
     /* OTA handler calls esp_ota_* which needs more stack than a JSON
      * handler. 8192 is conservative; default 4096 has no margin for a
@@ -1632,6 +1724,7 @@ esp_err_t svc_http_start(void)
         { .uri = "/api/prayers",       .method = HTTP_GET,  .handler = get_prayers_handler        },
 #if defined(CONFIG_CHRONOLINK_TEST_HOOKS) || defined(CHRONOLINK_TEST_HOOKS)
         { .uri = "/debug/ntp",   .method = HTTP_GET,  .handler = get_debug_ntp_handler },
+        { .uri = "/debug/audio", .method = HTTP_GET,  .handler = get_debug_audio_handler },
 #endif
     };
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {

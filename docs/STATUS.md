@@ -40,7 +40,8 @@ is hardware verification only — see "Open verification" in that ledger.
 - **App rollback (PR 4.6, extended 2026-11-15):** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`;
   `app_main()` calls `esp_ota_mark_app_valid_cancel_rollback()` at the
   end, after every service (`svc_config`, `svc_time`, `svc_timetable`,
-  `svc_prayer_engine`, `svc_network`, `svc_http`, `svc_scheduler`) has
+  `svc_prayer_engine`, `svc_network`, `svc_http`, `svc_audio`,
+  `svc_scheduler`) has
   started. (#129 R2 moved this call from `boot_manager_init()`, where it
   ran before any service was up.) An image that crashes or resets before
   that point is reverted to the previous slot on the next reset.
@@ -200,12 +201,13 @@ is hardware verification only — see "Open verification" in that ledger.
   NTP-step hiccup cannot make today's already-fired prayers fire twice.
   `svc_scheduler_init()` does the
   same pre-marking at boot, so a 13:00 boot does not replay the 10:00 and
-  12:00 adhans. **Event subscriber state (as of #136):** `EVENT_PRAYER_TIME_REACHED`
-  has zero subscribers -- the scheduler publishes correctly, but the intended
-  consumers (`svc_audio` at Phase 3, `ui_producer` for display state) are not
-  wired yet. Wiring deferred until Phase 3 audio lands, at which point the
-  payload already carries everything a consumer needs (`prayer_id`, `kind`,
-  `scheduled_epoch`). Documented here as intentional, not a defect.
+  12:00 adhans. **Event subscriber state:** since `svc_audio` v1 (2026-11-25)
+  `EVENT_PRAYER_TIME_REACHED` has exactly one subscriber, `svc_audio`, which
+  handles the adhan tier (`kind == PRAYER_KIND_ADHAN`) and logs + drops every
+  other kind. `ui_producer` still does not subscribe: display state comes from
+  `svc_time` and the prayer snapshot, not from this event. The payload already
+  carries everything a consumer needs (`prayer_id`, `kind`,
+  `scheduled_epoch`).
   Decision logic is pure C (`scheduler_logic.c`: no ESP-IDF, no
   FreeRTOS, no heap) and host-tested in
   `prayer_host_tests/test_scheduler.cpp` -- part of `make test`: happy path,
@@ -245,6 +247,45 @@ is hardware verification only — see "Open verification" in that ledger.
   prayer-engine snapshot) -- those signals self-heal on the next cycle.
   `scheduler_logic.c` and its host tests are unchanged. The retry path fires
   only on a full bus, so it is CI build-verified only, not host-tested.
+- **`svc_audio` (v1, 2026-11-25):** adhan playback. One task
+  (`svc_audio`, 6 KB stack, `tskIDLE_PRIORITY + 3`, core 0) owns a
+  4-slot queue and subscribes to `EVENT_PRAYER_TIME_REACHED` (97) via
+  `event_bus_subscribe()`; it never drains the kernel queue. On an
+  adhan-tier event it reads `adhan_mode` and `adhan_volume` live from
+  `svc_config` (one snapshot per playback; volume is sampled once and
+  never re-read mid-playback), decodes `/storage/adhan.mp3`
+  (44.1 kHz) with libhelix-mp3 (fixed-point, heap-resident state),
+  downmixes stereo to mono, applies software volume scaling (0 = muted,
+  100 = 0.70 of full scale; design AMEND-1) and feeds
+  `audio_play_pcm()`. Modes: OFF (nothing touched), FULL (whole file),
+  SHORT (`SVC_AUDIO_SHORT_DURATION_S` = 10 s of the same asset, counted
+  in decoded samples; reaching the cap is a normal completion).
+  **I2S lifecycle:** `audio_init()` runs on that task at playback time
+  and `audio_deinit()` runs after the last buffer, so there is no idle
+  I2S channel and no Play-vs-Deinit race. `HAL_Init()` no longer calls
+  `HAL_Audio_Init()`; `MAX98357A I2S ready` now appears at the first
+  adhan (PR changed `chronolink_hal/src/hal_init.c`, `docs/boot.md`).
+  **Failure classes:** 1 (asset absent) logs and emits nothing; 1b
+  (`MP3InitDecoder()` returned NULL) and 2a' (decode-buffer allocation
+  failed) emit `EVENT_AUDIO_ERROR` (stage=DECODE, partial=0) with **no
+  deinit**, because both happen before `audio_init()`; 2a (no frame) and
+  2a'' (decoded rate != 44100) emit the same event and do deinit; 2b
+  (read error) stage=READ; 2c (mid-stream decode failure) stage=DECODE;
+  3a (init failed) stage=HAL_INIT and **no deinit**; 3b
+  (`audio_play_pcm()` false) stage=HAL_WRITE. Deinit runs iff init
+  succeeded; the per-playback decoder is freed iff `MP3InitDecoder()`
+  succeeded. Before deinit, >= 2 HAL DMA chunks of digital zeros are
+  written so the amplifier does not click (AMEND-2), and decode recovery
+  is bounded (8 non-productive decodes or 64 KB without a frame) so a
+  damaged file cannot hang the task. Duplicate requests are logged and dropped after playback
+  (the queue is drained non-blocking), never played late. Publishes
+  `EVENT_AUDIO_STARTED` (98) just before the first PCM write,
+  `EVENT_AUDIO_COMPLETED` (99) after deinit, `EVENT_AUDIO_ERROR` (100)
+  on the classes above; the two payload structs live in `event_bus.h`.
+  Inserted in `main.c` on `svc_http_start()`'s success path, before
+  `svc_scheduler_init()`; non-fatal, with **no** rollback gate. Design:
+  `docs/audio-adhan-design.md`. **Not yet hardware-verified:** §7 of that
+  document (sizes, stack high-water, free heap) is marked *pending build*.
 - **Application (layer 6):** `display_manager`, `ui_producer`,
   `font_engine`, `font` -- UI and display logic, not services
   (Constitution section 11).
@@ -574,9 +615,9 @@ escape hatch: `docs/boot.md`.
 |---|---|
 | MAX7219 display backend | returns `HAL_ERR_DEV`, draws nothing; Kconfig-gated behind `ALLOW_STUB_BACKENDS` |
 | Remote display backend | returns `HAL_ERR_DEV`, sends nothing; Kconfig-gated behind `ALLOW_STUB_BACKENDS` |
-| `HAL_Audio_SetVolume` | returns `HAL_ERR_DEV`, does nothing |
+| `HAL_Audio_SetVolume` | returns `HAL_ERR_DEV`, does nothing. Volume is applied in software by `svc_audio` instead (see the `svc_audio` bullet above) |
 | `display_set_brightness` | always returns `false` |
-| `audio_play_mp3` | always returns `false` |
+| `audio_play_mp3` (HIL) | always returns `false` — the HIL has no decoder. Adhan playback goes through `svc_audio` + libhelix-mp3 + `audio_play_pcm()`; this stub stays so no caller believes the HIL decodes files |
 | ST7796S `write_text` | not implemented in backend. (The backend correctly declines text; the font layer is the sanctioned path for both panel families, mono for 1-bit panels and RGB565 for colour panels.) |
 | Theme registry, web config | do not exist (the prayer scheduler landed in PR 5.6 -- see above) |
 | SD card | pin defined, no driver |

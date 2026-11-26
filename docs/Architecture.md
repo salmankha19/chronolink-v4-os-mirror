@@ -18,8 +18,9 @@ it, through their public headers.
 | 2 | HAL - Hardware Abstraction | `chronolink_hal`, `chronolink_driver_sdk` | Drivers: GPIO, I2C, SPI, RTC (DS3231M), display (router + ST7796S / MAX7219 / remote / mock / custom backends), sensors (SHT4x, BME280, VEML7700), audio (MAX98357A) |
 | 3 | HIL - Hardware Independent Layer | `hil` | Thin `bool`-returning adapters over the HAL, for services (`display_api`, `rtc_api`, `sensor_api`, `audio_api`, `gpio_api`, `i2c_api`, `spi_api`) |
 | 4 | Kernel | `core_os`, `event_bus` | FreeRTOS tasks, queues, event bus, safe-mode handling |
-| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
+| 5 | Services | `state_manager`, `svc_network`, `svc_time`, `svc_config`, `svc_prayer_engine`, `svc_prayer_engine_service`, `svc_timetable`, `svc_scheduler`, `svc_audio`, `remote_bridge` | Logic and engines. New services use the `svc_` prefix. |
 | 6 | Application | `ui_producer`, `display_manager`, `font_engine`, `font`, `main/` | UI and display logic. The app band consumes services and never calls the HAL directly (see section 5). |
+| — | Managed library | `chmorgan/esp-libhelix-mp3` | Fixed-point Helix MP3 decoder, fetched by the ESP component manager (declared in `components/svc_audio/idf_component.yml`) and used only by `svc_audio`. Not a layer and not a `components/` directory: it touches no hardware. Licence: RPSL 1.0 / RCSL 1.0 on the decoder sources, Apache-2.0 on the packaging. |
 
 `boot_manager` is **not a layer**. It is the startup orchestrator that
 runs once, before the kernel's tasks exist. See [boot.md](boot.md).
@@ -71,6 +72,7 @@ flowchart TB
         TT[svc_timetable]
         PES[svc_prayer_engine_service]
         SCH[svc_scheduler]
+        AUD[svc_audio]
         RB[remote_bridge]
     end
     subgraph KERN["Kernel (4)"]
@@ -102,6 +104,9 @@ flowchart TB
     SCH --> PES
     SCH --> TIME
     SCH --> EB
+    AUD --> HILC
+    AUD --> CFG
+    AUD --> EB
     TIME --> EB
     HILC --> HALC
     HILC --> FE
@@ -138,8 +143,8 @@ flowchart TB
 - `svc_prayer_engine_service_start()` calculates the initial times. If
   the timetable is stale or missing, it spawns a background `regen_task`
   (8 KB stack) to regenerate the 365-day file.
-- `svc_scheduler_init()` / `svc_scheduler_start()` run last (after
-  `svc_http_start()`). `init()` pre-marks the prayers that already passed
+- `svc_scheduler_init()` / `svc_scheduler_start()` run after
+  `svc_http_start()` and `svc_audio_start()`. `init()` pre-marks the prayers that already passed
   today, so a mid-day boot does not replay them; `start()` creates the
   1 Hz poll task on core 0 and subscribes it to
   `EVENT_TIME_DATE_CHANGED` and `EVENT_PRAYER_TIMES_UPDATED`. Each second
@@ -147,6 +152,22 @@ flowchart TB
   publishes `EVENT_PRAYER_TIME_REACHED` once per prayer per day. Matching
   is by epoch only, never by `(hour, minute)`, so DST fall-back and NTP
   steps cannot double-fire. Details in `STATUS.md` (`svc_scheduler`).
+- `svc_audio_start()` runs on `svc_http_start()`'s success path and
+  **before** the scheduler, so the first prayer event already has a
+  subscriber. One task (`svc_audio`, 6 KB stack,
+  `tskIDLE_PRIORITY + 3`, core 0) owns the queue it created and
+  subscribes to `EVENT_PRAYER_TIME_REACHED` through
+  `event_bus_subscribe()`; it never drains the kernel queue. For an
+  adhan-tier event it re-reads `adhan_mode`/`adhan_volume` from
+  `svc_config`, decodes `/storage/adhan.mp3` with libhelix-mp3 (fixed
+  point; heap-resident state), downmixes/scales the PCM in software and feeds
+  `audio_play_pcm()`. I2S is initialised on that task when playback
+  starts and deinitialised before it returns to idle, so there is no
+  idle I2S channel between adhans (the boot path no longer calls
+  `HAL_Audio_Init()`). Publishes `EVENT_AUDIO_STARTED` (98),
+  `EVENT_AUDIO_COMPLETED` (99) and `EVENT_AUDIO_ERROR` (100); a missing
+  asset is logged and skipped with no event. Details in `STATUS.md`
+  (`svc_audio`) and `docs/audio-adhan-design.md`.
 - `core_os_start()` then starts a state-queue task, a `core0_task`
   (system / network) and a `core1_task` (UI / clock). `core1_task`
   calls `display_manager_process_frame()` about every 16 ms.

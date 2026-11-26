@@ -11,18 +11,27 @@
  *
  *   Live today (read by an existing consumer):
  *     location_name, latitude, longitude, location_valid,
- *     method, madhab, iqamah_offset_min[]
+ *     method, madhab, custom_fajr_angle, custom_isha_angle,
+ *     iqamah_offset_min[], jamat[], season
+ *       -> svc_prayer_engine_service (adhan_calculator.c, jamat_calculator.c)
+ *          and svc_timetable
+ *     high_lat_rule, adhan_offset_min[], zawal_buffer_min
+ *       -> svc_prayer_engine_service (high-latitude rule, per-prayer adhan
+ *          margins, zawal window)
+ *     adhan_mode, adhan_volume
+ *       -> svc_audio, read LIVE from svc_config at every playback (never
+ *          cached at service start) so a flip OFF -> FULL mid-day is heard on
+ *          the next adhan; volume is sampled once per playback and applied as
+ *          software PCM scaling. See docs/audio-adhan-design.md I1 / H3.
+ *     hijri_offset_days, hijri_calc_method
+ *       -> svc_config_is_ramadan / svc_config_get_hijri_date, svc_timetable,
+ *          svc_http
  *
  *   Stored only (no consumer yet -- persisted so the web UI can save
  *   them and a future component can honor them without a schema change):
- *     adhan_mode             -> svc_audio (Phase 3)
- *     adhan_volume           -> never on this PCB (fixed GAIN pin); future HW only
  *     brightness_mode        -> backlight PWM HAL (separate PR)
  *     auto_brightness        -> backlight PWM + VEML7700 polling (separate PR)
  *     night_lamp_enable      -> full-screen warm fill + low backlight (separate PR)
- *     high_lat_rule          -> svc_prayer_engine (PR 14)
- *     adhan_offset_min       -> svc_prayer_engine_service (PR 15)
- *     zawal_buffer_min       -> svc_prayer_engine_service (PR 15)
  *
  * The honest-stub rule (Constitution section 12) forbids returning success
  * from a function that does nothing. It does not forbid storing a value that
@@ -159,7 +168,11 @@ typedef struct {
     season_cfg_t           season;
 
     svc_config_adhan_mode_t adhan_mode;
-    uint8_t  adhan_volume;          /* 0..100; no digital volume control on shipped PCB */
+    /* 0..100; software PCM scaling in svc_audio; 0=muted, 100=unity.
+       The MAX98357A has no digital volume control (fixed GAIN pin), so the
+       HAL reports HAL_ERR_DEV from HAL_Audio_SetVolume() and svc_audio scales
+       the decoded int16 samples itself. Sampled once per playback. */
+    uint8_t  adhan_volume;
     uint8_t  brightness_mode;       /* 0=daylight, 1=evening, 2=calm */
     /* 0=auto (default), 1=none, 2=middle, 3=seventh, 4=angle.
        AUTO uses seventh-of-night > 48° latitude (UK/Europe) to avoid

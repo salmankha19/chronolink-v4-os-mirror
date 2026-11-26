@@ -54,7 +54,11 @@ typedef enum {
 5. `HAL_RTC_Init()` - soft-fail if no DS3231M; skipped when I2C is down
 6. `HAL_Display_Init()` - **fatal on configured backend failure**
 7. Sensor registration (per `pdl_capabilities.h`) + `HAL_Sensors_Init()`
-8. `HAL_Audio_Init()` - failure logged and ignored
+8. Audio is **not** initialised here. `svc_audio` (HIL `audio_init` ->
+   `HAL_Audio_Init`) brings I2S up on its own task at the first adhan and
+   `audio_deinit` takes it down afterwards, so no idle I2S channel exists
+   between playbacks. See [boot.md](boot.md) "HAL_Init() order" and
+   [audio-adhan-design.md](audio-adhan-design.md) §4.1, §5-I2.
 
 Full per-step rationale is in [boot.md](boot.md).
 
