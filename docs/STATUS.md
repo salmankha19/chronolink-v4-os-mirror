@@ -265,16 +265,30 @@ is hardware verification only — see "Open verification" in that ledger.
   I2S channel and no Play-vs-Deinit race. `HAL_Init()` no longer calls
   `HAL_Audio_Init()`; `MAX98357A I2S ready` now appears at the first
   adhan (PR changed `chronolink_hal/src/hal_init.c`, `docs/boot.md`).
+  **Amplifier lifecycle:** SD_MODE is GPIO1 (`PDL_PIN_AUDIO_SD_MODE`),
+  R21 is DNP and R15 pulls the net low. `pdl_board_init()` drives the
+  pin low, so the amplifier is in shutdown (0.6 uA) from the first
+  instruction and a boot cannot click. `audio_amp_set_enabled(true)`
+  releases shutdown per playback (the HAL waits the >= 10 ms tON guard
+  before any BCLK exists) and `audio_amp_set_enabled(false)` returns it
+  to shutdown after the silence flush, before the channel is deleted.
+  `HAL_Audio_Init()` enables the amplifier implicitly and
+  `HAL_Audio_Deinit()` releases it iff this driver enabled it. A
+  playback therefore owns three resources -- decoder, amplifier, I2S --
+  each released iff it was acquired.
+
   **Failure classes:** 1 (asset absent) logs and emits nothing; 1b
   (`MP3InitDecoder()` returned NULL) and 2a' (decode-buffer allocation
   failed) emit `EVENT_AUDIO_ERROR` (stage=DECODE, partial=0) with **no
   deinit**, because both happen before `audio_init()`; 2a (no frame) and
   2a'' (decoded rate != 44100) emit the same event and do deinit; 2b
   (read error) stage=READ; 2c (mid-stream decode failure) stage=DECODE;
-  3a (init failed) stage=HAL_INIT and **no deinit**; 3b
+  3a' (amplifier enable failed) stage=HAL_INIT and **no deinit**; 3a
+  (init failed) stage=HAL_INIT and **no deinit**; 3b
   (`audio_play_pcm()` false) stage=HAL_WRITE. Deinit runs iff init
-  succeeded; the per-playback decoder is freed iff `MP3InitDecoder()`
-  succeeded. Before deinit, >= 2 HAL DMA chunks of digital zeros are
+  succeeded; the amplifier is disabled iff this playback enabled it; the
+  per-playback decoder is freed iff `MP3InitDecoder()` succeeded. Before
+  deinit, >= 2 HAL DMA chunks of digital zeros are
   written so the amplifier does not click (AMEND-2), and decode recovery
   is bounded (8 non-productive decodes or 64 KB without a frame) so a
   damaged file cannot hang the task. Duplicate requests are logged and dropped after playback
@@ -668,6 +682,10 @@ Verify each against hardware or datasheet before fixing.
     Kconfig entries. Leave the entries in place for now (removing them
     changes the menuconfig menu tree and would need a migration note);
     either delete them or wire them into the HAL in a future PR.
+    BOARD_AUDIO_SD_MODE has been corrected to `1` (it defaulted to `-1`,
+    contradicting the pin map) and its help text now says it is a
+    legacy duplicate; the other three still carry their PCB values.
+
 13. **NTP needs `CONFIG_LWIP_SNTP_MAX_SERVERS=3`.** `svc_time` configures
     three servers (`time`/`ntp_server_0..2`); LwIP's SNTP keeps only
     `CONFIG_LWIP_SNTP_MAX_SERVERS` of them (default `1`) and drops the
@@ -854,9 +872,10 @@ Additional issues:
    HAL directly, or add a HIL graphics adapter?
 4. **Degradation policy:** which devices are mandatory vs optional?
 5. **Schematic check of pins:** the retired `pinout.csv` showed likely
-   errors (UART0 on IO36/37, JTAG TMS/TDO swapped, SD_MODE on IO1
-   while code says unused, backlight mismatch). Regenerate from the
-   schematic.
+   errors (UART0 on IO36/37, JTAG TMS/TDO swapped, backlight mismatch).
+   It did list SD_MODE on IO1, which is now confirmed correct (R15
+   fitted, R21 DNP, GPIO1 drives SD_MODE), so that entry was not an
+   error after all. Regenerate from the schematic.
 
 ---
 

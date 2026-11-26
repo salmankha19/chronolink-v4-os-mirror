@@ -9,23 +9,37 @@
  *   1. svc_config_get()  -> adhan_mode read LIVE, adhan_volume sampled once
  *   2. fopen(asset)      -> class 1 failure: log + skip, NO event
  *   3. decode buffers    -> resident, allocated on the first adhan
- *   4. dec_open()        -> failure: ERROR(DECODE,0); I2S is not up yet
- *   5. audio_init()      -> class 3a failure: ERROR(HAL_INIT,0), NO deinit
- *   6. first frame       -> class 2a/2a'' failure: ERROR(DECODE,0), deinit
- *   7. EVENT_AUDIO_STARTED, immediately before the first PCM write
- *   8. find-sync -> decode -> downmix -> volume-scale -> audio_play_pcm()
- *   9. silence flush -> audio_deinit() -> dec_close() -> fclose()
- *  10. EVENT_AUDIO_COMPLETED on a normal end
+ *   4. dec_open()        -> failure: ERROR(DECODE,0); nothing else acquired
+ *   5. amp enable        -> failure: ERROR(HAL_INIT,0), NO deinit (class 3a')
+ *   6. audio_init()      -> class 3a failure: ERROR(HAL_INIT,0), NO deinit
+ *   7. first frame       -> class 2a/2a'' failure: ERROR(DECODE,0), deinit
+ *   8. EVENT_AUDIO_STARTED, immediately before the first PCM write
+ *   9. find-sync -> decode -> downmix -> volume-scale -> audio_play_pcm()
+ *  10. silence flush -> amp disable -> audio_deinit() -> dec_close() -> fclose()
+ *  11. EVENT_AUDIO_COMPLETED on a normal end
  *
- * TWO resources are acquired, and each is released if and only if it was
+ * THREE resources are acquired, and each is released if and only if it was
  * acquired:
  *
- *   decoder   MP3InitDecoder() -> MP3FreeDecoder()   step 4 (per playback)
- *   I2S       audio_init()     -> audio_deinit()      step 5 (per playback)
+ *   decoder   MP3InitDecoder()             -> MP3FreeDecoder()     step 4
+ *   amplifier audio_amp_set_enabled(true)  -> ...(false)           step 5
+ *   I2S       audio_init()                 -> audio_deinit()       step 6
+ *
+ * The amplifier is a resource in its own right. SD_MODE is GPIO1 (R21 DNP,
+ * R15 10 kR pull-down), so an amplifier left on after a playback burns the
+ * 340-400 uA standby current instead of 0.6 uA. It is enabled BEFORE
+ * audio_init() because Init is what starts BCLK/LRCLK, and the HAL blocks
+ * inside the enable call for the >= 10 ms tON guard -- so no clock edge can
+ * land inside the amplifier's wake-up (MAX98357A tON is 7-7.5 ms). It is
+ * disabled only after the silence flush has already put zeros on SDIN, and
+ * only if this playback enabled it (amp_acquired).
  *
  * Deinit on a failed init is explicitly forbidden (section 4.5) -- that is the
- * bug this file exists to not have. Freeing a decoder that was never opened,
- * or leaking one that was, is the same mistake one layer down.
+ * bug this file exists to not have. 3a and 3a' are the only two paths that
+ * skip the deinit, and both still release everything acquired before them:
+ * 3a' frees the decoder, 3a releases the amplifier and the decoder. Freeing a
+ * decoder that was never opened, or leaving the amplifier enabled after a
+ * failed init, is the same mistake one layer down.
  *
  * Services reach audio through the HIL adapter (components/hil/audio_api.c),
  * not the HAL directly, per docs/Architecture.md section 2 rule 2 and
@@ -709,6 +723,7 @@ static void play_adhan(const prayer_time_event_t *req)
     uint32_t heap_before;
     uint32_t heap_after;
     bool completed;
+    bool amp_acquired = false;
 
     /* (1) Config is read LIVE, once per playback: adhan_mode every time
        (I1 -- a mosque flipping OFF -> FULL must hear the next adhan) and
@@ -775,27 +790,59 @@ static void play_adhan(const prayer_time_event_t *req)
              (unsigned)heap_before, (unsigned)heap_after,
              (int)((int32_t)heap_before - (int32_t)heap_after));
 
-    /* (5) I2S comes up only now, on this task, for this playback. */
-    if (!audio_init()) {
-        /* Class 3a: init FAILED, so there is nothing to deinit -- but the
-           decoder WAS acquired and must be released. */
-        ESP_LOGE(TAG, "audio_init failed -- adhan skipped, I2S stays down");
+    /* (5) Amplifier out of shutdown, BEFORE the clocks exist. The HAL does not
+       return until the >= 10 ms tON guard has elapsed, so the first BCLK edge
+       cannot fall inside the amplifier's wake-up. A failure here is class 3a'
+       -- the decoder is already acquired and must be released, but no I2S
+       channel exists, so there is nothing to deinit. */
+    if (!audio_amp_set_enabled(true)) {
+        /* On this board SD_MODE is GPIO1 with only a pull-down behind it, so
+           an amplifier that cannot be enabled means a silent adhan. Report it
+           instead of playing into a shutdown output stage. */
+        ESP_LOGE(TAG, "amplifier enable failed -- adhan skipped, I2S stays down");
         publish_error(req->prayer_id, SVC_AUDIO_STAGE_HAL_INIT, 0,
                       SVC_AUDIO_ERR_INIT);
         dec_close(dec);
         fclose(f);
         return;
     }
+    amp_acquired = true;
 
-    /* (6)-(8) Decode and write. stream_playback returns false only when it
+    /* (6) I2S comes up only now, on this task, for this playback. */
+    if (!audio_init()) {
+        /* Class 3a: init FAILED, so there is nothing to deinit -- but the
+           decoder AND the amplifier were acquired and must be released, in
+           reverse order. */
+        ESP_LOGE(TAG, "audio_init failed -- adhan skipped, I2S stays down");
+        publish_error(req->prayer_id, SVC_AUDIO_STAGE_HAL_INIT, 0,
+                      SVC_AUDIO_ERR_INIT);
+        if (amp_acquired && !audio_amp_set_enabled(false)) {
+            ESP_LOGW(TAG, "amplifier shutdown failed after audio_init error "
+                          "-- HAL_Audio_Deinit retries at the next playback");
+        }
+        dec_close(dec);
+        fclose(f);
+        return;
+    }
+
+    /* (7)-(9) Decode and write. stream_playback returns false only when it
        published EVENT_AUDIO_ERROR itself. */
     completed = stream_playback(f, ctx, dec, req->prayer_id, mode, volume,
                                 req->scheduled_epoch);
 
-    /* (9) Shut both resources down in the safest order: zeros into the amp
-       first (AMEND-2), then the I2S channel, then the decoder. Reached only
-       because init succeeded above, so this deinit is always paired. */
+    /* (10) Shut the three resources down in reverse order of acquisition:
+       zeros into the amplifier first (AMEND-2), then the amplifier itself
+       (0.6 uA shutdown instead of 340-400 uA standby, and a live output stage
+       cannot mask a later I2S fault), then the I2S channel, then the decoder.
+       Reached only because enable and init both succeeded above, so every
+       release here is paired. */
     silence_flush(ctx);
+
+    if (amp_acquired && !audio_amp_set_enabled(false)) {
+        /* Not swallowed: the HAL keeps s_amp_enabled set and its own
+           HAL_Audio_Deinit() retries the release on the very next line. */
+        ESP_LOGW(TAG, "amplifier shutdown failed -- retrying via HAL_Audio_Deinit");
+    }
 
     if (!audio_deinit()) {
         ESP_LOGW(TAG, "audio_deinit failed -- Init refuses to run until a "
@@ -805,8 +852,8 @@ static void play_adhan(const prayer_time_event_t *req)
     dec_close(dec);
     fclose(f);
 
-    /* (10) Normal end: both resources are down, so COMPLETED is published with
-       the device back in its idle state. Error paths published their own
+    /* (11) Normal end: all three resources are down, so COMPLETED is published
+       with the device back in its idle state. Error paths published their own
        event above. */
     if (completed) {
         publish_play_event(EVENT_AUDIO_COMPLETED, req->prayer_id, mode,

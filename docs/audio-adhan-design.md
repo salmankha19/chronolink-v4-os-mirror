@@ -1,10 +1,22 @@
-# `svc_audio` — Adhan Playback Service (v1 design, rev 4)
+# `svc_audio` — Adhan Playback Service (v1 design, rev 5)
 
-**Status:** implemented (rev 4). Rev 3 folded the tree back into the document
+**Status:** implemented (rev 5). Rev 3 folded the tree back into the document
 after the `svc_audio` v1 PR: payload count corrected to two structs / three
 events, sample-rate rejection, stereo downmix, the sample-counted SHORT cap,
 the open → init → first-decode ordering, and the HIL (not HAL) call path.
 Anything still marked *pending build* is a measurement, not a decision.
+
+**Rev 5 — amplifier power control, three-resource discipline.** The hardware
+question of rev 4 is answered: **R15 (10 kR) is fitted, R21 is DNP, and
+ESP32-S3 IO1 drives the MAX98357A SD_MODE pin directly**. The firmware now
+controls the amplifier: `pdl_board_init()` holds GPIO1 low for a silent boot,
+`HAL_Audio_AmpSetEnabled()` (HIL `audio_amp_set_enabled()`) releases shutdown
+per playback with the >= 10 ms tON guard, and `svc_audio` releases it on every
+exit path — so a playback owns **three** resources (decoder, amplifier, I2S),
+each released iff it was acquired (§4.5, §3.2 class 3a'). Idle current drops
+from 340-400 uA standby to 0.6 uA shutdown, and a silent adhan can no longer be
+caused by an amplifier that was never turned on without an `EVENT_AUDIO_ERROR`
+saying so.
 
 **Rev 4 (architect amendment v3) — decoder swap, no API change.** The decoder
 is `chmorgan/esp-libhelix-mp3` ^1.0.3 (fixed-point Helix), fetched by the ESP
@@ -19,7 +31,7 @@ now 6 KB. libhelix's own known failure mode — reporting zero output samples in
 a loop on damaged input — is bounded in §3.3. Rev 4 also adds the volume
 ceiling (AMEND-1, §3.1), the pre-deinit silence flush (AMEND-2, §4.5), the
 hardware notes in §7 and the `GET /debug/audio` test hook (§8).
-**Date:** 2026-11-22 (rev 2), 2026-11-25 (rev 3), 2026-11-25 (rev 4). **Author:** lead architect
+**Date:** 2026-11-22 (rev 2), 2026-11-25 (rev 3), 2026-11-25 (rev 4), rev 5. **Author:** lead architect
 (review dispositions incorporated).
 **Authority rule:** the tree wins over this document. If code and doc disagree, fix the doc in the same change (`.clinerules`).
 **Companion docs:** `docs/boot.md` (insertion point / rollback), `docs/Architecture.md` (task & event model), `docs/prayer-times-model.md` (adhan timing source).
@@ -61,7 +73,7 @@ hardware notes in §7 and the `GET /debug/audio` test hook (§8).
 | AM1 | Software volume ceiling: gain = 0.70 x (adhan_volume / 100) as one Q15 multiplier per playback, integer math only. Volume 100 is about -3.1 dBFS, not full scale | §3.1, `svc_audio.c` AUDIO_VOLUME_MAX_Q15 |
 | AM2 | Pre-deinit silence flush: >= 2 full HAL DMA chunks of digital zeros through `audio_play_pcm()` before `audio_deinit()` (MAX98357A click mitigation) | §4.5, `silence_flush()` |
 | AM3 | Read-and-report only: which I2S slot mono PCM occupies. **Reported: LEFT slot only** (`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(16 bit, I2S_SLOT_MODE_MONO)` sets `.slot_mask = I2S_STD_SLOT_LEFT`), which satisfies "left or both". No code change | §4.1, §7 |
-| AM4 | Hardware notes: no I2S clock removal while BCLK runs, MAX98357A tON 7-7.5 ms, BCLK-stop standby, bench vs production module, click/pop KCP -66/-72 dBV and its sequencing-independence, standby vs shutdown idle current, R15/R21 strap statement | §7.1 (a)–(f) — the R15/R21 statement conflicts with every pin source in the tree and is recorded, not applied |
+| AM4 | Hardware notes: no I2S clock removal while BCLK runs, MAX98357A tON 7-7.5 ms, BCLK-stop standby, bench vs production module, click/pop KCP -66/-72 dBV and its sequencing-independence, standby vs shutdown idle current, R15/R21 strap statement | §7.1 (a)–(f). **Rev 5: applied.** R15/R21 statement confirmed against the schematic; SD_MODE gating implemented (§4.5 three resources, §7.1 e) |
 | AM5 | Decoder swap minimp3 -> libhelix (fixed-point). Failure table extended (decoder alloc, rate, bounded recovery) | §1.1, §3.2, §3.3, §6, §7 |
 | AM6 | Bounded recovery: <= 8 consecutive non-productive decodes and <= 64 KB scanned without a frame, then class 2c | §3.3 |
 | AM7 | Test hook `GET /debug/audio?prayer=<id>` under `CHRONOLINK_TEST_HOOKS` | §8, `svc_http.c` |
@@ -201,13 +213,16 @@ HAL/HIL log line.
 
 ### 3.2 Failure classes (B2, M3) — three classes, each handled distinctly
 
-Ordering matters for this table (rev 4): **fopen -> `MP3InitDecoder()` ->
-`audio_init()` -> first decode** (§4.1). Two resources are acquired, each
-released only if it was acquired. Class 1 happens before anything is acquired
-(so there is nothing to release and no event); a decoder-allocation failure
-happens before `audio_init()` (so there is no I2S to deinit); classes 2x happen
-after init succeeded (so deinit is mandatory); class 3a happens *because* init
-failed (so deinit is forbidden, while the decoder that WAS acquired is freed).
+Ordering matters for this table (rev 5): **fopen -> `MP3InitDecoder()` ->
+`audio_amp_set_enabled(true)` -> `audio_init()` -> first decode** (§4.1). Three
+resources are acquired, each released only if it was acquired. Class 1 happens
+before anything is acquired (so there is nothing to release and no event); a
+decoder-allocation failure happens before anything else (so there is no
+amplifier to shut down and no I2S to deinit); 3a' happens after the decoder and
+before any I2S (so there is no deinit, but the decoder is freed); classes 2x
+happen after init succeeded (so amplifier shutdown and deinit are mandatory);
+class 3a happens *because* init failed (so deinit is forbidden, while the
+amplifier and the decoder that WERE acquired are released).
 
 | # | Condition | stage | partial | Event | Cleanup |
 |---|---|---|---|---|---|
@@ -218,11 +233,13 @@ failed (so deinit is forbidden, while the decoder that WAS acquired is freed).
 | 2a'' | **First decoded frame reports `samprate != 44100`** (rev 3) | DECODE | 0 | `EVENT_AUDIO_ERROR` + abort | deinit + free decoder. **No resampling** (D2) |
 | 2b | `fread()` fails / returns 0 **before the end of the asset** (`ferror()` set, FATFS / wear-leveling) | READ | 1 | `EVENT_AUDIO_ERROR` + abort | deinit |
 | 2c | **Bounded recovery exhausted** (8 consecutive non-productive decodes, or 64 KB scanned without a frame), a hard `MP3Decode()` error that does not resync, or a `samprate != 44100` frame mid-stream | DECODE | 1 | `EVENT_AUDIO_ERROR` + abort | deinit + free decoder |
-| 3a | `audio_init()` returns false at playback request (HAL `HAL_Audio_Init()` failed) | HAL_INIT | 0 | `EVENT_AUDIO_ERROR`, skip playback, remain idle | **NO deinit** (init failed; nothing to deinit) — but the decoder WAS acquired, so `MP3FreeDecoder()` runs |
+| 3a' | **`audio_amp_set_enabled(true)` returns false** (rev 5: SD_MODE GPIO could not be driven, or no firmware-controlled SD_MODE) | HAL_INIT | 0 | `EVENT_AUDIO_ERROR`, skip playback, remain idle | **NO deinit** (no channel was opened); the decoder WAS acquired, so `MP3FreeDecoder()` runs |
+| 3a | `audio_init()` returns false at playback request (HAL `HAL_Audio_Init()` failed) | HAL_INIT | 0 | `EVENT_AUDIO_ERROR`, skip playback, remain idle | **NO deinit** (init failed; nothing to deinit) — but the amplifier and the decoder WERE acquired, so `audio_amp_set_enabled(false)` then `MP3FreeDecoder()` run |
 | 3b | `audio_play_pcm()` returns false (I2S write timeout / DMA stall) | HAL_WRITE | 1 if a buffer had already been written, else 0 | `EVENT_AUDIO_ERROR` + abort | deinit + free decoder |
 
 Rules that survive refactoring:
-- **Deinit is called if and only if init succeeded**, and always on the `svc_audio` task before returning to idle (§4.5, §5-I2). The tempting bug — deinit on a *failed* init (3a) — is explicitly forbidden.
+- **Deinit is called if and only if init succeeded**, and always on the `svc_audio` task before returning to idle (§4.5, §5-I2). The tempting bug — deinit on a *failed* init (3a) — is explicitly forbidden; 3a' never reaches init at all.
+- **The amplifier is disabled if and only if this playback enabled it** (rev 5). Every class 2x / 3b path runs silence flush -> `audio_amp_set_enabled(false)` -> deinit -> free decoder; 3a runs amp disable -> free decoder, with no deinit; 3a' frees the decoder only, because the amp was never enabled.
 - Class 2 and 3b: **no retry, no second file, no user toast.** Log ERROR, publish, abort, deinit, idle.
 - Class 1 emits no event; classes 2/3 always emit `EVENT_AUDIO_ERROR` with the stage/partial above.
 - **`partial` (exact meaning, rev 3):** `1` if and only if **at least one PCM
@@ -373,14 +390,20 @@ queue **it owns** (length 4); it never drains the kernel queue (M2).
 3. Resident decode buffers (first adhan only), then `MP3InitDecoder()` —
    classes 2a' / 1b. Nothing I2S-related has happened, so a failure here needs
    no deinit.
-4. `audio_init()` — the **first** call that touches I2S. Class 3a on failure:
-   **no deinit**, and the decoder is freed.
-5. First decode and the `samprate == 44100` check: classes 2a / 2a''. From this
-   point both the deinit and the decoder free are mandatory on every exit.
-6. `EVENT_AUDIO_STARTED`, then the decode/write loop.
-7. Silence flush, then `audio_deinit()` on this task, then `MP3FreeDecoder()`,
-   then `fclose()`.
-8. `EVENT_AUDIO_COMPLETED` on a normal end (an error path published
+4. **`audio_amp_set_enabled(true)` (rev 5)** — amplifier out of shutdown. SD_MODE
+   is GPIO1 (R21 DNP, R15 10 kR pull-down), so this is a real resource, not a
+   formality. The HAL call blocks for the >= 10 ms tON guard, which is why it
+   must happen **before** any clock exists. Class **3a'** on failure: no I2S
+   channel is open, so there is nothing to deinit; the decoder is freed.
+5. `audio_init()` — the **first** call that touches I2S. Class 3a on failure:
+   **no deinit**; the amplifier and the decoder are released, in that order.
+6. First decode and the `samprate == 44100` check: classes 2a / 2a''. From this
+   point the amplifier disable, the deinit and the decoder free are mandatory
+   on every exit.
+7. `EVENT_AUDIO_STARTED`, then the decode/write loop.
+8. Silence flush, then `audio_amp_set_enabled(false)`, then `audio_deinit()` on
+   this task, then `MP3FreeDecoder()`, then `fclose()`.
+9. `EVENT_AUDIO_COMPLETED` on a normal end (an error path published
    `EVENT_AUDIO_ERROR` at the failing step, before this shutdown sequence).
 
 **Boot change (rev 3):** `HAL_Init()` used to call `HAL_Audio_Init()`, which
@@ -390,9 +413,10 @@ invariant forbids. That call is removed from
 first adhan and `"deinitialized"` after it. Nothing else in the boot path
 depended on audio being up; `docs/boot.md` is updated in the same PR.
 
-**Call path (rev 3):** the service calls `audio_init()`, `audio_play_pcm()` and
-`audio_deinit()` from the HIL adapter (`components/hil/audio_api.c`), not
-`HAL_Audio_*` directly, per `docs/Architecture.md` §2 rule 2 and `.clinerules`
+**Call path (rev 3, extended rev 5):** the service calls `audio_amp_set_enabled()`,
+`audio_init()`, `audio_play_pcm()` and `audio_deinit()` from the HIL adapter
+(`components/hil/audio_api.c`), not `HAL_Audio_*` directly, per
+`docs/Architecture.md` §2 rule 2 and `.clinerules`
 ("services use HIL, not HAL"). The HIL is a `bool`-returning pass-through, so
 no I2S knowledge leaks above layer 3 and the ownership property is unchanged:
 `audio_api.c` is the only HAL-level init/deinit caller in a shipping build
@@ -438,16 +462,30 @@ Factory reset reboots the device, resetting the I2S peripheral. No explicit stop
 ### 4.5 I2S lifecycle discipline (B2)
 Deinit runs **only** when a prior init succeeded, on the `svc_audio` task, before returning to idle — and only after the open → init → first-decode ordering of §4.1 has placed the failure in the right class. On init failure (3a) the service publishes `EVENT_AUDIO_ERROR` and stays idle **without** deinit. This is the concrete guard against the well-meaning "deinit on failed init" bug.
 
-The ordering is what makes the rule checkable: 3a is the only return path that
-has not passed `audio_init()`, and it is the only one that skips deinit. Every
-path after step 4 of §4.1 deinits exactly once, on that task, before the next
-`xQueueReceive()`.
+The ordering is what makes the rule checkable: 3a (and 3a', rev 5) are the only
+return paths that have not passed `audio_init()`, and they are the only ones
+that skip deinit. Every path after step 5 of §4.1 deinits exactly once, on that
+task, before the next `xQueueReceive()`.
 
-**Two resources, two pairs (rev 4).** The decoder is a second resource acquired
-per playback, and it follows the same discipline one layer down: it is freed if
-and only if `MP3InitDecoder()` returned non-NULL, on the `svc_audio` task, before
-idle. That is why 3a (init failed) still frees the decoder while skipping the
-deinit, and why a decoder-allocation failure frees nothing.
+**Three resources, three pairs (rev 5).** Each resource is acquired per playback
+and released if and only if it was acquired, on the `svc_audio` task, before
+idle:
+
+| Resource | Acquire | Release | Failure that skips the release |
+|---|---|---|---|
+| decoder | `MP3InitDecoder()` non-NULL | `MP3FreeDecoder()` | allocation failure — nothing acquired |
+| amplifier | `audio_amp_set_enabled(true)` | `audio_amp_set_enabled(false)` | 3a' / 3a — released, not leaked |
+| I2S | `audio_init()` | `audio_deinit()` | 3a / 3a' — init never ran, no deinit |
+
+That is why 3a (init failed) frees the decoder **and** shuts the amplifier down
+while skipping the deinit, why 3a' (amp enable failed) frees the decoder only,
+and why a decoder-allocation failure frees nothing and never turns the amplifier
+on. The amplifier is its own resource because SD_MODE is GPIO1 (R21 DNP, R15
+10 kR pull-down): leaving it enabled burns 340-400 uA standby instead of 0.6 uA,
+and a live output stage would mask an I2S fault behind silence that "looks
+fine". The HAL keeps the matching `s_amp_enabled` flag and its `Deinit()`
+releases the amplifier iff it enabled it, so the invariant survives a caller
+that never uses the amp API.
 
 **Silence flush before deinit (AMEND-2).** Before `audio_deinit()`,
 `silence_flush()` writes at least two full HAL DMA chunks of digital zeros
@@ -456,8 +494,15 @@ samples) through `audio_play_pcm()`. The MAX98357A datasheet recommends ramping
 SDIN to zero before power-down; this is the v1 click/pop mitigation, and it is
 also why the deinit-order hazard in §7 is tolerable (the amplifier's own
 suppression is sequencing-independent — §7.1 f). A failed flush write is
-logged and does not stop the shutdown — the deinit is what actually silences the
-amplifier.
+logged and does not stop the shutdown.
+
+**Then the amplifier, then the clocks (rev 5).** The shutdown order is silence
+flush -> `audio_amp_set_enabled(false)` -> `audio_deinit()`. Driving SD_MODE low
+while the clocks are still running and SDIN is already zero is the datasheet's
+ramp-down order, and it is what actually silences the device now that SD_MODE is
+under firmware control: 0.6 uA shutdown instead of 340-400 uA standby. A failed
+disable is logged, not swallowed: the HAL keeps `s_amp_enabled` set and its own
+`HAL_Audio_Deinit()` retries the release on the next line.
 
 ## 5. Invariants that must survive refactoring
 
@@ -509,57 +554,71 @@ recollection, then delete this paragraph.
 
 ### 7.1 Hardware notes (AM4)
 
-**(a) Deinit order — do not remove LRCLK while BCLK is present.** The HAL's
+**(a) Shutdown order — do not remove LRCLK while BCLK is present.** The HAL's
 `HAL_Audio_Deinit()` disables and deletes the I2S channel, which stops both
-clocks together; v1 mitigates any ambiguity by writing the silence flush first
-(§4.5) so the amp's SDIN is already zero when the clocks stop. The architect
-amendment also cites 100 K pull-downs **R24/R25 on I2S_BCLK / I2S_LRCK** —
-those designators do not appear anywhere in this repository, so treat them as
-**unverified** until checked against the schematic. What the tree does document
-(`components/chronolink_hal/include/pdl_pins.h`) is **R15 (10 kR)** pulling
-SD_MODE low when GPIO1 is not driven. The structural fix is SD_MODE gating,
-deferred to the jamat-alert PR.
+clocks together. Since rev 5 the order is: silence flush (§4.5) so SDIN is
+already zero, then `audio_amp_set_enabled(false)` so the amplifier is in
+shutdown while the clocks are still running, then the channel delete. The
+architect amendment also cites 100 K pull-downs **R24/R25 on I2S_BCLK /
+I2S_LRCK** — those designators do not appear anywhere in this repository, so
+treat them as **unverified** until checked against the schematic. What the tree
+documents (`components/chronolink_hal/include/pdl_pins.h`) is **R15 (10 kR)**
+pulling SD_MODE low when GPIO1 is not driven, which is why shutdown is the
+power-on default. SD_MODE gating — deferred to the jamat-alert PR in rev 4 — is
+implemented in rev 5.
 
-**(b) MAX98357A tON is 7–7.5 ms.** Any future SD_MODE gating must wait **at
-least 10 ms** after releasing shutdown before starting BCLK/LRCLK, or the first
-milliseconds of audio are lost.
+**(b) MAX98357A tON is 7–7.5 ms.** SD_MODE gating therefore waits **at least
+10 ms** after releasing shutdown before starting BCLK/LRCLK, or the first
+milliseconds of audio are lost. Implemented as
+`HAL_AUDIO_AMP_TON_GUARD_MS` inside `HAL_Audio_AmpSetEnabled(true)`, i.e. the
+wait happens before any channel exists and is paid once per playback (the call
+is idempotent, so `HAL_Audio_Init()`'s internal enable does not add a second
+wait).
 
 **(c) BCLK stop puts the amp into automatic standby** with high-Z outputs, so
 there is no idle hiss by construction — a property of the lazy init/deinit
-design, not an accident. Standby current 340–400 uA versus 0.6 uA in shutdown
-is acceptable on a mains-powered clock, which is why v1 does not need SD_MODE
-gating for power reasons.
+design, not an accident. Rev 5 goes one step further: after the silence flush
+`svc_audio` drives SD_MODE low, so the idle state is **shutdown (0.6 uA)**
+rather than standby (340–400 uA). The amplifier's state is therefore explicit
+in firmware, not dependent on the clock-stop behaviour, and the two mechanisms
+reinforce each other instead of one substituting for the other.
 
 **(d) Module variants.** The bench board is an **ESP32-S3-WROOM-1-N16R8**; the
 production BOM is **N16R2**. PSRAM stays disabled in `sdkconfig.defaults`, so
 one image runs on both — see `docs/hardware.md`.
 
-**(e) SD_MODE strap — TWO CONFLICTING STATEMENTS, resolve before the bench test.**
-The architect amendment (AM4, rev 4) says **R15 is fitted (10 kR pull-down) and
-R21 is DNP; the MCU controls SD_MODE via IO1.** The tree says the opposite:
-`components/chronolink_hal/include/pdl_pins.h`, `docs/hal.md`, `docs/hardware.md`
-and `hal_audio_max98357a.c` all document **R21 (0R) fitted to +3V3, JP2 1-2
-bridged by default, `PDL_PIN_AUDIO_SD_MODE = -1`** (not under firmware control),
-with the JP2 2-3 rework as the procedure to *gain* firmware control. Neither
-statement has been checked against the schematic in this PR.
+**(e) SD_MODE strap — RESOLVED in rev 5: the amplifier is under firmware
+control.** AMEND-4 was right: **R15 (10 kR) is fitted, R21 is DNP, and ESP32-S3
+IO1 drives the MAX98357A SD_MODE pin directly.** The rev-4 tree (JP2 1-2 bridged,
+R21 0R to +3V3, `PDL_PIN_AUDIO_SD_MODE = -1`) described an earlier board revision
+and has been corrected in every pin source in the same change: `pdl_pins.h` (now
+`1`), `pdl_board_esp32.c` (GPIO1 configured as an output and driven LOW in
+`pdl_board_init()`), `hal_audio_max98357a.c`, `hal_audio.h`, `audio_api.h`,
+`audio_test.*`, `main/Kconfig.projbuild`, `docs/hal.md`, `docs/hardware.md` and
+`docs/STATUS.md`.
 
-v1 ships the tree's reading, because that is what the code implements and every
-pin source agrees on; AMEND-4's reading is recorded here, **not applied**.
+Consequences, now implemented rather than planned:
 
-Why it matters, concretely: if AMEND-4 is right, R15 pulls SD_MODE low whenever
-GPIO1 is not driven, so the amplifier is in **shutdown and nothing can be heard**
-until firmware drives GPIO1 high — the required change is one line
-(`PDL_PIN_AUDIO_SD_MODE` from `-1` to `1`; the HAL's `>= 0` block already exists)
-plus the `>= 10 ms` sequencing in (b). If the tree is right, SD_MODE is held high
-by R21 and the code is correct as written. The failure modes are not
-symmetrical: silence with a clean serial log would look like a decoder fault and
-send this PR's owner hunting in libhelix. Confirm SD_MODE's level on the board
-(§8) before judging any audio result.
+- `pdl_board_init()` drives GPIO1 LOW, so the amplifier is in shutdown (0.6 uA,
+  high-Z outputs) from the first firmware instruction: a boot cannot click, and
+  a silent boot no longer depends on R15 alone.
+- `HAL_Audio_AmpSetEnabled()` is the only writer of the pin after board init.
+  `HAL_Audio_Init()` enables the amplifier implicitly (an I2S channel with the
+  amplifier in shutdown is silence), and `HAL_Audio_Deinit()` releases it if and
+  only if this driver enabled it — on both of its exit paths, including the idle
+  one, so a failed init cannot leave the amplifier running.
+- The >= 10 ms tON guard lives inside the enable call (see b), so it is
+  impossible to start BCLK/LRCLK inside the amplifier's wake-up.
+- The remaining failure mode is reported, not silent: if the GPIO cannot be
+  driven, `HAL_Audio_AmpSetEnabled()` returns `HAL_ERR_DEV`, `svc_audio`
+  publishes `EVENT_AUDIO_ERROR` (stage=HAL_INIT, class 3a') and skips the
+  playback rather than playing into a shutdown amplifier. A silent adhan with a
+  clean log can no longer be mistaken for a decoder fault.
 
-**Level consequence (unchanged, AM4-e).** Under the tree's reading R21 holds
-SD_MODE high, i.e. the amplifier runs in its (L+R)/2 mode. Combined with the
-left-slot-only mono stream (AM3) that is roughly 6 dB of headroom already lost
-before the §3.1 ceiling — which is exactly why the ceiling exists.
+**Level consequence (unchanged, AM4-e).** SD_MODE high selects the amplifier's
+(L+R)/2 mode, exactly as the old R21 strap did. Combined with the left-slot-only
+mono stream (AM3) that is roughly 6 dB of headroom already lost before the §3.1
+ceiling — which is exactly why the ceiling exists.
 
 **(f) Click/pop figures (AM4).** The MAX98357A's own click/pop suppression is
 quoted at **KCP -66 dBV** and **-72 dBV** for the two shutdown cases, and it is
@@ -585,10 +644,17 @@ Build:
 - [ ] `HAL_Init()` logs no `MAX98357A I2S ready` at boot; the line appears at the first adhan.
 
 Hardware:
-- [ ] **SD_MODE strap confirmed FIRST (§7.1 e):** measure SD_MODE on the board.
-      High (R21 fitted) -> the code is correct as written. Low/floating (R21 DNP)
-      -> the amplifier is in shutdown, and silence is a strap fault, not a
-      decoder fault (`PDL_PIN_AUDIO_SD_MODE` must become `1`).
+- [ ] **SD_MODE (GPIO1) level checked FIRST (§7.1 e):** with the device idle
+      after boot, GPIO1 reads **low** (amplifier in shutdown, 0.6 uA). During a
+      playback it must read **high**: the log shows `SD_MODE GPIO1 high --
+      amplifier enabled (waited 10 ms for tON)` before `MAX98357A I2S ready`.
+- [ ] **Amplifier back in shutdown afterwards:** the log shows `SD_MODE GPIO1
+      low -- amplifier in shutdown` and GPIO1 is 0 V once the playback ends.
+- [ ] **tON guard honoured:** the first PCM reaches the amplifier no sooner than
+      ~10 ms after GPIO1 goes high (scope SD_MODE + BCLK; the enable call
+      blocks for the guard, so no clock edge can fall inside it).
+- [ ] **No boot click:** power-cycle with the volume up — no pop at reset, with
+      or without the SD card inserted.
 - [ ] OFF→FULL mid-day: next adhan heard (I1).
 - [ ] Volume change mid-day applied at next playback; **no** mid-playback effect (H3).
 - [ ] SHORT ≤10 s; shorter asset plays whole; 10 s asset SHORT==FULL (M1).
@@ -611,18 +677,24 @@ publishes a synthetic `EVENT_PRAYER_TIME_REACHED` with
 `kind = PRAYER_KIND_ADHAN` (unauthenticated on purpose, closed LAN, absent from
 the production image). Nothing else can fire that event on demand: svc_scheduler
 gates it to once per prayer per day.
-- [ ] **Init-failure:** stub `HAL_Audio_Init()` → `HAL_ERR_DEV`; confirm `EVENT_AUDIO_ERROR` (stage=HAL_INIT, partial=0), **no deinit**, service idle.
+- [ ] **Init-failure:** stub `HAL_Audio_Init()` → `HAL_ERR_DEV`; confirm `EVENT_AUDIO_ERROR` (stage=HAL_INIT, partial=0), **no deinit**, the amplifier shut down again (`SD_MODE GPIO1 low` in the log), service idle.
+- [ ] **Amp-failure (3a'):** stub `HAL_Audio_AmpSetEnabled()` → `HAL_ERR_DEV`; confirm `EVENT_AUDIO_ERROR` (stage=HAL_INIT, partial=0), no I2S channel created, decoder freed, service idle.
 - [ ] **File-corrupt:** replace `adhan.mp3` with a text file; confirm `EVENT_AUDIO_ERROR` (stage=DECODE, partial=0), no crash, no I2S left initialised.
 - [ ] **File-absent (class 1):** remove `adhan.mp3`; confirm a WARN in the log and **no event at all** (`EVENT_AUDIO_ERROR` count unchanged), no I2S init.
 - [ ] **Non-fatal start:** force `xTaskCreate` → `pdFAIL` via test hook; confirm boot continues, no rollback gate, clock still runs.
 
 ## 9. Line-by-line implementation review rules
 1. Read `event_bus.h`, the HIL audio header (`components/hil/include/audio_api.h` — `audio_init`, `audio_play_pcm`, `audio_deinit`; `s_stop_requested` lives in the HAL and is untouched), and the `svc_config` getters **before** writing code; the tree is authority. *Rev 3:* `audio_play_pcm()` is a HIL function, not a HAL one — the original rule pointed at the wrong header, which is how the HAL/HIL confusion in §4.1 started.
-2. **No HAL change; no `audio_stop()`; no resampling interface.** Permitted edits: `event_bus.h` gains three enumerators at 98/99/100 plus **two** payload structs and four `_Static_assert`s (B1), `svc_config.h` comment-only (H4), `hal_init.c` loses the eager `HAL_Audio_Init()` call (§4.1 rev 3), the decoder is the managed component `chmorgan/esp-libhelix-mp3` (§3.3, nothing
-vendored), and the gated `GET /debug/audio` hook is added in `svc_http.c`.
+2. **No `audio_stop()`; no resampling interface.** *Rev 5 lifts the rev-4 "no HAL change" rule for one specific reason:* SD_MODE is under firmware control, so the amplifier needs an API (`HAL_Audio_AmpSetEnabled`, HIL `audio_amp_set_enabled`) and the driver needs an `s_amp_enabled` flag. Nothing else in the HAL changed — no resampling, no volume control, no stop hook. Permitted edits: `event_bus.h` gains three enumerators at 98/99/100 plus **two** payload structs and four `_Static_assert`s (B1), `svc_config.h` comment-only (H4), `hal_init.c` loses the eager `HAL_Audio_Init()` call (§4.1 rev 3), the decoder is the managed component `chmorgan/esp-libhelix-mp3` (§3.3, nothing
+vendored), and the gated `GET /debug/audio` hook is added in `svc_http.c`. Rev 5
+adds: `hal_audio.h` + `hal_audio_max98357a.c` (amp setter, tON guard,
+`amp_release`), `audio_api.h` + `audio_api.c` (HIL pass-through), `pdl_pins.h`
+(pin `-1` -> `1`), `pdl_board_esp32.c` (GPIO1 output, driven LOW at board init,
+pin validated and dumped), `main/Kconfig.projbuild` (legacy duplicate corrected)
+and the matching docs.
 3. `svc_config.h`'s `adhan_volume` header comment rewritten from "future HW only" to "software PCM scaling in `svc_audio`; 0=muted, 100=unity"; getter/setter semantics (0..100, clamped) unchanged (H4).
 4. `adhan_mode` and `adhan_volume` fetched via live getters inside the playback path, not at start (I1); volume sampled once at playback start (H3). Concretely: one `svc_config_get()` snapshot per playback, read after the event arrives.
-5. The audio init/deinit lifecycle is driven **only** from `svc_audio`'s task, bracketing the `audio_play_pcm()` loop (I2). In the tree, the HAL-level functions live behind `components/hil/audio_api.c`; nothing else in a shipping build calls them (the `CONFIG_AUDIO_TEST_ENABLE` dev harness is the one gated exception). Deinit only if init succeeded (§4.5).
+5. The audio init/deinit lifecycle is driven **only** from `svc_audio`'s task, bracketing the `audio_play_pcm()` loop (I2), and since rev 5 the amplifier enable/disable is too. In the tree, the HAL-level functions live behind `components/hil/audio_api.c`; nothing else in a shipping build calls them (the `CONFIG_AUDIO_TEST_ENABLE` dev harness is the one gated exception). Deinit only if init succeeded (§4.5); amp disable only if the amp enable succeeded.
 6. Failure handling matches §3.2 exactly: class 1 no event; class 2/3 `EVENT_AUDIO_ERROR` with stage/partial; no retry/second file/toast.
 7. Duplicate-event handling is log+drop *before* any stop logic, and a stale queued adhan is never played (§4.2).
 8. Insertion per §4.3; no rollback-gate code in `svc_audio`; non-fatal start contract honoured.
@@ -637,13 +709,11 @@ vendored), and the gated `GET /debug/audio` hook is added in `svc_http.c`.
   because it exceeds the AM6 scan budget (§3.3). Documented, not fixed: the
   operator re-saves the asset without the image. A follow-up may parse the
   `ID3` header at open and `fseek()` past it before decoding starts.
-- **R15/R21 SD_MODE discrepancy (§7.1 e).** AMEND-4 states R15 fitted / R21 DNP
-  / the MCU drives SD_MODE on IO1; every pin source in the tree
-  (`pdl_pins.h`, `hal.md`, `hardware.md`, `hal_audio_max98357a.c`) states
-  R21 0R fitted and `PDL_PIN_AUDIO_SD_MODE = -1`. Needs a schematic check or a
-  measurement on the assembled board. If AMEND-4 wins, the firmware change is
-  `PDL_PIN_AUDIO_SD_MODE 1` + the `>= 10 ms` release-to-clock sequencing
-  (§7.1 b) — and it must be made in `pdl_pins.h` only, the single pin source.
+- ~~**R15/R21 SD_MODE discrepancy (§7.1 e).**~~ **Closed in rev 5:** AMEND-4 was
+  correct (R15 fitted, R21 DNP, IO1 drives SD_MODE). `PDL_PIN_AUDIO_SD_MODE` is
+  `1`, the board init drives GPIO1 low, and the HAL drives it per playback with
+  the `>= 10 ms` release-to-clock guard. Every pin source and doc was corrected
+  in the same change; nothing outstanding.
 - `audio_stop()` HIL wrapper + adhan↔jamat pre-emption (jamat-alert PR).
 - Fill §7 from the first flash: decoder heap delta, decode-buffer size, stack
   high-water, per-frame decode mean/max, free heap at playback start. Trim the
@@ -652,8 +722,11 @@ vendored), and the gated `GET /debug/audio` hook is added in `svc_http.c`.
   Apache-2.0, the decoder sources it wraps are RPSL 1.0 / RCSL 1.0
   (RealNetworks). Recorded in §3.3 and in `idf_component.yml`; needs a human
   decision.
-- SD_MODE gating for the jamat-alert PR: JP2 bridge 2-3, `PDL_PIN_AUDIO_SD_MODE`
-  1, >= 10 ms after release before clocks (AM4 b). See `docs/hardware.md`.
+- ~~SD_MODE gating for the jamat-alert PR~~ **Done in rev 5:** `PDL_PIN_AUDIO_SD_MODE`
+  is `1`, board init holds GPIO1 low, `HAL_Audio_AmpSetEnabled()` gates playback
+  with the >= 10 ms tON guard, and `svc_audio` owns the third resource pair.
+  Remaining idea: expose the amplifier state on the future `GET /api/audio`
+  health surface so a stuck-high SD_MODE is visible without a meter.
 - Unverified hardware claim: R24/R25 100 K pull-downs on I2S_BCLK/I2S_LRCK are
   cited by the amendment but appear nowhere in the tree — check the schematic.
 - Consider a `svc_audio` health surface for `svc_http` (`GET /api/audio`) once `EVENT_AUDIO_ERROR` has a consumer.

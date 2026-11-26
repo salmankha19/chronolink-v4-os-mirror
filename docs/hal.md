@@ -57,7 +57,10 @@ typedef enum {
 8. Audio is **not** initialised here. `svc_audio` (HIL `audio_init` ->
    `HAL_Audio_Init`) brings I2S up on its own task at the first adhan and
    `audio_deinit` takes it down afterwards, so no idle I2S channel exists
-   between playbacks. See [boot.md](boot.md) "HAL_Init() order" and
+   between playbacks. The amplifier is the same story: `pdl_board_init()`
+   leaves SD_MODE (GPIO1) driven low — shutdown, 0.6 uA — and
+   `HAL_Audio_AmpSetEnabled()` releases it per playback. See
+   [boot.md](boot.md) "HAL_Init() order" and
    [audio-adhan-design.md](audio-adhan-design.md) §4.1, §5-I2.
 
 Full per-step rationale is in [boot.md](boot.md).
@@ -81,39 +84,33 @@ Full per-step rationale is in [boot.md](boot.md).
 | Audio MAX98357A (I2S) | BCLK | 47 |
 | | WS / LRCLK | 48 |
 | | DOUT | 21 |
-| | SD_MODE | routed to JP2 (1-2 bridged by default); amp held on via R21 (0R) to 3V3 |
+| | SD_MODE | 1 (GPIO1, firmware-controlled: high = running, low = shutdown) |
 | BOOT / safe-mode button | | 0 (active low, dev only) |
 | Status LED | | none (-1) |
 | RTC INT | | not wired (-1) |
 
 ### Audio SD_MODE (MAX98357A pin 4)
 
-SD_MODE is held HIGH on the shipped PCB by R21 (0R) to +3V3, so the
-amplifier is always enabled (right-channel output). Firmware does not
-control it.
+**R21 is DNP and R15 (10 kR) pulls SD_MODE low**, so the amplifier is in
+hardware shutdown (0.6 uA, high-Z outputs) until firmware drives GPIO1 high.
+The pin is under firmware control and `PDL_PIN_AUDIO_SD_MODE` is `1`.
 
-ESP32-S3 GPIO1 is routed to JP2 (a 3-pad solder jumper, "Bridged12" by
-default). JP2 pad 1 = R21 to +3V3, pad 2 = amplifier *SD_MODE, pad 3 =
-GPIO1's trace. R15 (10kR) sits on the SD_MODE net (pad 2), not on
-GPIO1's trace. With pads 1-2 bridged (default), GPIO1 is isolated from
-the amplifier and from R15 -- GPIO1 floats.
-
-To enable firmware control of SD_MODE:
-
-1. Cut the JP2 1-2 bridge (open the solder). This disconnects R21 (0R)
-   from SD_MODE. R21 stays on pad 1, which is now isolated -- no
-   desoldering of R21 is required.
-2. Solder the JP2 2-3 bridge, connecting amplifier *SD_MODE (pad 2) to
-   GPIO1's trace (pad 3).
-3. Keep R15 (10kR) in place: it is on the SD_MODE net and pulls SD_MODE
-   low when GPIO1 is not driven, which is the desired shutdown state.
-4. In firmware: change PDL_PIN_AUDIO_SD_MODE from -1 to 1, and re-enable
-   the output config in HAL_Audio_Init(). A HAL/HIL setter for
-   enable/shutdown would also be needed -- this codebase does not have
-   one today.
-
-The default (-1) reflects the shipped hardware and keeps the amplifier
-permanently enabled.
+- `pdl_board_init()` (`pdl_board_esp32.c`) configures GPIO1 as an output and
+  drives it **low** during board init: the amplifier is in shutdown from the
+  first firmware instruction, so a boot cannot click. It also validates the pin
+  as output-capable and prints it in the `PINDBG` dump.
+- `HAL_Audio_AmpSetEnabled(bool)` is the only writer after board init. It
+  keeps `s_amp_enabled`, waits `HAL_AUDIO_AMP_TON_GUARD_MS` (10 ms; MAX98357A
+  tON is 7-7.5 ms) on the enable transition, and is idempotent.
+  `HAL_Audio_Init()` enables the amplifier implicitly (I2S up with the amp in
+  shutdown is silence); `HAL_Audio_Deinit()` releases it iff this driver
+  enabled it, on both its exit paths.
+- The HIL exposes it as `audio_amp_set_enabled()`; `svc_audio` is the only
+  caller and owns the third resource pair. Shutdown order: silence flush ->
+  SD_MODE low -> channel delete (design §4.5).
+- A board with no control pin (`PDL_PIN_AUDIO_SD_MODE < 0`) gets
+  `HAL_ERR_DEV` from the setter rather than a silent `HAL_OK`: the strap would
+  decide the state, not the request.
 
 I2C frequency: Kconfig default 100 kHz (`CONFIG_PDL_I2C_FREQ_HZ`).
 The I2C driver currently does not honour it - see STATUS.md.
@@ -165,7 +162,7 @@ the flag controls whether the driver is *registered* at boot.
 | Graphics | `hal_gfx.h` | Clipped primitives (lines, rects, circles, round rects, blit) over the display router, RGB565 API. Lives here for now; planned to move out |
 | Font | `font_engine.h`, `font_ui_sans.h`, `font_builtin_8x8.h` | Runtime registry (FE_MAX_FONTS = 6). Two formats: `FONT_FORMAT_MONO_1BPP` (1-bit panels, per-pixel draw) and `FONT_FORMAT_RGB565` (colour panels, row blit via `HAL_GFX_BlitScaled`, scalable to a target height). Both first-class. `FONT_BUILTIN_8X8` (id 0) is the reference mono font. `FONT_UI_SANS` (id 1) is a placeholder RGB565 font pending the project TTF (Inter SemiBold, SIL OFL). `font_engine_draw_text()` renders MONO; `font_engine_draw_text_scaled()` renders RGB565. |
 | Sensors | `hal_sensors.h` | Registry of up to 4 drivers; legacy aggregate read plus read-by-name and read-all |
-| Audio | `hal_audio.h` | MAX98357A over I2S, 44.1 kHz mono 16-bit, blocking play. Internally chunked at 1024 samples with a 1000 ms per-chunk write timeout. `HAL_Audio_Stop()` requests a cooperative stop from another task (worst-case latency ~23 ms). Volume is a no-op (the amp has analog gain only) |
+| Audio | `hal_audio.h` | MAX98357A over I2S, 44.1 kHz mono 16-bit, blocking play. Internally chunked at 1024 samples with a 1000 ms per-chunk write timeout. `HAL_Audio_Stop()` requests a cooperative stop from another task (worst-case latency ~23 ms). `HAL_Audio_AmpSetEnabled(bool)` drives SD_MODE (GPIO1): enable waits the 10 ms tON guard, disable returns the amp to 0.6 uA shutdown; `HAL_Audio_Init()`/`Deinit()` keep the amp consistent with the channel. Volume is a no-op (the amp has analog gain only) |
 | Driver SDK | `chronolink_driver_sdk.h` | Register one custom display driver at runtime |
 
 Both panel families reach text through the font layer; the format

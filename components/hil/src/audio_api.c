@@ -57,3 +57,10 @@ bool audio_is_playing(void)
 {
     return s_is_playing;
 }
+
+/* Amplifier power gate. Direct pass-through: the HAL owns the SD_MODE pin,
+   the tON guard and the "disable iff we enabled" flag. */
+bool audio_amp_set_enabled(bool en)
+{
+    return HAL_Audio_AmpSetEnabled(en) == HAL_OK;
+}

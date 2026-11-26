@@ -9,10 +9,15 @@
 /* Audio pin numbers come from pdl_pins.h
    (PDL_PIN_I2S_BCLK / PDL_PIN_I2S_WS / PDL_PIN_I2S_DOUT /
    PDL_PIN_AUDIO_SD_MODE). The previous AUDIO_*_PIN macros were
-   hardcoded literals duplicating the pin map; AUDIO_SD_MODE_PIN=1
-   also contradicted pdl_pins.h's -1. On the shipped PCB, GPIO1 is
-   routed to a solder jumper (JP2) that is NOT bridged to the
-   amplifier's SD_MODE, so firmware does not drive SD_MODE. */
+   hardcoded literals duplicating the pin map; that is why this header
+   carries no pin numbers of its own.
+
+   SD_MODE is GPIO1 and IS under firmware control: R21 is DNP and R15
+   (10 kR) pulls it low, so the amplifier is in shutdown until
+   HAL_Audio_AmpSetEnabled(true) drives the pin high (with the >= 10 ms
+   tON guard) and pdl_board_init() holds it low for a silent boot. The
+   earlier "AUDIO_SD_MODE_PIN=1 contradicted pdl_pins.h's -1" note is
+   obsolete: pdl_pins.h now says 1, and the hardware agrees. */
 
 #ifdef __cplusplus
 extern "C" {

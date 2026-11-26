@@ -125,6 +125,12 @@ static const char *TAG = "pdl_board";
 #define PINDBG_SAFE_MODE -1
 #endif
 
+#if defined(PDL_PIN_AUDIO_SD_MODE) && (PDL_PIN_AUDIO_SD_MODE >= 0)
+#define PINDBG_AUDIO_SD_MODE PDL_PIN_AUDIO_SD_MODE
+#else
+#define PINDBG_AUDIO_SD_MODE -1
+#endif
+
 #ifndef CONFIG_SOC_GPIO_PIN_COUNT
 #error "CONFIG_SOC_GPIO_PIN_COUNT not defined -- soc/soc_caps.h should provide it"
 #endif
@@ -218,7 +224,7 @@ static uint64_t safe_pin_mask_optional(int pin, const char *name)
 static void log_pindbg_line(void)
 {
     ESP_LOGI("PINDBG",
-             "PIN_LED_STATUS=%d PIN_I2C_SDA=%d PIN_I2C_SCL=%d PIN_SPI_MOSI=%d PIN_SPI_MISO=%d PIN_SPI_SCLK=%d PIN_SPI_CS_DISPLAY=%d PIN_DISPLAY_DC=%d PIN_DISPLAY_RST=%d PIN_DISPLAY_BL=%d PIN_RTC_INT=%d PIN_DF_TX=%d PIN_DF_RX=%d PIN_DF_BUSY=%d PIN_DF_RESET=%d PIN_BUF_EN=%d PIN_BUFFER_EN=%d PIN_MOSFET_GATE=%d PIN_SAFE_MODE=%d",
+             "PIN_LED_STATUS=%d PIN_I2C_SDA=%d PIN_I2C_SCL=%d PIN_SPI_MOSI=%d PIN_SPI_MISO=%d PIN_SPI_SCLK=%d PIN_SPI_CS_DISPLAY=%d PIN_DISPLAY_DC=%d PIN_DISPLAY_RST=%d PIN_DISPLAY_BL=%d PIN_RTC_INT=%d PIN_DF_TX=%d PIN_DF_RX=%d PIN_DF_BUSY=%d PIN_DF_RESET=%d PIN_BUF_EN=%d PIN_BUFFER_EN=%d PIN_MOSFET_GATE=%d PIN_SAFE_MODE=%d PIN_AUDIO_SD_MODE=%d",
              PINDBG_LED_STATUS,
              PINDBG_I2C_SDA,
              PINDBG_I2C_SCL,
@@ -237,7 +243,8 @@ static void log_pindbg_line(void)
              PINDBG_BUF_EN,
              PINDBG_BUFFER_EN,
              PINDBG_MOSFET_GATE,
-             PINDBG_SAFE_MODE);
+             PINDBG_SAFE_MODE,
+             PINDBG_AUDIO_SD_MODE);
 }
 
 static esp_err_t validate_pdl_pins(void)
@@ -300,6 +307,12 @@ static esp_err_t validate_pdl_pins(void)
 #endif
 #ifdef PDL_PIN_SAFE_MODE
     ok = validate_pin(PDL_PIN_SAFE_MODE, "SAFE_MODE") && ok;
+#endif
+#if defined(PDL_PIN_AUDIO_SD_MODE) && (PDL_PIN_AUDIO_SD_MODE >= 0)
+    /* Driven as an output by pdl_board_config_pins() (silent boot) and by
+       HAL_Audio_AmpSetEnabled() at playback time, so it must be
+       output-capable. */
+    ok = validate_output_pin(PDL_PIN_AUDIO_SD_MODE, "AUDIO_SD_MODE") && ok;
 #endif
 
     if (!ok) {
@@ -413,6 +426,46 @@ static esp_err_t pdl_board_config_pins(void)
         ESP_LOGD(TAG, "Config display BL mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
         gpio_config(&io_conf);
         board_gpio_set_level(PDL_PIN_DISPLAY_BL, 1, "PDL_PIN_DISPLAY_BL");
+    }
+#endif
+
+    /* Amplifier SD_MODE (MAX98357A pin 4, GPIO1).
+     *
+     * Driven LOW during board init, before any audio code can run, so the
+     * amplifier is in hardware shutdown (0.6 uA, high-Z outputs) from the
+     * earliest firmware instruction: a boot can never produce a click/pop, and
+     * nothing is amplified until the audio HAL releases shutdown at playback
+     * time. R15 already pulls the net low; the explicit drive removes any
+     * window between reset release and the first HAL_Audio_AmpSetEnabled()
+     * call, and makes the state independent of the resistor. */
+#if defined(PDL_PIN_AUDIO_SD_MODE) && (PDL_PIN_AUDIO_SD_MODE >= 0)
+    memset(&io_conf, 0, sizeof(io_conf));
+    {
+        uint64_t sd_mask = safe_pin_mask(PDL_PIN_AUDIO_SD_MODE, "AUDIO_SD_MODE");
+        if (sd_mask == 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        io_conf.pin_bit_mask = sd_mask;
+        io_conf.mode = GPIO_MODE_OUTPUT;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGD(TAG, "Config AUDIO_SD_MODE mask=0x%llx", (unsigned long long)io_conf.pin_bit_mask);
+        esp_err_t sd_cfg_err = gpio_config(&io_conf);
+        if (sd_cfg_err != ESP_OK) {
+            /* Deliberately NOT fatal. An un-drivable SD_MODE means no adhan,
+               not a dead clock: the boot continues, and the failure is
+               reported loudly at the first playback --
+               HAL_Audio_AmpSetEnabled() retries gpio_config() and fails,
+               svc_audio publishes EVENT_AUDIO_ERROR (stage=HAL_INIT, class
+               3a'). Same policy as HAL_I2C_Init(): optional subsystem, the
+               clock still keeps time. */
+            ESP_LOGE(TAG, "AUDIO_SD_MODE gpio_config failed: %s -- audio will "
+                          "report stage=HAL_INIT at the first adhan",
+                     esp_err_to_name(sd_cfg_err));
+        } else {
+            board_gpio_set_level(PDL_PIN_AUDIO_SD_MODE, 0, "PDL_PIN_AUDIO_SD_MODE");
+        }
     }
 #endif
 

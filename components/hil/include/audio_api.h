@@ -28,6 +28,19 @@ bool audio_play_pcm(const int16_t *pcm, size_t samples);
 bool audio_play_mp3(const char *filepath);
 
 bool audio_set_volume(uint8_t percent_0_100);
+
+/* Amplifier power (MAX98357A SD_MODE, GPIO1). true = out of shutdown, false =
+ * shutdown (0.6 uA, high-Z). Blocks for the HAL's >= 10 ms tON guard on the
+ * enable transition, so call it on a task, before audio_init().
+ *
+ * Returns false when the amplifier's power state cannot be changed: this board
+ * has no firmware-controlled SD_MODE (PDL_PIN_AUDIO_SD_MODE < 0) or the GPIO
+ * failed. A caller that needs sound must treat false as a hard failure — the
+ * adhan would be silent.
+ *
+ * Only svc_audio calls this, and it disables the amplifier iff it enabled it
+ * (the third resource pair, alongside decoder and I2S). */
+bool audio_amp_set_enabled(bool en);
 bool audio_is_playing(void);
 
 #ifdef __cplusplus
