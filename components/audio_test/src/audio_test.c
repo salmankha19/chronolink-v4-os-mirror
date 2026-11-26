@@ -112,9 +112,9 @@ esp_err_t audio_test_init(void) {
 #if CONFIG_AUDIO_TEST_SIMULATION
     ESP_LOGI(TAG, "AUDIO TEST - SIMULATION MODE");
     ESP_LOGI(TAG, "========================================");
-    ESP_LOGI(TAG, "GPIO1 -> JP2 pad 3. Shipped default: JP2 1-2 bridged,");
-    ESP_LOGI(TAG, "  -> pad 3 isolated; GPIO1 floats, not connected to SD_MODE");
-    ESP_LOGI(TAG, "  -> SD_MODE held HIGH via R21 (0R) to 3V3; amp always on");
+    ESP_LOGI(TAG, "GPIO1 -> MAX98357A SD_MODE (R21 DNP, R15 10kR pull-down)");
+    ESP_LOGI(TAG, "  -> driven LOW at board init: amplifier in shutdown, 0.6 uA");
+    ESP_LOGI(TAG, "  -> HAL_Audio_Init() enables it (>= 10 ms tON) for playback");
     ESP_LOGI(TAG, "");
     ESP_LOGI(TAG, "I2S Pins (would be configured):");
     ESP_LOGI(TAG, "  -> BCLK  = GPIO%d", PDL_PIN_I2S_BCLK);

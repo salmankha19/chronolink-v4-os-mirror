@@ -34,7 +34,7 @@ commits, so a single place stays authoritative.
 | [hal.md](hal.md) | PDL + HAL reference: init order, APIs, status codes, pins, drivers |
 | [hil.md](hil.md) | HIL adapters (`components/hil`) — the API services use |
 | [partitions.md](partitions.md) | Flash layout, explained. Authoritative file is `../partitions.csv` |
-| [hardware.md](hardware.md) | Module variants (bench N16R8 / production N16R2), I2S + MAX98357A wiring, SD_MODE rework path |
+| [hardware.md](hardware.md) | Module variants (bench N16R8 / production N16R2), I2S + MAX98357A wiring, SD_MODE firmware control (GPIO1) |
 | [CHRONOLINK_CONSTITUTION.md](CHRONOLINK_CONSTITUTION.md) | Mandatory rules, including documented exceptions |
 | [rules.md](rules.md) | Short rule summary for AI coding agents |
 | [STATUS.md](STATUS.md) | Implemented vs stubbed vs planned; known issues; open decisions; reviewed commit |

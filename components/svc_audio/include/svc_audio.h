@@ -10,9 +10,11 @@
  * docs/audio-adhan-design.md.
  *
  * Ownership rules that callers and maintainers must not "simplify":
- *   - ONE task owns the audio device for the whole playback. The I2S
- *     channel is initialised lazily at playback request and deinitialised
- *     before the task goes back to idle: there is no idle I2S instance.
+ *   - ONE task owns the audio device for the whole playback. The amplifier
+ *     (MAX98357A SD_MODE) is enabled per playback and put back into shutdown
+ *     afterwards, and the I2S channel is initialised lazily at playback
+ *     request and deinitialised before the task goes back to idle: there is
+ *     no idle I2S instance and no amplifier left in standby.
  *   - adhan_mode and adhan_volume are read live from svc_config at every
  *     playback, never cached at start. A flip OFF -> FULL mid-day is heard
  *     on the next adhan.
@@ -22,7 +24,8 @@
  *
  * Events published (payloads in event_bus.h):
  *   98  EVENT_AUDIO_STARTED    audio_play_payload_t, before the first PCM write
- *   99  EVENT_AUDIO_COMPLETED  audio_play_payload_t, after deinit, normal end
+ *   99  EVENT_AUDIO_COMPLETED  audio_play_payload_t, after amp disable and
+ *                             deinit, normal end
  *   100 EVENT_AUDIO_ERROR      audio_error_payload_t, on any class 2/3 failure
  * A missing / unreadable asset emits NOTHING (log + skip): a mosque with no
  * adhan configured is not a fault.
@@ -66,7 +69,8 @@ extern "C" {
 /* audio_error_payload_t.err. The HIL audio adapter returns bool, so the
    granular HAL status is not visible here; the HAL/HIL log line carries the
    detail. These codes name the failing call. */
-#define SVC_AUDIO_ERR_INIT   (-1) /* audio_init() returned false              */
+#define SVC_AUDIO_ERR_INIT   (-1) /* audio_init() or the amplifier enable
+                                     returned false (stage HAL_INIT)          */
 #define SVC_AUDIO_ERR_WRITE  (-2) /* audio_play_pcm() returned false          */
 #define SVC_AUDIO_ERR_DECODE (-3) /* libhelix: no frame / corrupt / wrong rate */
 #define SVC_AUDIO_ERR_NO_MEM (-4) /* alloc failed: buffers or MP3InitDecoder  */

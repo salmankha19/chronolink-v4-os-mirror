@@ -66,9 +66,15 @@ config BOARD_AUDIO_I2S_DOUT
 config BOARD_AUDIO_SD_MODE
     int "Audio SD_MODE GPIO (-1 to disable)"
     range -1 48
-    default -1
+    default 1
     help
-        Optional shutdown/mode-select pin for the MAX98357A.
-        PCB v4 leaves this unconnected, so keep at -1.
+        Legacy duplicate. Nothing reads this symbol: the authoritative
+        value is PDL_PIN_AUDIO_SD_MODE in
+        components/chronolink_hal/include/pdl_pins.h, which is GPIO1
+        and is what the board init and the audio HAL use.
+        PCB v4 drives the MAX98357A SD_MODE from IO1 (R21 DNP, R15
+        10kR pull-down); the pin is held low for a silent boot and
+        driven high per playback. Kept at the same value as pdl_pins.h
+        only so this menu does not contradict the pin map.
 
 endmenu

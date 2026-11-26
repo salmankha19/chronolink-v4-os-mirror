@@ -51,36 +51,31 @@
 #endif
 
 /* --- Audio (MAX98357A I2S) ---
- * SD_MODE (MAX98357A pin 4) is held HIGH on the shipped PCB by R21
- * (0R) to +3V3, so the amplifier is always enabled (right-channel
- * output). The amplifier is not under firmware control.
+ * SD_MODE (MAX98357A pin 4) is driven directly by ESP32-S3 GPIO1. R21 is
+ * DNP and R15 (10 kR) pulls the SD_MODE net low, so the amplifier sits in
+ * hardware shutdown (0.6 uA, high-Z outputs) until firmware drives GPIO1
+ * high. That is what makes a silent boot the default: pdl_board_init()
+ * drives the pin LOW explicitly before any audio code can run.
  *
- * ESP32-S3 GPIO1 is routed to JP2 (a 3-pad solder jumper, "Bridged12"
- * by default). JP2 pad 1 = R21 to +3V3, pad 2 = amplifier *SD_MODE,
- * pad 3 = GPIO1's trace. R15 (10kR) sits on the SD_MODE net (pad 2),
- * not on GPIO1's trace. With pads 1-2 bridged (default), GPIO1 is
- * isolated from the amplifier and from R15 -- GPIO1 floats.
+ *   high = running. Idle current then depends on the clocks: with BCLK
+ *          stopped the amplifier drops into automatic standby (340-400 uA).
+ *   low  = shutdown, 0.6 uA.
  *
- * To enable firmware control of SD_MODE:
- *   1. Cut the JP2 1-2 bridge (open the solder). This disconnects
- *      R21 (0R) from SD_MODE. R21 stays on pad 1, which is now
- *      isolated -- no desoldering of R21 is required.
- *   2. Solder the JP2 2-3 bridge, connecting amplifier *SD_MODE
- *      (pad 2) to GPIO1's trace (pad 3).
- *   3. Keep R15 (10kR) in place: it is on the SD_MODE net and pulls
- *      SD_MODE low when GPIO1 is not driven, which is the desired
- *      shutdown state.
- *   4. In firmware: change PDL_PIN_AUDIO_SD_MODE from -1 to 1, and
- *      re-enable the output config in HAL_Audio_Init().
- *      A HAL/HIL setter for enable/shutdown would also be needed --
- *      this codebase does not have one today.
+ * Sequencing: >= 10 ms must pass between releasing shutdown and the first
+ * BCLK edge (MAX98357A tON is 7-7.5 ms). HAL_Audio_AmpSetEnabled(true) owns
+ * that wait; see docs/hardware.md section 2.1.
  *
- * The default (-1) reflects the shipped hardware and keeps the
- * amplifier permanently enabled. See docs/hal.md for the full note. */
+ * GPIO1 is not a strapping pin and carries nothing else on this board, so
+ * driving it during board init is safe.
+ *
+ * This header is the ONLY place this pin is defined. The pin debug dump in
+ * pdl_board_esp32.c and docs/hal.md / docs/hardware.md are generated from it;
+ * CONFIG_BOARD_AUDIO_SD_MODE in main/Kconfig.projbuild is a legacy duplicate
+ * that nothing reads. */
 #define PDL_PIN_I2S_BCLK         47
 #define PDL_PIN_I2S_WS           48
 #define PDL_PIN_I2S_DOUT         21
-#define PDL_PIN_AUDIO_SD_MODE   (-1)
+#define PDL_PIN_AUDIO_SD_MODE     1
 
 /* --- RTC INT: not wired on v4 PCB --- */
 #define PDL_PIN_RTC_INT         (-1)

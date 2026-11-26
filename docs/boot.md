@@ -69,6 +69,10 @@ Target: ESP32-S3 module on the ChronoLink V4 PCB, 16 MB flash.
    on its own task at the first adhan and deinitialised immediately
    after, so the log line `MAX98357A I2S ready` belongs to the first
    playback, not to the boot sequence (see "HAL_Init() order", step 8).
+   The amplifier is the same: `pdl_board_init()` drives SD_MODE (GPIO1)
+   **low** and leaves it there, so the MAX98357A sits in shutdown
+   (0.6 uA) for the whole boot — a click/pop at power-up is not
+   possible.
 
 Events can only be published after step 3.7; the event bus does not
 exist earlier. Steps 3.1–3.6 are observable on the serial log only.
@@ -341,9 +345,17 @@ to begin a 3 s hold. A factory reset is now requested only through
    Play-vs-Deinit race between tasks. Consequences:
    - `MAX98357A I2S ready` / `MAX98357A I2S deinitialized` appear around
      an adhan, not at boot.
+   - The amplifier (SD_MODE, GPIO1) is driven low by `pdl_board_init()`
+     and released only by `HAL_Audio_AmpSetEnabled(true)` at playback
+     time, so it is in 0.6 uA shutdown throughout the boot. The
+     `SD_MODE GPIO1 high/low` lines therefore also belong to an adhan.
    - A board with a dead amplifier fails at playback time
-     (`EVENT_AUDIO_ERROR`, stage=HAL_INIT) instead of logging a warning
-     during boot. Nothing in the boot path depends on audio.
+     (`EVENT_AUDIO_ERROR`, stage=HAL_INIT — class 3a' when SD_MODE cannot
+     be driven, 3a when the I2S channel cannot be created) instead of
+     logging a warning during boot. Nothing in the boot path depends on
+     audio. Even if `AUDIO_SD_MODE`'s `gpio_config()` fails,
+     `pdl_board_init()` logs an ERROR and continues — the clock must keep
+     time, and the failure resurfaces as class 3a' at the first adhan.
    - `CONFIG_AUDIO_TEST_ENABLE` (off by default) still drives the HAL
      directly; it is a bench harness, not a boot step.
 

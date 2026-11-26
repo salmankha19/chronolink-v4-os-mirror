@@ -164,7 +164,10 @@ flowchart TB
   `audio_play_pcm()`. I2S is initialised on that task when playback
   starts and deinitialised before it returns to idle, so there is no
   idle I2S channel between adhans (the boot path no longer calls
-  `HAL_Audio_Init()`). Publishes `EVENT_AUDIO_STARTED` (98),
+  `HAL_Audio_Init()`). The MAX98357A amplifier is handled the same way:
+  `pdl_board_init()` leaves SD_MODE (GPIO1) low and
+  `audio_amp_set_enabled()` releases it per playback, so the amp is in
+  0.6 uA shutdown between adhans. Publishes `EVENT_AUDIO_STARTED` (98),
   `EVENT_AUDIO_COMPLETED` (99) and `EVENT_AUDIO_ERROR` (100); a missing
   asset is logged and skipped with no event. Details in `STATUS.md`
   (`svc_audio`) and `docs/audio-adhan-design.md`.
