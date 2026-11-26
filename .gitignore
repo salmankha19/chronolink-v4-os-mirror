@@ -88,3 +88,6 @@ pr-body.txt
 # Working documents (not committed) — whole session directory ignored
 docs/sessions/
 platformio.local.ini
+
+# bench audio asset (licensed; deployed via uploadfs, not git)
+data/
