@@ -61,7 +61,7 @@ hardware notes in §7 and the `GET /debug/audio` test hook (§8).
 | AM1 | Software volume ceiling: gain = 0.70 x (adhan_volume / 100) as one Q15 multiplier per playback, integer math only. Volume 100 is about -3.1 dBFS, not full scale | §3.1, `svc_audio.c` AUDIO_VOLUME_MAX_Q15 |
 | AM2 | Pre-deinit silence flush: >= 2 full HAL DMA chunks of digital zeros through `audio_play_pcm()` before `audio_deinit()` (MAX98357A click mitigation) | §4.5, `silence_flush()` |
 | AM3 | Read-and-report only: which I2S slot mono PCM occupies. **Reported: LEFT slot only** (`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(16 bit, I2S_SLOT_MODE_MONO)` sets `.slot_mask = I2S_STD_SLOT_LEFT`), which satisfies "left or both". No code change | §4.1, §7 |
-| AM4 | Hardware notes: no I2S clock removal while BCLK runs, MAX98357A tON 7-7.5 ms, BCLK-stop standby, bench vs production module | §7 |
+| AM4 | Hardware notes: no I2S clock removal while BCLK runs, MAX98357A tON 7-7.5 ms, BCLK-stop standby, bench vs production module, click/pop KCP -66/-72 dBV and its sequencing-independence, standby vs shutdown idle current, R15/R21 strap statement | §7.1 (a)–(f) — the R15/R21 statement conflicts with every pin source in the tree and is recorded, not applied |
 | AM5 | Decoder swap minimp3 -> libhelix (fixed-point). Failure table extended (decoder alloc, rate, bounded recovery) | §1.1, §3.2, §3.3, §6, §7 |
 | AM6 | Bounded recovery: <= 8 consecutive non-productive decodes and <= 64 KB scanned without a frame, then class 2c | §3.3 |
 | AM7 | Test hook `GET /debug/audio?prayer=<id>` under `CHRONOLINK_TEST_HOOKS` | §8, `svc_http.c` |
@@ -261,10 +261,10 @@ typedef void *HMP3Decoder;  /* opaque; state is inside, on the heap */
 
 HMP3Decoder MP3InitDecoder(void);
 void        MP3FreeDecoder(HMP3Decoder hMP3Decoder);
-int         MP3Decode(HMP3Decoder hMP3Decoder, const unsigned char **inbuf,
-                      size_t *bytesLeft, short *outbuf, int useSize);
+int         MP3Decode(HMP3Decoder hMP3Decoder, unsigned char **inbuf,
+                      int *bytesLeft, short *outbuf, int useSize);
 void        MP3GetLastFrameInfo(HMP3Decoder hMP3Decoder, MP3FrameInfo *info);
-int         MP3FindSyncWord(const unsigned char *buf, int nBytes);
+int         MP3FindSyncWord(unsigned char *buf, int nBytes);
 
 enum {                          /* raw return values of MP3Decode() */
     ERR_MP3_NONE                 =     0,
@@ -290,6 +290,16 @@ tells it the output buffer is the full `MAX_NSAMP * MAX_NGRAN * MAX_NCHAN`
 shorts (2304 shorts / 4608 B). `MP3FrameInfo` reports `bitrate`, `nChans`,
 `samprate`, `bitsPerSample`, `outputSamps` (interleaved total), `layer`,
 `version`.
+
+**Non-const, `int` counts (rev 4 correction).** Those are the **pinned 1.0.3**
+signatures. Upstream master has since changed them to `const unsigned char **`
+and `size_t *`, and the two forms are *not* interchangeable — passing one where
+the other is declared is an incompatible-pointer error under this project's
+`-Werror`. Consequence for `svc_audio.c`: the read buffer is `uint8_t *` (never
+`const`), the byte counter is `int` (never `size_t`), `MP3FindSyncWord()` also
+takes a non-const buffer, and a `_Static_assert` pins the read chunk inside
+`int` range. Copy the signature from the **fetched** header, never from memory
+or from upstream master.
 
 **Decode seam:** every libhelix symbol in `svc_audio.c` lives in three static
 helpers — `dec_open()` (`MP3InitDecoder`), `dec_frame()` (`MP3FindSyncWord` +
@@ -444,7 +454,8 @@ deinit, and why a decoder-allocation failure frees nothing.
 (`AUDIO_SILENCE_CHUNK` = 1024 samples, `AUDIO_SILENCE_CHUNKS` = 2, i.e. >= 2048
 samples) through `audio_play_pcm()`. The MAX98357A datasheet recommends ramping
 SDIN to zero before power-down; this is the v1 click/pop mitigation, and it is
-also why the deinit-order hazard in §7 is tolerable. A failed flush write is
+also why the deinit-order hazard in §7 is tolerable (the amplifier's own
+suppression is sequencing-independent — §7.1 f). A failed flush write is
 logged and does not stop the shutdown — the deinit is what actually silences the
 amplifier.
 
@@ -523,11 +534,41 @@ gating for power reasons.
 production BOM is **N16R2**. PSRAM stays disabled in `sdkconfig.defaults`, so
 one image runs on both — see `docs/hardware.md`.
 
-**(e) SD_MODE strap and level.** R21 (0R) holds SD_MODE high on the shipped
-PCB, i.e. the amplifier runs in its (L+R)/2 mode. Combined with the left-slot-
-only mono stream (AM3) that is roughly 6 dB of headroom already lost before the
-§3.1 ceiling — which is exactly why the ceiling exists. Firmware SD_MODE control
-needs the JP2 rework described in `pdl_pins.h` and `docs/hardware.md`.
+**(e) SD_MODE strap — TWO CONFLICTING STATEMENTS, resolve before the bench test.**
+The architect amendment (AM4, rev 4) says **R15 is fitted (10 kR pull-down) and
+R21 is DNP; the MCU controls SD_MODE via IO1.** The tree says the opposite:
+`components/chronolink_hal/include/pdl_pins.h`, `docs/hal.md`, `docs/hardware.md`
+and `hal_audio_max98357a.c` all document **R21 (0R) fitted to +3V3, JP2 1-2
+bridged by default, `PDL_PIN_AUDIO_SD_MODE = -1`** (not under firmware control),
+with the JP2 2-3 rework as the procedure to *gain* firmware control. Neither
+statement has been checked against the schematic in this PR.
+
+v1 ships the tree's reading, because that is what the code implements and every
+pin source agrees on; AMEND-4's reading is recorded here, **not applied**.
+
+Why it matters, concretely: if AMEND-4 is right, R15 pulls SD_MODE low whenever
+GPIO1 is not driven, so the amplifier is in **shutdown and nothing can be heard**
+until firmware drives GPIO1 high — the required change is one line
+(`PDL_PIN_AUDIO_SD_MODE` from `-1` to `1`; the HAL's `>= 0` block already exists)
+plus the `>= 10 ms` sequencing in (b). If the tree is right, SD_MODE is held high
+by R21 and the code is correct as written. The failure modes are not
+symmetrical: silence with a clean serial log would look like a decoder fault and
+send this PR's owner hunting in libhelix. Confirm SD_MODE's level on the board
+(§8) before judging any audio result.
+
+**Level consequence (unchanged, AM4-e).** Under the tree's reading R21 holds
+SD_MODE high, i.e. the amplifier runs in its (L+R)/2 mode. Combined with the
+left-slot-only mono stream (AM3) that is roughly 6 dB of headroom already lost
+before the §3.1 ceiling — which is exactly why the ceiling exists.
+
+**(f) Click/pop figures (AM4).** The MAX98357A's own click/pop suppression is
+quoted at **KCP -66 dBV** and **-72 dBV** for the two shutdown cases, and it is
+**sequencing-independent**: the figure holds whether the clocks stop together or
+the data stream stops first. That is why (a)'s "never remove LRCLK while BCLK is
+present" is a preference rule rather than a corruption risk, and why the AMEND-2
+silence flush (§4.5) is belt-and-braces on top of the amplifier's own suppression
+rather than the only mitigation. *The KCP figures are as cited in AM4; they have
+not been re-verified against the datasheet in this repository.*
 
 ## 8. Verification checklist
 
@@ -544,6 +585,10 @@ Build:
 - [ ] `HAL_Init()` logs no `MAX98357A I2S ready` at boot; the line appears at the first adhan.
 
 Hardware:
+- [ ] **SD_MODE strap confirmed FIRST (§7.1 e):** measure SD_MODE on the board.
+      High (R21 fitted) -> the code is correct as written. Low/floating (R21 DNP)
+      -> the amplifier is in shutdown, and silence is a strap fault, not a
+      decoder fault (`PDL_PIN_AUDIO_SD_MODE` must become `1`).
 - [ ] OFF→FULL mid-day: next adhan heard (I1).
 - [ ] Volume change mid-day applied at next playback; **no** mid-playback effect (H3).
 - [ ] SHORT ≤10 s; shorter asset plays whole; 10 s asset SHORT==FULL (M1).
@@ -592,7 +637,13 @@ vendored), and the gated `GET /debug/audio` hook is added in `svc_http.c`.
   because it exceeds the AM6 scan budget (§3.3). Documented, not fixed: the
   operator re-saves the asset without the image. A follow-up may parse the
   `ID3` header at open and `fseek()` past it before decoding starts.
-- Per-prayer files and per-prayer short assets (v2).
+- **R15/R21 SD_MODE discrepancy (§7.1 e).** AMEND-4 states R15 fitted / R21 DNP
+  / the MCU drives SD_MODE on IO1; every pin source in the tree
+  (`pdl_pins.h`, `hal.md`, `hardware.md`, `hal_audio_max98357a.c`) states
+  R21 0R fitted and `PDL_PIN_AUDIO_SD_MODE = -1`. Needs a schematic check or a
+  measurement on the assembled board. If AMEND-4 wins, the firmware change is
+  `PDL_PIN_AUDIO_SD_MODE 1` + the `>= 10 ms` release-to-clock sequencing
+  (§7.1 b) — and it must be made in `pdl_pins.h` only, the single pin source.
 - `audio_stop()` HIL wrapper + adhan↔jamat pre-emption (jamat-alert PR).
 - Fill §7 from the first flash: decoder heap delta, decode-buffer size, stack
   high-water, per-frame decode mean/max, free heap at playback start. Trim the
