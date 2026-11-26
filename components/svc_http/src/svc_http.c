@@ -448,6 +448,19 @@ static esp_err_t get_config_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "hijri_offset_days", cfg.hijri_offset_days);
     cJSON_AddNumberToObject(root, "hijri_calc_method", cfg.hijri_calc_method);
 
+    /* POSIX TZ string ("GMT0BST,M3.5.0/1,M10.5.0"), e.g. for the web UI's
+       Custom Timezone box. The value is owned by svc_time (NVS namespace
+       "time", key "tz"), NOT by svc_config -- the same ownership split the
+       preset handler honours -- so it is read through the copy getter: the
+       pointer getter races with a concurrent svc_time_set_timezone_posix()
+       (#130 R9e). The key is omitted when svc_time cannot answer (service
+       not started, lock timeout), so the client can say "unavailable"
+       instead of showing an empty zone that looks like a valid setting. */
+    char tz_buf[SVC_TIME_TZ_MAX];
+    if (svc_time_get_timezone_posix_copy(tz_buf, sizeof(tz_buf)) == ESP_OK) {
+        cJSON_AddStringToObject(root, "timezone", tz_buf);
+    }
+
     esp_err_t err = send_json(req, root);
     cJSON_Delete(root);
     return err;
@@ -747,6 +760,31 @@ static esp_err_t post_config_handler(httpd_req_t *req)
             APPLY(svc_config_set_hijri_method((uint8_t)v));
         } else {
             ESP_LOGW(TAG, "rejected hijri_calc_method: not integral in [0,1]");
+            if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    /* Custom POSIX timezone, e.g. "EST5EDT,M3.2.0,M11.1.0". svc_time owns
+       both the value and its NVS key, so this is a pass-through to the same
+       setter POST /api/config/preset uses -- not a new svc_config field.
+       Applied here, before the recalculation below, so the fresh prayer
+       times and the timetable are expressed in the new zone.
+
+       Present-but-empty is rejected rather than ignored: svc_time refuses
+       "" (libc would fall back to UTC), and the web UI omits the key when
+       its box is empty, so an empty string can only come from a hand-written
+       client. There is no POSIX syntax check here -- svc_time owns the value
+       and picolibc is the parser, so a malformed string is stored and
+       applied as given (the UI guards its own input). */
+    cJSON *tz_item = cJSON_GetObjectItem(root, "timezone");
+    if (tz_item) {
+        if (cJSON_IsString(tz_item) && tz_item->valuestring
+            && tz_item->valuestring[0] != '\0'
+            && strlen(tz_item->valuestring) < SVC_TIME_TZ_MAX) {
+            APPLY(svc_time_set_timezone_posix(tz_item->valuestring));
+        } else {
+            ESP_LOGW(TAG, "rejected timezone: must be a non-empty string < %d chars",
+                     SVC_TIME_TZ_MAX);
             if (first_err == ESP_OK) first_err = ESP_ERR_INVALID_ARG;
         }
     }

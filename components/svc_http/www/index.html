@@ -7,17 +7,21 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f4f7f6; color: #333; }
     h1 { color: #2c3e50; text-align: center; }
-    .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .card h2 { margin-top: 0; font-size: 1.2em; color: #34495e; border-bottom: 1px solid #eee; padding-bottom: 10px; }
     label { display: block; margin-top: 15px; font-weight: bold; font-size: 0.9em; }
     input[type="text"], input[type="password"], input[type="number"], select { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
     input[type="range"] { width: 100%; margin-top: 5px; box-sizing: border-box; }
     .form-group { margin-top: 10px; }
     .helper { font-size: 0.9em; color: #666; margin-top: 8px; }
-    button { width: 100%; padding: 12px; background: #2c3e50; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; margin-top: 20px; }
+    /* -webkit-appearance/appearance strip the native iOS+Android button chrome
+       (gray gradient, inner shadow, platform rounding) that made the same page
+       render differently on a phone; font-family:inherit stops iOS swapping in
+       the system button font instead of the body's Arial. */
+    button { width: 100%; padding: 12px; background: #2c3e50; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; margin-top: 20px; -webkit-appearance: none; appearance: none; font-family: inherit; }
     button:hover { background: #1a252f; }
-    .btn-wifi { background: #e67e22; }
-    .btn-wifi:hover { background: #d35400; }
+    .btn-wifi { background: #b1611a; }
+    .btn-wifi:hover { background: #c85000; }
     .row { display: flex; gap: 10px; }
     .row > div { flex: 1; }
     .prayer-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 1.1em; }
@@ -37,8 +41,14 @@
 
     /* Tab Bar Styling */
     .tab-bar { display: flex; gap: 10px; max-width: 720px; margin: 0 auto 20px auto; overflow-x: auto; padding: 0 16px; box-sizing: border-box; }
-    .tab-btn { padding: 10px 20px; border: none; background: #eee; cursor: pointer; border-radius: 4px; white-space: nowrap; margin-top: 0; width: auto; }
-    .tab-btn.active { background: #16a085; color: white; }
+    .tab-btn { padding:10px 20px; border:none; background:#eee; color:#555; cursor:pointer; border-radius:4px; white-space:nowrap; margin-top:0; width:auto; -webkit-appearance:none; appearance:none; }
+    /* color is declared explicitly above because the .tab-btn rule otherwise
+       leaves color to the global button{color:#fff}, which is why inactive
+       tabs read as white-on-#eee. Declaration order below matters: the hover
+       and active rules have equal specificity (0,2,0), so active must come
+       last or a hovered active tab would turn grey. */
+    .tab-btn:hover { background:#ddd; color:#2c3e50; }
+    .tab-btn.active { background:#117a65; color:white; }
 
     /* Hiding inactive tabs. display:none only -- the nodes stay in the DOM,
        because saveConfig() reads 47 ids and has no null checks. */
@@ -57,8 +67,8 @@
     /* Secondary bar action. A class rather than an inline style, because an
        inline background beats the stylesheet's :hover rule and kills hover
        feedback. .btn-reset:hover outranks button:hover (0,2,0 vs 0,1,1). */
-    .btn-reset { background: #7f8c8d; color: white; }
-    .btn-reset:hover { background: #6c7a7b; }
+    .btn-reset { background: #6d7879; color: white; }
+    .btn-reset:hover { background: #697677; }
   </style>
 </head>
 <body>
@@ -82,7 +92,7 @@
     <h2>WiFi Configuration</h2>
     <p style="font-size:0.9em; color:#666;">Change the WiFi network the clock connects to.</p>
     <label>WiFi SSID</label>
-    <input type="text" id="wifi_ssid" placeholder="e.g. SK360_Guest">
+    <input type="text" id="wifi_ssid" placeholder="Enter your Wi-Fi network name (SSID)">
     <label>WiFi Password</label>
     <input type="password" id="wifi_pass" placeholder="(leave blank if open network)">
     <button class="btn-wifi" onclick="saveWifi()">Save WiFi & Reboot</button>
@@ -91,17 +101,18 @@
 
   <div class="tab-panel" data-tab="security">
   <!-- Setup Authentication -->
-  <div class="card" data-tab="security" style="border: 2px solid #16a085;">
+  <div class="card" data-tab="security">
     <h2 style="color:#16a085;">Setup Authentication</h2>
     <p style="font-size:0.9em; color:#666;">
-      The device prints a one-time API token to its serial console on first
-      boot. Paste it here. It is stored in this browser only and sent with
-      every configuration request. Without it, POST endpoints reply 403.
+      During initial setup, no token is required. Once configured, the device
+      generates a one-time API token printed to the serial console. Paste it
+      here. It is stored in this browser only and sent with every configuration
+      request. Without it, POST endpoints reply 403.
     </p>
     <label>API Token</label>
     <input type="password" id="api_token" placeholder="16-character hex token from serial console">
-    <button style="background:#16a085;" onclick="saveToken()">Save Token</button>
-    <p id="token_status" style="font-size:0.85em; color:#888; margin-top:8px;">&mdash;</p>
+    <button style="background:#117a65;" onclick="saveToken()">Save Token</button>
+    <p id="token_status" style="font-size:0.85em; color:#767676; margin-top:8px;">&mdash;</p>
   </div>
   </div>
 
@@ -111,7 +122,7 @@
     <h2>Location & Calculation</h2>
 
     <div style="background:#eafaf1; border:2px solid #16a085; border-radius:6px; padding:12px; margin:10px 0 4px;">
-      <label for="quick-setup-city" style="margin-top:0; color:#16a085;">Quick Setup: Select Your City</label>
+      <label for="quick-setup-city" style="margin-top:0; color:#117a65;">Quick Setup: Select Your City</label>
       <select id="quick-setup-city" onchange="applyQuickSetup()">
         <option value="">&mdash; choose a city &mdash;</option>
         <option value="0">Horsham, UK</option>
@@ -148,6 +159,28 @@
         <label>Longitude</label>
         <input type="number" step="0.000001" id="lon">
       </div>
+    </div>
+
+    <!-- POSIX timezone field. The value belongs to svc_time (NVS namespace
+         "time", key "tz"), not to svc_config: this box is pre-filled from the
+         "timezone" key of GET /api/config and posted back under the same name,
+         which svc_http passes to svc_time_set_timezone_posix(). maxlength is
+         SVC_TIME_TZ_MAX - 1. A blank box sends no key at all, so it can never
+         overwrite the stored zone with an empty string. The label says
+         "Timezone", not "Custom Timezone": applyQuickSetup() writes the chosen
+         preset's zone here too, so typing into the box is not the only writer.
+         The block is framed top and bottom so it reads as one unit inside the
+         Location card. -->
+    <div class="form-group" style="margin-top:20px; border-top:1px solid #eee; border-bottom:1px solid #eee; padding-top:15px; padding-bottom:15px;">
+      <label for="custom_tz_string">Timezone (POSIX String)</label>
+      <input type="text" id="custom_tz_string" maxlength="63" placeholder="e.g. EST5EDT,M3.2.0,M11.1.0">
+      <p class="helper">
+        Current active timezone: <span id="current_tz_display" style="font-weight:bold;">Loading&hellip;</span><br>
+        If your city is not in the Quick Setup list above, paste a POSIX
+        timezone string here and Save. Look yours up in the
+        <a href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv"
+           target="_blank" rel="noopener noreferrer">POSIX TZ database</a>.
+      </p>
     </div>
 
     <label>Calculation Method</label>
@@ -207,7 +240,7 @@
         <input type="number" id="zawal" min="0" max="30">
       </div>
     </div>
-    
+
     <button onclick="saveConfig()">Save Configuration</button>
   </div>
   </div>
@@ -431,46 +464,46 @@
       <div>
         Fajr: <b id="p_fajr">--:--</b>
         <small>&middot; jamat <span id="p_j_fajr">--:--</span></small>
-        <small style="color:#888;">&middot; astro <span id="p_a_fajr">--:--</span></small>
+        <small style="color:#666;">&middot; astro <span id="p_a_fajr">--:--</span></small>
         <span id="p_change_fajr" style="color:#c0392b;font-size:0.85em;"></span>
       </div>
       <div>Sunrise: <span id="p_sunrise">--:--</span></div>
       <div>
         Dhuhr: <b id="p_dhuhr">--:--</b>
         <small>&middot; jamat <span id="p_j_dhuhr">--:--</span></small>
-        <small style="color:#888;">&middot; astro <span id="p_a_dhuhr">--:--</span></small>
+        <small style="color:#666;">&middot; astro <span id="p_a_dhuhr">--:--</span></small>
         <span id="p_change_dhuhr" style="color:#c0392b;font-size:0.85em;"></span>
       </div>
       <div>
         Asr: <b id="p_asr">--:--</b>
         <small>&middot; jamat <span id="p_j_asr">--:--</span></small>
-        <small style="color:#888;">&middot; astro <span id="p_a_asr">--:--</span></small>
+        <small style="color:#666;">&middot; astro <span id="p_a_asr">--:--</span></small>
         <span id="p_change_asr" style="color:#c0392b;font-size:0.85em;"></span>
       </div>
       <div>
         Maghrib: <b id="p_maghrib">--:--</b>
         <small>&middot; jamat <span id="p_j_maghrib">--:--</span></small>
-        <small style="color:#888;">&middot; astro <span id="p_a_maghrib">--:--</span></small>
+        <small style="color:#666;">&middot; astro <span id="p_a_maghrib">--:--</span></small>
         <span id="p_change_maghrib" style="color:#c0392b;font-size:0.85em;"></span>
       </div>
       <div>
         Isha: <b id="p_isha">--:--</b>
         <small>&middot; jamat <span id="p_j_isha">--:--</span></small>
-        <small style="color:#888;">&middot; astro <span id="p_a_isha">--:--</span></small>
+        <small style="color:#666;">&middot; astro <span id="p_a_isha">--:--</span></small>
         <span id="p_change_isha" style="color:#c0392b;font-size:0.85em;"></span>
       </div>
     </div>
   </div>
 
   <!-- Prayer Timetable -->
-  <div class="card" data-tab="prayer" style="border: 2px solid #8e44ad;">
+  <div class="card" data-tab="prayer">
     <h2 style="color:#8e44ad;">Prayer Timetable</h2>
     <p style="font-size:0.9em; color:#666;">
       You can upload your mosque's own timetable JSON to override the
       calculated times. Missing fields in an uploaded file are filled from
       your current configuration on read.
     </p>
-    <p style="font-size:0.85em; color:#999;" id="tt_meta">&mdash;</p>
+    <p style="font-size:0.85em; color:#666;" id="tt_meta">&mdash;</p>
     <p style="font-size:0.85em; color:#7d3c98; border-left:3px solid #8e44ad; padding:6px 0 6px 10px; margin:12px 0 0;">
       <strong>Note:</strong> Please save your configuration settings before
       uploading a file. Any settings saved after uploading will apply to the
@@ -494,7 +527,7 @@
 
   <div class="tab-panel" data-tab="device">
   <!-- Factory Reset -->
-  <div class="card" data-tab="device" style="border: 2px solid #c0392b;">
+  <div class="card" data-tab="device">
     <h2 style="color:#c0392b;">Factory Reset</h2>
     <p style="font-size:0.9em; color:#666;">
       Erases all saved settings (WiFi credentials, location, prayer
@@ -505,7 +538,7 @@
   </div>
 
   <!-- Firmware Update (OTA) -->
-  <div class="card" data-tab="device" style="border: 2px solid #2980b9;">
+  <div class="card" data-tab="device">
     <h2 style="color:#2980b9;">Firmware Update</h2>
     <p style="font-size:0.9em; color:#666;">
       Upload a <code>.bin</code> firmware image. The device flashes the
@@ -517,7 +550,7 @@
     <input type="password" id="ota_token" placeholder="compile-time shared secret (see OTA_SHARED_TOKEN)">
     <label>Firmware Image (.bin)</label>
     <input type="file" id="ota_file" accept=".bin,application/octet-stream" style="width:100%;padding:10px;margin-top:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
-    <button style="background:#2980b9;" onclick="uploadOTA()">Upload & Flash</button>
+    <button style="background:#287cb3;" onclick="uploadOTA()">Upload & Flash</button>
   </div>
   </div>
 
@@ -574,7 +607,7 @@
         el.style.color = '#c0392b';
       } else {
         el.innerText = 'Token saved (' + t.slice(0, 8) + '…). Configuration requests will include it.';
-        el.style.color = '#16a085';
+        el.style.color = '#117a65';
       }
     }
 
@@ -668,6 +701,17 @@
           document.getElementById('zawal').value = data.zawal_buffer_min;
           document.getElementById('hijri_method').value = data.hijri_calc_method;
           document.getElementById('hijri_offset').value = data.hijri_offset_days;
+
+          /* POSIX timezone, owned by svc_time. The box mirrors the active zone
+             so that Save (which posts the whole form from any tab) re-sends the
+             same string instead of clearing it; when the device omits the key
+             because svc_time is not ready, the box stays empty and no key is
+             posted, so the stored zone is left untouched. */
+          const tzNow = (typeof data.timezone === 'string') ? data.timezone : '';
+          const tzBox = document.getElementById('custom_tz_string');
+          if (tzBox) tzBox.value = tzNow;
+          const tzDisp = document.getElementById('current_tz_display');
+          if (tzDisp) tzDisp.innerText = tzNow || 'unavailable (time service not ready)';
 
           // 5.1b: adhan safety margins (array of 5)
           const adhan_off = data.adhan_offsets || [0,0,0,0,0];
@@ -803,6 +847,22 @@
         }
       };
 
+      /* Optional custom POSIX timezone. The device applies it BEFORE it
+         recalculates, so a typo would shift every displayed time: the charset
+         check (POSIX TZ allows letters, digits and < > + - : , . /) and the
+         63-char cap catch the common mistakes here. svc_time itself refuses
+         only empty and over-long strings, and an empty box sends no key at
+         all, leaving the stored zone alone. */
+      const tzBox = document.getElementById('custom_tz_string');
+      const tzVal = tzBox ? tzBox.value.trim() : '';
+      if (tzVal) {
+        if (!/^[A-Za-z0-9<>+\-:,\/.]{1,63}$/.test(tzVal)) {
+          showToast('Timezone may only use letters, digits and < > + - : , . /');
+          return;
+        }
+        data.timezone = tzVal;
+      }
+
       fetch('/api/config', {
         method: 'POST',
         headers: headers,
@@ -811,6 +871,14 @@
         if (handleResponse(r, "Configuration Saved!")) {
           /* The saved values may differ from the selected city. */
           clearPresetSelection();
+          /* Keep the "Current active timezone" readout honest: a successful
+             save applied the posted zone (tzVal is empty when no key was
+             sent, and then the stored zone is unchanged, so the readout is
+             already right). */
+          if (tzVal) {
+            const tzDisp = document.getElementById('current_tz_display');
+            if (tzDisp) tzDisp.innerText = tzVal;
+          }
           setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
         }
       });
@@ -952,9 +1020,13 @@
        saved, otherwise the dropdown claims a city that no longer describes
        the stored configuration. These are exactly the ids applyQuickSetup()
        writes; programmatic writes do not fire input/change events, so
-       loadConfig() and applyQuickSetup() never clear the dropdown themselves. */
+       loadConfig() and applyQuickSetup() never clear the dropdown themselves.
+       custom_tz_string is on the list because applyQuickSetup() mirrors the
+       preset's zone into it (that write is programmatic too), and a hand-typed
+       zone means the city no longer describes the configuration. */
     const PRESET_SEEDED_INPUTS = ['loc_name', 'lat', 'lon', 'method', 'madhab',
-                                  'high_lat', 'hijri_method', 'hijri_offset'];
+                                  'high_lat', 'hijri_method', 'hijri_offset',
+                                  'custom_tz_string'];
 
     function clearPresetSelection() {
       const sel = document.getElementById('quick-setup-city');
@@ -988,6 +1060,18 @@
       document.getElementById('hijri_method').value = preset.hijri_method;
       document.getElementById('hijri_offset').value = preset.hijri_offset;
 
+      /* The timezone belongs to the preset too (the device applies its own
+         copy of preset.tz server-side), so the box has to follow the dropdown
+         in the SAME pass as lat/lon/method. Syncing it only from the success
+         callback left the form half-applied whenever the request was rejected
+         -- typically 403 while no API token is stored: the coordinates showed
+         the new city while the box still held the old zone, and the next
+         "Save Configuration" would then have posted that old zone with the new
+         coordinates. A programmatic value write fires no input event, so this
+         does not clear the dropdown. */
+      const tzBoxField = document.getElementById('custom_tz_string');
+      if (tzBoxField) tzBoxField.value = preset.tz;
+
       /* Location Name: the DOM id is `loc_name` (the JSON key is
          location_name, which is NOT an element id). Seed the textbox from
          the preset table -- never from the dropdown value, which is only an
@@ -1005,7 +1089,7 @@
       }
 
       toggleCustomAngles();
-      ['lat', 'lon', 'method', 'high_lat', 'madhab',
+      ['lat', 'lon', 'custom_tz_string', 'method', 'high_lat', 'madhab',
        'hijri_method', 'hijri_offset'].forEach(flashField);
 
       const tzLine = document.getElementById('quick-setup-tz');
@@ -1032,6 +1116,17 @@
         body: JSON.stringify({preset: idx})
       }).then(r => {
         if (handleResponse(r, preset.name + ' applied - adjust jamat and adhan, then Save')) {
+          /* Re-assert the zone the device actually applied: step 1 already put
+             preset.tz in the box optimistically, and POST /api/config/preset
+             -> svc_time_set_timezone_posix() has now made it true. Only from
+             here may the "Current active timezone" readout change, because
+             until the device answers, the preset's zone is NOT yet active --
+             unlike the box, which is a pending form value. Programmatic writes
+             fire no input event, so the dropdown is not cleared. */
+          const tzBox = document.getElementById('custom_tz_string');
+          if (tzBox) tzBox.value = preset.tz;
+          const tzDisp = document.getElementById('current_tz_display');
+          if (tzDisp) tzDisp.innerText = preset.tz;
           setTimeout(() => { if (typeof loadPrayers === 'function') loadPrayers(); }, 500);
         }
       });
