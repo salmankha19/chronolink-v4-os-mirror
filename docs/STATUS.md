@@ -464,20 +464,25 @@ Three NTP slots live in NVS namespace `time`:
 - **Timezone storage:** NVS key `tz` in namespace `time`, holding a POSIX
   TZ string; default `GMT0BST,M3.5.0/1,M10.5.0` (UK, DST-aware) with a
   warning log when the key is absent.
-  POSIX TZ strings only. The only writer today is
-  `POST /api/config/preset`, which applies `svc_config_preset_timezone()`
-  for the chosen city (UK `GMT0BST,...`, `PKT-5`, `MYT-8`, `AST-3`,
-  `EST5EDT,...`). There is no IANA-to-POSIX translation and no
-  `ntp_region` key.
+  POSIX TZ strings only. There are two writers: `POST /api/config/preset`,
+  which applies `svc_config_preset_timezone()` for the chosen city (UK
+  `GMT0BST,...`, `PKT-5`, `MYT-8`, `AST-3`, `EST5EDT,...`), and
+  `POST /api/config`'s `timezone` key — the free-form path behind the web UI's
+  "Timezone (POSIX String)" box — which calls
+  `svc_time_set_timezone_posix()` directly
+  and checks only that the string is non-empty and shorter than
+  `SVC_TIME_TZ_MAX` (picolibc is the parser). There is no IANA-to-POSIX
+  translation and no `ntp_region` key.
 - **1 Hz tick (PR 5c):** the worker wakes every second and refreshes the
   snapshot -- from the RTC when one answers, otherwise from the libc clock
   once NTP has stepped it -- so `svc_time_get_*()` advances instead of
   returning the value captured at sync time. The default TZ is the UK POSIX
   string `GMT0BST,M3.5.0/1,M10.5.0` (GMT/BST with automatic DST), which
-  matches the Horsham factory-default location. A city preset is currently
-  the only way to change it (`POST /api/config/preset` applies
-  `svc_config_preset_timezone()`); there is still no free-form timezone
-  field in the web form.
+  matches the Horsham factory-default location. It can be changed either by a
+  city preset (`POST /api/config/preset` applies
+  `svc_config_preset_timezone()`) or by the free-form **Timezone (POSIX
+  String)** field in the web UI's Location tab (`POST /api/config` key
+  `timezone`, applied through `svc_time_set_timezone_posix()`).
 - **RTC Trust & Invalid UX (PR 5.5b):** The snapshot gains `rtc_untrusted`.
   The UI shows a "Starting..." splash on boot, then `--:--` if the RTC is
   untrusted (OSF set or year < build year). A two-line warning banner
@@ -936,6 +941,105 @@ configuration **before** uploading a custom calendar and states that any
 settings saved after an upload apply to the uploaded timetable (the fields
 the file omits are filled on read); *Regenerate* / *Delete File* remain the
 controls that replace or remove an upload.
+
+**Tabbed layout (Phase 1 of the web UI refactor):** the portal is five tabs —
+Network, Security, Location, Prayer, Device — picked by `data-tab` on
+`.tab-btn` buttons and matching `.tab-panel` wrappers that group the ten
+cards. The default tab is Location. Inactive panels are hidden with
+`.tab-panel { display: none }` / `.tab-panel.active`; the nodes are **never**
+removed from the DOM, because `saveConfig()` dereferences 47 ids with no null
+checks. Switching is done by `showTab()` / `initTabs()` in `index.html`, which
+match on `data-tab` — no button on the page carries an id, and cards are
+selected by class, never by tag name (nine are `div`, one is `section`). A
+`position:fixed` `.sticky-save-bar` (z-index 10) sits outside every panel and
+carries **Save All Configuration** (`saveConfig()`; posts the full 47-field
+payload from whichever tab is open) and **Reset to Saved**
+(`resetToSaved()` — a wrapper that calls `loadConfig()`, which re-reads
+`GET /api/config` and re-runs `toggleCustomAngles()` for the method dropdown,
+then reports the outcome from the returned promise — `.then()` → "Reverted to
+saved settings", `.catch()` → "Could not reload saved settings"). The wrapper
+exists because `loadConfig()` must stay silent, since the init block calls it
+on every page load, and its return value is what makes an honest toast
+possible. The Reset
+button is styled by the `.btn-reset` class rather than an inline `background`,
+so the stylesheet's `:hover` rule applies. `body` carries
+`padding-bottom: 80px` so the last cards are not
+covered. Panels, tab bar and save bar are constrained to `max-width: 720px`
+and centred. `#toast` sits at `bottom: 90px` — static rule **and** both
+`@keyframes fadein/fadeout` endpoints, so the slide settles above the bar
+instead of dipping behind it. It keeps `z-index: 1` and therefore still
+renders under the bar, which is now harmless because the two no longer
+overlap.
+
+**POSIX timezone field (Location tab):** the free-form escape hatch for a city
+the Quick Setup table does not cover. `#custom_tz_string` is pre-filled from
+`GET /api/config`'s `timezone` key — the live string owned by `svc_time`
+(NVS `time`/`tz`), read through `svc_time_get_timezone_posix_copy()` — and
+mirrored in the `#current_tz_display` readout. `saveConfig()` posts it under
+the same key **only when the box is non-empty**, after a client-side charset
+check (letters, digits, `< > + - : , . /`) and the 63-char cap
+(`SVC_TIME_TZ_MAX - 1`): those two catch the common mistakes, though a
+syntactically valid but wrong zone is still possible. The box is labelled
+"Timezone (POSIX String)" — not "Custom", because `applyQuickSetup()` is a
+second writer — and sits directly after the Latitude/Longitude row, before
+Calculation Method: the third field group in the card, framed by `#eee` rules
+top and bottom so it reads as one unit. `applyQuickSetup()` writes the chosen
+preset's zone into the box in the **same pass** as lat/lon/method (optimistic,
+so the form is never half-applied: with the write only on success, a 403 — no
+API token stored — left the coordinates showing the new city while the box
+still held the old zone, and the next Save posted that old zone), and
+re-asserts it after the device confirms. Only the post-success re-assert also
+updates `#current_tz_display`, because that readout claims the *active* zone,
+which is untrue until `POST /api/config/preset` has run. Both writes are
+programmatic and fire no `input` event, so the city dropdown is not cleared by
+them. A blank box sends no key at all, and the server treats present-but-empty
+as invalid (`rejected timezone` → 400 `partial_apply`).
+
+Known limitation: the server stores and applies any non-empty string it is
+given — there is no POSIX syntax validation, because `svc_time` owns the value
+and picolibc is the parser — so an API client that bypasses the UI can still
+install a malformed zone (it will usually fall back to UTC silently).
+
+**Accessible colour palette (Phase 1b):** every foreground/background pair in
+the portal now meets WCAG 2.1 AA measured with the real sRGB relative-luminance
+formula — 4.5:1 for normal text, 3:1 for the 1.2em-bold card headings and for
+non-text borders. The changes that got it there:
+
+- the global `button` rule carries `-webkit-appearance: none; appearance: none;
+  font-family: inherit`. The first two strip the native iOS/Android button
+  chrome (grey gradient, inner shadow, platform rounding) that made the same
+  page render differently on a phone than on a desktop; the third stops iOS
+  substituting the system button font for the body's Arial.
+- `.tab-btn` declares its own `color` — `#555` on `#eee` (6.43:1). Without it
+  the global `button { color: #fff }` wins and inactive tabs read white-on-grey.
+  `.tab-btn.active` is `#117a65` with white text (5.26:1) and must stay the last
+  of the three tab rules: `:hover` and `.active` have equal specificity (0,2,0),
+  so a hovered active tab would otherwise turn grey.
+- button backgrounds were darkened just enough to clear 4.5:1 while keeping
+  their hue: `.btn-wifi` `#e67e22`→`#b1611a` (2.85→4.57), its `:hover`
+  `#d35400`→`#c85000` (4.17→4.56), Upload & Flash `#2980b9`→`#287cb3`
+  (4.30→4.54), `.btn-reset` `#7f8c8d`→`#6d7879` (3.48→4.55) and its `:hover`
+  `#6c7a7b`→`#697677` (4.46→4.71).
+- secondary text: `#token_status` default `#888`→`#767676` (3.54→4.54),
+  `#tt_meta` `#999`→`#666` (2.85→5.74), and the five astro `<small>` values in
+  `.prayer-times` `#888`→`#666` — those sit on the `#ecf0f1` row background,
+  where `#888` was 3.09:1 and `#767676` would still only reach 3.96:1, so `#666`
+  (5.00:1) is the first stop that passes. The Quick Setup label moved to the
+  same `#117a65` token as the rest of the teal (3.04→4.87 on `#eafaf1`).
+- card borders are uniform: `.card` carries `border: 1px solid #e0e0e0` and
+  the four per-card coloured borders are gone (Setup Authentication was
+  `#16a085`, Prayer Timetable `#8e44ad`, Factory Reset `#c0392b`, Firmware
+  Update `#2980b9`). `#e0e0e0` on white is 1.32:1, below the 3:1 of WCAG
+  1.4.11, but that criterion governs control boundaries and state indicators;
+  this border is decorative grouping (and a card is never a control), and the
+  cards stay distinguishable by their shadow, radius and white-on-`#f4f7f6`
+  fill. Each card's `<h2>` keeps its hue as the only per-card accent.
+
+Known remaining shortfall, deliberately not changed: the input/select/file
+borders and the sticky save bar's top edge are `#ccc` on white (1.61:1). Text
+contrast is unaffected; WCAG 1.4.11 would want 3:1 for control boundaries
+(`#767676` would satisfy it), but that repaints every input, so it is a
+separate visual decision.
 
 **Adhan audio:** the "Adhan Audio" card carries `#adhan_audio_mode` (0 Off /
 1 Full / 2 Short) and `#adhan_audio_volume` (0-100, range slider with a live

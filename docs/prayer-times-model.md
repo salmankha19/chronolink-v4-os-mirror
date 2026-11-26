@@ -784,6 +784,28 @@ method alone"; present must be integral in [0, 1] — anything else is logged as
 request returns 400 with `partial_apply`. Exposed in the web UI
 (`#hijri_method`).
 
+Adds `timezone`: the **live** POSIX TZ string (e.g. `GMT0BST,M3.5.0/1,M10.5.0`),
+read through `svc_time_get_timezone_posix_copy()`. It is deliberately **not** a
+`svc_config` field and has no NVS key of its own — `svc_time` owns the value
+(NVS namespace `time`, key `tz`), so this endpoint only reports it. The key is
+omitted when the time service cannot answer (not started, lock timeout), and
+the web UI then shows "unavailable" instead of an empty zone that would look
+like a valid setting.
+
+`POST /api/config` accepts the same `timezone` key as a pass-through to
+`svc_time_set_timezone_posix()`, applied **before** the recalculation at the
+end of the handler so the fresh times are expressed in the new zone. Absent
+means "leave the stored zone alone". Present must be a non-empty string shorter
+than `SVC_TIME_TZ_MAX` (64): anything else — including an empty string — is
+logged as `rejected timezone`, nothing is stored for that field, and the
+request returns 400 with `partial_apply`. No POSIX syntax validation happens
+server-side (picolibc is the parser); the web UI guards its own input.
+
+This is the free-form path for a city that is not in the Quick Setup table
+(`#custom_tz_string` plus the `#current_tz_display` readout in the Location
+card). A city preset still wins when it runs later, because
+`POST /api/config/preset` applies that city's zone.
+
 ### 10.3 `POST /api/config/preset`
 
 Body `{"preset": N}` where N is 0..8 (see the table in section 5; 0 is
