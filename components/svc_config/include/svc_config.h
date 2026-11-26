@@ -11,18 +11,27 @@
  *
  *   Live today (read by an existing consumer):
  *     location_name, latitude, longitude, location_valid,
- *     method, madhab, iqamah_offset_min[]
+ *     method, madhab, custom_fajr_angle, custom_isha_angle,
+ *     iqamah_offset_min[], jamat[], season
+ *       -> svc_prayer_engine_service (adhan_calculator.c, jamat_calculator.c)
+ *          and svc_timetable
+ *     high_lat_rule, adhan_offset_min[], zawal_buffer_min
+ *       -> svc_prayer_engine_service (high-latitude rule, per-prayer adhan
+ *          margins, zawal window)
+ *     adhan_mode, adhan_volume
+ *       -> svc_audio, read LIVE from svc_config at every playback (never
+ *          cached at service start) so a flip OFF -> FULL mid-day is heard on
+ *          the next adhan; volume is sampled once per playback and applied as
+ *          software PCM scaling. See docs/audio-adhan-design.md I1 / H3.
+ *     hijri_offset_days, hijri_calc_method
+ *       -> svc_config_is_ramadan / svc_config_get_hijri_date, svc_timetable,
+ *          svc_http
  *
  *   Stored only (no consumer yet -- persisted so the web UI can save
  *   them and a future component can honor them without a schema change):
- *     adhan_mode             -> svc_audio
- *     adhan_volume           -> svc_audio (software PCM scaling)
  *     brightness_mode        -> backlight PWM HAL (separate PR)
  *     auto_brightness        -> backlight PWM + VEML7700 polling (separate PR)
  *     night_lamp_enable      -> full-screen warm fill + low backlight (separate PR)
- *     high_lat_rule          -> svc_prayer_engine (PR 14)
- *     adhan_offset_min       -> svc_prayer_engine_service (PR 15)
- *     zawal_buffer_min       -> svc_prayer_engine_service (PR 15)
  *
  * The honest-stub rule (Constitution section 12) forbids returning success
  * from a function that does nothing. It does not forbid storing a value that

@@ -151,6 +151,8 @@ _Static_assert(AUDIO_PCM_MAX_SHORTS == 2304,
                "MPEG1 Layer III frame is 1152 samples x 2 channels");
 _Static_assert(AUDIO_SILENCE_CHUNK * AUDIO_SILENCE_CHUNKS <= AUDIO_PCM_MAX_SHORTS,
                "silence flush reuses the PCM buffer");
+_Static_assert(AUDIO_READ_CHUNK <= 32768,
+               "MP3Decode()/MP3FindSyncWord() take an int byte count");
 
 /* Everything one playback needs that is worth keeping between playbacks,
    allocated ONCE on the first adhan and kept resident (released only by a
@@ -319,17 +321,27 @@ typedef struct {
  * `pcm` must hold AUDIO_PCM_MAX_SHORTS shorts: useSize = 0 tells libhelix the
  * output buffer is its full MAX_NSAMP * MAX_NGRAN * MAX_NCHAN size.
  */
-static void dec_frame(HMP3Decoder dec, const uint8_t *in, size_t avail,
+static void dec_frame(HMP3Decoder dec, uint8_t *in, size_t avail,
                       int16_t *pcm, dec_frame_result_t *out)
 {
-    const unsigned char *p = (const unsigned char *)in;
-    size_t left = avail;
+    /* Pinned libhelix 1.0.3 -- libhelix-mp3/pub/mp3dec.h, the header the
+       component manager actually fetches:
+           int MP3Decode(HMP3Decoder, unsigned char **inbuf, int *bytesLeft,
+                         short *outbuf, int useSize);
+           int MP3FindSyncWord(unsigned char *buf, int nBytes);
+       NON-const pointers and `int` counts. Upstream master differs
+       (const unsigned char **, size_t *), and the two are not interchangeable:
+       copying master's signature here is an incompatible-pointer error under
+       -Werror. The fetched header wins -- do not "restore" const. */
+    unsigned char *p = in;      /* advanced by MP3Decode; the buffer is ours */
+    const int avail_i = (int)avail;
+    int left = avail_i;         /* int *, not size_t *                      */
     int offset;
     int rc;
 
     memset(out, 0, sizeof(*out));
 
-    offset = MP3FindSyncWord(p, (int)avail);
+    offset = MP3FindSyncWord(p, avail_i);
     if (offset < 0) {
         /* No sync word anywhere in the window. Keep the last 3 bytes: the
            next sync word can straddle the read boundary, and resuming the
@@ -348,7 +360,7 @@ static void dec_frame(HMP3Decoder dec, const uint8_t *in, size_t avail,
     rc = MP3Decode(dec, &p, &left, (short *)pcm, 0);
 
     out->rc       = rc;
-    out->consumed = (left <= avail) ? (avail - left) : 0;
+    out->consumed = (left >= 0 && left <= avail_i) ? (size_t)(avail_i - left) : 0;
 
     if (rc == ERR_MP3_NONE) {
         MP3FrameInfo info;
