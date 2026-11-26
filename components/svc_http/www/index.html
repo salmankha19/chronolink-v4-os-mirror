@@ -11,6 +11,9 @@
     .card h2 { margin-top: 0; font-size: 1.2em; color: #34495e; border-bottom: 1px solid #eee; padding-bottom: 10px; }
     label { display: block; margin-top: 15px; font-weight: bold; font-size: 0.9em; }
     input[type="text"], input[type="password"], input[type="number"], select { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    input[type="range"] { width: 100%; margin-top: 5px; box-sizing: border-box; }
+    .form-group { margin-top: 10px; }
+    .helper { font-size: 0.9em; color: #666; margin-top: 8px; }
     button { width: 100%; padding: 12px; background: #2c3e50; color: #fff; border: none; border-radius: 4px; font-size: 1em; cursor: pointer; margin-top: 20px; }
     button:hover { background: #1a252f; }
     .btn-wifi { background: #e67e22; }
@@ -173,6 +176,29 @@
       <div><label>Isha</label><input type="number" id="adhan_off_isha" min="0" max="60" value="0"></div>
     </div>
   </div>
+
+  <!-- Adhan Audio Controls -->
+  <!-- Ids are adhan_audio_* on purpose: adhan_off_* above is the safety
+       margins block. Both fields already exist in svc_config and are read
+       live by svc_audio at every playback (no reboot needed). -->
+  <section class="card">
+    <h2>Adhan Audio</h2>
+    <div class="form-group">
+      <label for="adhan_audio_mode">Adhan Mode</label>
+      <select id="adhan_audio_mode">
+        <option value="0">Off — display only (no audio)</option>
+        <option value="1">Full</option>
+        <option value="2">Short (10 seconds)</option>
+      </select>
+      <p class="helper">Off shows adhan times on the display but plays no audio. This does not affect the safety margins above.</p>
+    </div>
+    <div class="form-group">
+      <label for="adhan_audio_volume">Adhan Volume: <span id="adhan_audio_volume_val">70</span>%</label>
+      <input type="range" id="adhan_audio_volume" min="0" max="100" value="70">
+      <p class="helper">0 mutes playback but still runs the pipeline; use Off to skip playback entirely and save power.</p>
+    </div>
+    <button onclick="saveConfig()">Save Configuration</button>
+  </section>
 
   <!-- Jamat & Season Configuration -->
   <div class="card">
@@ -512,6 +538,15 @@
       document.getElementById('custom_angles_div').style.display = (method === 7) ? 'block' : 'none';
     }
 
+    /* The volume slider has no visible text of its own, so mirror its current
+       value into the label's span. Called after loadConfig() fills the slider
+       and on every drag (listener registered in the init block below). */
+    function updateAdhanVolumeLabel() {
+      const slider = document.getElementById('adhan_audio_volume');
+      const out    = document.getElementById('adhan_audio_volume_val');
+      if (slider && out) out.innerText = slider.value;
+    }
+
     function loadConfig() {
       fetch('/api/config')
         .then(r => r.json())
@@ -565,6 +600,16 @@
           setEl('season_sum_d', season.summer_start_day);
           setEl('season_win_m', season.winter_start_month);
           setEl('season_win_d', season.winter_start_day);
+
+          // Adhan audio: mode (0=off, 1=full, 2=short) and volume (0-100).
+          // Placed after the season block because setEl is declared above;
+          // svc_audio samples both from svc_config at every playback, so a
+          // change saved here is honoured on the next adhan without a reboot.
+          setEl('adhan_audio_mode', data.adhan_mode);
+          setEl('adhan_audio_volume',
+                (data.adhan_volume !== undefined && data.adhan_volume !== null)
+                  ? data.adhan_volume : 70);
+          updateAdhanVolumeLabel();
         });
     }
 
@@ -605,6 +650,10 @@
           num('adhan_off_maghrib'),
           num('adhan_off_isha')
         ],
+        // Adhan audio. Separate keys and separate element ids from the safety
+        // margins above: mode 0/1/2, volume 0-100 (validated server-side).
+        adhan_mode:   num('adhan_audio_mode'),
+        adhan_volume: num('adhan_audio_volume'),
         jamat: [
           {
             winter_anchor: num('jamat_fajr_w_anchor'),
@@ -966,6 +1015,12 @@
     // Load data on start
     updateTokenStatus();
     watchPresetInputs();
+
+    /* Live readout for the volume slider. 'input' fires continuously while
+       dragging, so the number tracks the thumb. */
+    const adhanVolEl = document.getElementById('adhan_audio_volume');
+    if (adhanVolEl) adhanVolEl.addEventListener('input', updateAdhanVolumeLabel);
+
     loadConfig();
     loadPrayers();
     loadTimetableMeta();

@@ -937,6 +937,15 @@ settings saved after an upload apply to the uploaded timetable (the fields
 the file omits are filled on read); *Regenerate* / *Delete File* remain the
 controls that replace or remove an upload.
 
+**Adhan audio:** the "Adhan Audio" card carries `#adhan_audio_mode` (0 Off /
+1 Full / 2 Short) and `#adhan_audio_volume` (0-100, range slider with a live
+`#adhan_audio_volume_val` readout). Both travel in the same `POST /api/config`
+payload as every other field and are validated server-side (`adhan_mode`
+0…`SVC_CONFIG_ADHAN_MODE_COUNT-1`, `adhan_volume` 0…100). They are the two
+fields `svc_audio` samples at every playback, so a change is heard on the next
+adhan with no reboot. The element ids are deliberately distinct from the
+safety-margin fields (`adhan_off_*`) that sit in the card above.
+
 **Hijri calendar:** the config card carries a Hijri method dropdown
 (`hijri_calc_method`: Umm al-Qura KSA / Kuwaiti tabular) and a
 Hijri offset dropdown (`hijri_offset_days`: -3 to +3 days), so a mosque's
