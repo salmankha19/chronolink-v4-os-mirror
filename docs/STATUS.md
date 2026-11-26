@@ -937,6 +937,35 @@ settings saved after an upload apply to the uploaded timetable (the fields
 the file omits are filled on read); *Regenerate* / *Delete File* remain the
 controls that replace or remove an upload.
 
+**Tabbed layout (Phase 1 of the web UI refactor):** the portal is five tabs —
+Network, Security, Location, Prayer, Device — picked by `data-tab` on
+`.tab-btn` buttons and matching `.tab-panel` wrappers that group the ten
+cards. The default tab is Location. Inactive panels are hidden with
+`.tab-panel { display: none }` / `.tab-panel.active`; the nodes are **never**
+removed from the DOM, because `saveConfig()` dereferences 47 ids with no null
+checks. Switching is done by `showTab()` / `initTabs()` in `index.html`, which
+match on `data-tab` — no button on the page carries an id, and cards are
+selected by class, never by tag name (nine are `div`, one is `section`). A
+`position:fixed` `.sticky-save-bar` (z-index 10) sits outside every panel and
+carries **Save All Configuration** (`saveConfig()`; posts the full 47-field
+payload from whichever tab is open) and **Reset to Saved**
+(`resetToSaved()` — a wrapper that calls `loadConfig()`, which re-reads
+`GET /api/config` and re-runs `toggleCustomAngles()` for the method dropdown,
+then reports the outcome from the returned promise — `.then()` → "Reverted to
+saved settings", `.catch()` → "Could not reload saved settings"). The wrapper
+exists because `loadConfig()` must stay silent, since the init block calls it
+on every page load, and its return value is what makes an honest toast
+possible. The Reset
+button is styled by the `.btn-reset` class rather than an inline `background`,
+so the stylesheet's `:hover` rule applies. `body` carries
+`padding-bottom: 80px` so the last cards are not
+covered. Panels, tab bar and save bar are constrained to `max-width: 720px`
+and centred. `#toast` sits at `bottom: 90px` — static rule **and** both
+`@keyframes fadein/fadeout` endpoints, so the slide settles above the bar
+instead of dipping behind it. It keeps `z-index: 1` and therefore still
+renders under the bar, which is now harmless because the two no longer
+overlap.
+
 **Adhan audio:** the "Adhan Audio" card carries `#adhan_audio_mode` (0 Off /
 1 Full / 2 Short) and `#adhan_audio_volume` (0-100, range slider with a live
 `#adhan_audio_volume_val` readout). Both travel in the same `POST /api/config`

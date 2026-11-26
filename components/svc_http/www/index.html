@@ -22,17 +22,63 @@
     .row > div { flex: 1; }
     .prayer-times { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 1.1em; }
     .prayer-times div { background: #ecf0f1; padding: 10px; border-radius: 4px; }
-    #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 4px; padding: 16px; position: fixed; z-index: 1; left: 50%; bottom: 30px; font-size: 17px; transform: translateX(-50%); }
+    #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 4px; padding: 16px; position: fixed; z-index: 1; left: 50%; bottom: 90px; font-size: 17px; transform: translateX(-50%); }
     #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
-    @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
-    @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+    /* The slide endpoints must match #toast's resting bottom (90px) so the
+       toast settles above the sticky save bar instead of dipping behind it. */
+    @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 90px; opacity: 1;} }
+    @keyframes fadeout { from {bottom: 90px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+
+    /* ---- Phase 1: tabbed layout, sticky save bar, desktop width ---- */
+
+    /* Desktop Width Constraint & Toast spacing */
+    body { padding-bottom: 80px; }
+    .tab-panel { max-width: 720px; margin: 0 auto; }
+
+    /* Tab Bar Styling */
+    .tab-bar { display: flex; gap: 10px; max-width: 720px; margin: 0 auto 20px auto; overflow-x: auto; padding: 0 16px; box-sizing: border-box; }
+    .tab-btn { padding: 10px 20px; border: none; background: #eee; cursor: pointer; border-radius: 4px; white-space: nowrap; margin-top: 0; width: auto; }
+    .tab-btn.active { background: #16a085; color: white; }
+
+    /* Hiding inactive tabs. display:none only -- the nodes stay in the DOM,
+       because saveConfig() reads 47 ids and has no null checks. */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Sticky Save Bar */
+    .sticky-save-bar {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: white; border-top: 1px solid #ccc;
+      padding: 15px; z-index: 10; /* Above toast */
+      display: flex; justify-content: center; gap: 10px;
+    }
+    .sticky-save-bar button { width: auto; max-width: 300px; margin-top: 0; }
+
+    /* Secondary bar action. A class rather than an inline style, because an
+       inline background beats the stylesheet's :hover rule and kills hover
+       feedback. .btn-reset:hover outranks button:hover (0,2,0 vs 0,1,1). */
+    .btn-reset { background: #7f8c8d; color: white; }
+    .btn-reset:hover { background: #6c7a7b; }
   </style>
 </head>
 <body>
   <h1>ChronoLink V4</h1>
 
+  <!-- Tab bar. Panels are hidden/shown with CSS, never removed from the DOM:
+       saveConfig() reads 47 ids and has no null checks. Select cards by .card
+       or by data attribute, never by tag name -- the ten cards mix div and
+       section. -->
+  <div class="tab-bar">
+    <button class="tab-btn" data-tab="network">Network</button>
+    <button class="tab-btn" data-tab="security">Security</button>
+    <button class="tab-btn active" data-tab="location">Location</button>
+    <button class="tab-btn" data-tab="prayer">Prayer</button>
+    <button class="tab-btn" data-tab="device">Device</button>
+  </div>
+
+  <div class="tab-panel" data-tab="network">
   <!-- WiFi Setup -->
-  <div class="card">
+  <div class="card" data-tab="network">
     <h2>WiFi Configuration</h2>
     <p style="font-size:0.9em; color:#666;">Change the WiFi network the clock connects to.</p>
     <label>WiFi SSID</label>
@@ -41,9 +87,11 @@
     <input type="password" id="wifi_pass" placeholder="(leave blank if open network)">
     <button class="btn-wifi" onclick="saveWifi()">Save WiFi & Reboot</button>
   </div>
+  </div>
 
+  <div class="tab-panel" data-tab="security">
   <!-- Setup Authentication -->
-  <div class="card" style="border: 2px solid #16a085;">
+  <div class="card" data-tab="security" style="border: 2px solid #16a085;">
     <h2 style="color:#16a085;">Setup Authentication</h2>
     <p style="font-size:0.9em; color:#666;">
       The device prints a one-time API token to its serial console on first
@@ -55,9 +103,11 @@
     <button style="background:#16a085;" onclick="saveToken()">Save Token</button>
     <p id="token_status" style="font-size:0.85em; color:#888; margin-top:8px;">&mdash;</p>
   </div>
+  </div>
 
+  <div class="tab-panel" data-tab="location">
   <!-- Configuration -->
-  <div class="card">
+  <div class="card" data-tab="location">
     <h2>Location & Calculation</h2>
 
     <div style="background:#eafaf1; border:2px solid #16a085; border-radius:6px; padding:12px; margin:10px 0 4px;">
@@ -160,9 +210,11 @@
     
     <button onclick="saveConfig()">Save Configuration</button>
   </div>
+  </div>
 
+  <div class="tab-panel" data-tab="prayer">
   <!-- Adhan Safety Margins -->
-  <div class="card">
+  <div class="card" data-tab="prayer">
     <h2>Adhan Safety Margins (minutes)</h2>
     <p style="font-size:0.9em; color:#666;">
       Added to the astronomical calculation before display. Usually 0-5 min.
@@ -181,7 +233,7 @@
   <!-- Ids are adhan_audio_* on purpose: adhan_off_* above is the safety
        margins block. Both fields already exist in svc_config and are read
        live by svc_audio at every playback (no reboot needed). -->
-  <section class="card">
+  <section class="card" data-tab="prayer">
     <h2>Adhan Audio</h2>
     <div class="form-group">
       <label for="adhan_audio_mode">Adhan Mode</label>
@@ -201,7 +253,7 @@
   </section>
 
   <!-- Jamat & Season Configuration -->
-  <div class="card">
+  <div class="card" data-tab="prayer">
     <h2>Jamat &amp; Season Configuration</h2>
     <p style="font-size:0.9em; color:#666;">
       Congregational times per prayer. <b>Winter</b> and <b>summer</b> have
@@ -367,7 +419,7 @@
   </div>
 
   <!-- Prayer Times Display (three tiers) -->
-  <div class="card">
+  <div class="card" data-tab="prayer">
     <h2>Today's Prayer Times</h2>
     <p style="font-size:0.9em; color:#666;">
       Season: <b id="p_season">--</b> &middot;
@@ -411,7 +463,7 @@
   </div>
 
   <!-- Prayer Timetable -->
-  <div class="card" style="border: 2px solid #8e44ad;">
+  <div class="card" data-tab="prayer" style="border: 2px solid #8e44ad;">
     <h2 style="color:#8e44ad;">Prayer Timetable</h2>
     <p style="font-size:0.9em; color:#666;">
       You can upload your mosque's own timetable JSON to override the
@@ -438,9 +490,11 @@
       </div>
     </div>
   </div>
+  </div>
 
+  <div class="tab-panel" data-tab="device">
   <!-- Factory Reset -->
-  <div class="card" style="border: 2px solid #c0392b;">
+  <div class="card" data-tab="device" style="border: 2px solid #c0392b;">
     <h2 style="color:#c0392b;">Factory Reset</h2>
     <p style="font-size:0.9em; color:#666;">
       Erases all saved settings (WiFi credentials, location, prayer
@@ -451,7 +505,7 @@
   </div>
 
   <!-- Firmware Update (OTA) -->
-  <div class="card" style="border: 2px solid #2980b9;">
+  <div class="card" data-tab="device" style="border: 2px solid #2980b9;">
     <h2 style="color:#2980b9;">Firmware Update</h2>
     <p style="font-size:0.9em; color:#666;">
       Upload a <code>.bin</code> firmware image. The device flashes the
@@ -464,6 +518,15 @@
     <label>Firmware Image (.bin)</label>
     <input type="file" id="ota_file" accept=".bin,application/octet-stream" style="width:100%;padding:10px;margin-top:5px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;">
     <button style="background:#2980b9;" onclick="uploadOTA()">Upload & Flash</button>
+  </div>
+  </div>
+
+  <!-- Sticky save bar: outside every tab panel so it survives tab switches,
+       and outside the panels the ids live in, so Save works from any tab.
+       position:fixed + z-index 10 per the audit; body has padding-bottom:80px. -->
+  <div class="sticky-save-bar">
+    <button onclick="saveConfig()">Save All Configuration</button>
+    <button onclick="resetToSaved()" class="btn-reset">Reset to Saved</button>
   </div>
 
   <div id="toast">Settings Saved</div>
@@ -533,6 +596,44 @@
       setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
     }
 
+    /* Tabs. Panels are shown/hidden with the .active class (inactive panels
+       are display:none in CSS); they are NEVER removed from the DOM, because
+       saveConfig() reads 47 ids with no null checks. Buttons and panels are
+       matched by their data-tab value -- no ids, no tag-name selectors. */
+    function showTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(function (b) {
+        b.classList.toggle('active', b.dataset.tab === name);
+      });
+      document.querySelectorAll('.tab-panel').forEach(function (p) {
+        p.classList.toggle('active', p.dataset.tab === name);
+      });
+    }
+
+    function initTabs() {
+      const buttons = document.querySelectorAll('.tab-btn');
+      buttons.forEach(function (b) {
+        b.addEventListener('click', function () { showTab(b.dataset.tab); });
+      });
+      /* The default tab is whichever button already carries .active in the
+         markup (Location); mirror it onto its panel so the first paint shows
+         content instead of five hidden panels. */
+      const def = document.querySelector('.tab-btn.active') || buttons[0];
+      if (def) showTab(def.dataset.tab);
+    }
+
+    /* "Reset to Saved" in the sticky bar. loadConfig() has no user feedback of
+       its own, so without this wrapper the button would silently repopulate
+       fields the operator may not even be looking at. It must stay a wrapper:
+       putting showToast() inside loadConfig() would fire on every page load,
+       because the init block calls loadConfig() directly. The toast is fired
+       from the promise, so a failed reload reports a failure instead of a
+       success the device never performed. */
+    function resetToSaved() {
+      loadConfig()
+        .then(function () { showToast('Reverted to saved settings'); })
+        .catch(function () { showToast('Could not reload saved settings'); });
+    }
+
     function toggleCustomAngles() {
       const method = parseInt(document.getElementById('method').value, 10);
       document.getElementById('custom_angles_div').style.display = (method === 7) ? 'block' : 'none';
@@ -548,7 +649,10 @@
     }
 
     function loadConfig() {
-      fetch('/api/config')
+      /* Returns the promise so callers can report the real outcome (see
+         resetToSaved). Without the return, a caller cannot distinguish
+         "reload finished" from "reload about to start". */
+      return fetch('/api/config')
         .then(r => r.json())
         .then(data => {
           // Existing fields
@@ -1013,6 +1117,7 @@
     }
 
     // Load data on start
+    initTabs();
     updateTokenStatus();
     watchPresetInputs();
 
